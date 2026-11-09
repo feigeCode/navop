@@ -2,6 +2,9 @@
 
 Schema tools cover object browsing, table design, DDL, ER diagrams, Schema Compare, and Data Compare. They may generate DROP, ALTER, INSERT, UPDATE, or DELETE statements; every generated plan requires human review.
 
+> [!NOTE]
+> These tools are available in **Navop** and **Navop Data**. **Navop Shell** has no schema tools.
+
 ## Browse database objects
 
 Expand databases and schemas to inspect tables, views, and other supported objects. A table can expose columns, types, defaults, nullability, primary keys, indexes, and DDL. Right-click an object row to see actions available for that object type and installed extensions. Visibility depends on permissions, context, and schema filters.

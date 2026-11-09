@@ -2,6 +2,9 @@
 
 Extensions add database drivers, middleware, native resource workbenches, ACP Agents, connection importers, remote desktop providers, language packs, and related capabilities. Extension code runs locally, so review source, permissions, platform, and compatibility as carefully as other desktop software.
 
+> [!NOTE]
+> The extension marketplace is available in all three apps, but whether an extension applies depends on the product (database drivers, for example, matter only in Navop and Navop Data).
+
 ## Understand extension types
 
 Database drivers add connection types. ACP Agent extensions connect external agents. Import extensions read other applications. Remote desktop providers enable RDP/VNC. Language extensions add UI locales. Native resource workbench extensions (such as Docker) let the host render collections, detail pages, and operations. An "updates available" filter in the marketplace shows only extensions with newer releases.

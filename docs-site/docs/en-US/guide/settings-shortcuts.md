@@ -2,6 +2,9 @@
 
 Settings are organized into dedicated pages for databases, terminals, Agents, and MCP, covering appearance, remote editing, Notes, LLMs, logs, and updates. Test changes outside a critical session. A font or shortcut issue may not damage data, but it can change what you see or which action fires.
 
+> [!NOTE]
+> Settings are available in all three apps. Visible pages follow each product's capabilities; Navop Shell, for example, has no database page.
+
 ## Set language and appearance
 
 Choose language, start page, light/dark theme, or system-following behavior. Appearance settings also include window opacity, theme palettes, a custom accent color, and theme importing. Application and terminal themes provide consistent colors for inputs, popovers, scrollbars, selections, and terminals. Import themes only from trusted sources and verify text, focus, and selection contrast in the workspaces you use.

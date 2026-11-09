@@ -2,6 +2,9 @@
 
 排查时一次只改变一个变量，并先判断问题属于网络、认证、权限、驱动、扩展、客户端状态还是远端服务。记录 Navop 版本、平台、连接类型、发生时间和最小复现步骤，避免用更高权限掩盖根因。
 
+> [!NOTE]
+> 排查前先确认问题出在哪个应用；三个应用共用目录约定，但可用连接类型和更新清单不同。
+
 ## 数据库、Redis 与 MongoDB
 
 数据库失败先检查 DNS、主机、端口、防火墙、账号、默认数据库、Schema、TLS、代理和 SSH 隧道，再检查驱动与服务器版本。SQL 错误应缩小到单条语句，并确认当前事务是否需要提交或回滚。对象不可见时检查权限和 Schema 过滤。
@@ -26,7 +29,7 @@ Linux 启动报“无法创建表面”（Failed to create surface）说明宿�
 
 模型请求失败时检查 Provider 状态、API key、base URL、模型名、网络和额度。工具未出现时确认当前模式、资源引用和权限。ACP 登录或授权成功不保证 Public MCP 自动放行，二次审批属于正常设计。
 
-Public MCP 依次检查 Navop 是否运行、服务模式、Node.js 20+、`npx`、客户端配置、discovery 权限、Tool Exposure 和实时 Schema。endpoint 重启后让客户端重连，不要继续使用缓存端口或猜测资源 ID。
+Public MCP 依次检查当前应用是否运行、服务模式、Node.js 20+、`npx`、客户端配置、discovery 权限、Tool Exposure 和实时 Schema。endpoint 重启后让客户端重连，不要继续使用缓存端口或猜测资源 ID。
 
 ## 同步、加密与更新
 

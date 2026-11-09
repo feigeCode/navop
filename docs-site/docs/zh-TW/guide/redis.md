@@ -2,6 +2,9 @@
 
 Redis 工作台支援單機、Sentinel 和 Cluster，提供 Key 瀏覽、常見型別編輯、CLI、伺服器資訊和即時診斷。刪除與命名空間清理會立即生效，通常無法恢復。
 
+> [!NOTE]
+> 本頁功能在 **Navop** 與 **Navop Data** 中可用；**Navop Shell** 不含 Redis 工作台。
+
 ## 建立 Redis 連線
 
 選擇單機、Sentinel 或 Cluster，填寫節點、連接埠、使用者、密碼和資料庫。需要加密時啟用 TLS，受限網路可使用 SSH 通道。Sentinel 必須提供正確服務名稱；Cluster 用戶端需能存取重新導向後的所有節點位址。

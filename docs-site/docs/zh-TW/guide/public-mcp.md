@@ -1,12 +1,15 @@
 # Public MCP 與外部自動化
 
-Public MCP 讓 Codex、Claude Desktop、Claude Code 與相容用戶端呼叫目前正在執行的 Navop。它不是固定雲端 API：使用動態 loopback 連接埠與僅目前使用者可讀的 discovery token，真實工具和 Schema 來自本機應用程式。
+Public MCP 讓 Codex、Claude Desktop、Claude Code 與相容用戶端呼叫目前正在執行的 Navop、Navop Shell 或 Navop Data。它不是固定雲端 API：使用動態 loopback 連接埠與僅目前使用者可讀的 discovery token，真實工具和 Schema 來自本機應用程式。
+
+> [!NOTE]
+> Public MCP 依產品個別探索、個別授權：`navop`、`navop-shell`、`navop-data` 各自只提供該應用程式當下可用的工具；連線用戶端前先確認指向哪個產品。
 
 ## 服務模式與探索
 
 Temporary 適合短期工作，任務或應用程式結束後不應依賴它持續存在；Persistent 適合需要長期本機探索的用戶端。兩者都應只監聽 loopback，並使用受保護的使用者級探索資料。
 
-不要把 discovery 檔、Token 或連接埠公開到網際網路。切換模式、重新啟動 Navop 或變更 Tool Exposure 可能重啟 endpoint，MCP/ACP 用戶端需重新連線。
+不要把 discovery 檔、Token 或連接埠公開到網際網路。切換模式、重新啟動目前應用程式或變更 Tool Exposure 可能重啟 endpoint，MCP/ACP 用戶端需重新連線。
 
 ## 權限檔位與 Tool Exposure
 
@@ -16,7 +19,7 @@ Tool Exposure 可分別開放 Terminal、SSH Exec、可見終端、Connections�
 
 ## 安裝用戶端依賴
 
-橋接需要 Node.js 20+ 和可用的 `npx`。先確認版本，再從 Navop 設定複製 Codex、Claude Desktop、Claude Code 或通用 MCP JSON。依各用戶端的路徑和重啟方式完成設定。
+橋接需要 Node.js 20+ 和可用的 `npx`。先確認版本，再從目前應用程式的設定複製 Codex、Claude Desktop、Claude Code 或通用 MCP JSON。依各用戶端的路徑和重啟方式完成設定。
 
 Navop 也可安裝或更新供 Codex 與 Agents 使用的 Navop Skill。使用 Skill 前必須全域安裝 `@navop/cli`；AI Agent 透過 `navop ... --json` 按需探索並操作 Navop 中的資料庫、SSH、終端、檔案、連線和工作區資源。Skill 不會把全部工具靜態寫進提示詞，而是指導 Agent 在需要時讀取狀態、命令與即時 Schema。
 
@@ -48,7 +51,7 @@ navop terminal read --target <terminal-session-id> --lines 80 --json
 
 這種方式適合 Codex 等可以執行終端命令的 Agent：不必把完整 Navop 工具目錄預先註冊到每一輪模型上下文，也能按任務探索目前資源與操作，通常可以減少重複上下文和 Token 開銷。實際節省量取決於用戶端如何注入 MCP 工具定義及開放的工具數量。
 
-Skill 不代表底層完全繞過 MCP。`navop` CLI 內部仍連接 Navop 的本機認證 Public MCP endpoint，Navop 繼續負責 Tool Exposure、資源 ID、權限、審批、工作階段、結果和稽核。Skill 改變的是 Agent 端的使用方式：從「每輪攜帶整套工具」改為「透過終端按需探索與呼叫」。
+Skill 不代表底層完全繞過 MCP。`navop` CLI 內部仍連接目前應用程式的本機認證 Public MCP endpoint，應用程式繼續負責 Tool Exposure、資源 ID、權限、審批、工作階段、結果和稽核。Skill 改變的是 Agent 端的使用方式：從「每輪攜帶整套工具」改為「透過終端按需探索與呼叫」。
 
 ## 使用 @navop/cli
 
@@ -69,4 +72,4 @@ navop --version
 
 審批視窗會顯示用戶端、操作、資源和參數。非預期請求應拒絕並修正用戶端，不要全面放寬權限。ACP 授權不代表 Public MCP 自動允許。
 
-失敗時檢查 Navop 是否執行、服務模式、Node.js、用戶端設定、discovery 權限、Tool Exposure 和即時 Schema。endpoint 變更後重新連線，分享日誌前遮蔽 Token、路徑和業務參數。
+失敗時檢查目前應用程式是否執行、服務模式、Node.js、用戶端設定、discovery 權限、Tool Exposure 和即時 Schema。endpoint 變更後重新連線，分享日誌前遮蔽 Token、路徑和業務參數。

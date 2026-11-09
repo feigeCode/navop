@@ -1,37 +1,60 @@
 # Navop 使用说明
 
-Navop 是 AI 时代的开发和运维工作台，将数据库、Redis、MongoDB、SSH、SFTP、终端、远程桌面、Notes、AI 和团队同步放在同一个原生工作区。
+Navop 现在是同一套原生内核上的三个应用：全量的 **Navop**、面向远程运维的 **Navop Shell**，以及面向数据工作的 **Navop Data**。三者以同一个版本号发布，可以并排安装，共享 AI、Notes、团队同步、扩展市场和主题等底座，区别在于覆盖的工作范围。
 
-## 当前版本：v0.19.5
+## 三个应用
 
-前往[官网下载中心](https://navop.dev/zh-CN/extensions)下载最新稳定版。
+| 应用 | 适合谁 | 包含的能力 |
+| --- | --- | --- |
+| **Navop**（全量版） | 数据库和服务器都要管，希望一个应用覆盖全部工作 | 数据库（PostgreSQL、MySQL、MariaDB、SQLite、SQL Server、Oracle、ClickHouse、达梦、人大金仓、OceanBase、OpenGauss 等）、Redis、MongoDB、SSH/SFTP、本地与远程终端、端口转发、远程桌面 RDP/VNC、串口/Telnet、SQL 编辑器、ER 图、数据迁移、监控、Notes、AI 工作台、团队同步、扩展市场、Public MCP |
+| **Navop Shell**（远程运维） | 主要工作是登录服务器、传文件、开远程桌面 | SSH/SFTP、本地与远程终端、端口转发、远程桌面 RDP/VNC、串口/Telnet；共享 AI、Notes、团队与扩展体系 |
+| **Navop Data**（数据工具） | 主要工作是连数据库、写 SQL、看 Redis/MongoDB | SQL 工作区、Redis、MongoDB、ER 图、数据迁移；共享 AI、Notes、团队与扩展体系 |
 
-- 个人同步新增 WebDAV 后端：与「文件夹」「Git」并列，填服务器地址、用户名、密码即可用，密码加密后落盘、不明文保存。协议只用 GET / PUT / DELETE 加 Basic 认证，不做 PROPFIND 探测，以兼容坚果云、群晖、Nextcloud 与自建服务；首次写入用 MKCOL 建目录，服务端返回 409 会提示「目录不可用」而不是误报版本冲突。设置页只显示当前后端的项，密码框可切换明文/掩码，WebDAV 没有本地目录可监听，同步由 60 秒周期扫描驱动。
-- SSH Agent 转发：凭据里的私钥可勾选「通过 ssh-agent 转发此密钥」，连接侧也有「SSH Agent 转发」（ForwardAgent）开关。本地 ssh-agent 转发给远端后，远端（例如跳板机）能代表你用本机私钥向更内层主机认证，对新开的终端会话生效。
-- 表结构设计页新增「刷新表结构」：重新读取最新的列、索引与表信息；设计器里有未保存改动时会先提示，确认后「放弃并刷新」。
-- 终端粘贴确认弹窗补上「打开设置」与「不再提示」：多行粘贴、高危命令、大段粘贴三类提示都能直接跳到对应设置项；大段粘贴是硬阈值，不提供「不再提示」。
-- 外部驱动改为按调用类别区分请求超时，并支持连接级覆盖：查询、执行、游标、导入导出等用户操作默认 30 分钟，元数据与结构浏览保持 30 秒；连接高级设置新增「请求超时（秒）」（留空按类别默认，0 表示不限制），慢库上的大查询、大导入不再被统一的 30 秒硬超时打断。
-- SQL 编辑器手动事务的提交/回滚按钮、表数据页的「提交更改」在写库期间显示 loading，能看出哪一步还在跑，另一个按钮只禁用、不跟着转。
-- 修复 WHERE / ORDER BY 过滤输入框里输入中文导致崩溃（#326），过滤条输入框比迁移前高出一行的问题也已修正（40px → 20px）；修复 AI 对话取消回答后会话被误判为失败、达梦等方言改完列注释仍显示旧注释。
-- 修复 Linux（Arch + Hyprland / Wayland）应用内退出以 SIGABRT 收尾并留下 core（#336）；macOS Touch Bar 机型关闭窗口闪退交由上游 zed#65186 修复，撤销「关闭即隐藏」实验开关，macOS 两个架构、Windows、Linux 统一回到「关闭即销毁」。
+## 共享底座
+
+三个应用使用同一套原生内核，并共享以下能力：
+
+- AI 工作台、Notes、团队同步与个人同步；
+- 扩展市场，以及已经安装的扩展体系；
+- 主题、快捷键、tab 恢复、托盘、单实例、自动更新、Public MCP。
+
+三者以同一版本号发布，可以并排安装；数据目录与钥匙串各自独立，同时安装不会互相覆盖配置。只有全量 Navop 注册 `.db`、`.duckdb`、`.md`、`.cast` 文件关联；Scoop 与 Flatpak 目前也只覆盖全量 Navop。
+
+## 怎么选
+
+- **数据库和服务器都要管**，或者需要文件关联、监控与数据迁移：选 Navop。
+- **只做远程运维**，日常是 SSH、SFTP、终端、端口转发和远程桌面：选 Navop Shell。
+- **只做数据工作**，日常是 SQL、Redis、MongoDB、ER 图和数据迁移：选 Navop Data。
+- **拿不准**：先装 Navop，它的能力是三个里最全的；之后仍可以并排安装独立产品，两者互不冲突。
+
+## 当前版本：v0.23.0
+
+三个应用当前同为 v0.23.0。可以从[官网下载中心](https://navop.dev/zh-CN/extensions)、[GitHub Releases](https://github.com/feigeCode/navop/releases) 或 [CNB](https://cnb.cool/navop-dev/navop/-/releases) 获取安装包。产品形态上的主要变化：
+
+- Navop 从单个全量应用扩展为同一套原生内核上的三个应用，共享 AI、Notes、团队、扩展与更新体系。
+- 安装包以 `navop-`、`navop-shell-`、`navop-data-` 前缀区分，三者同版本发布，可以并排安装。
+- 数据库与远程运维能力按产品裁剪；数据目录、钥匙串和应用内更新通道各自独立。
+- 只有全量 Navop 提供 `.db`、`.duckdb`、`.md`、`.cast` 文件关联，以及 Linux 的 `.deb`、`.rpm`、AppImage 和图形依赖包。
+
+安装包矩阵与平台差异见[安装与更新](./guide/install-update)。
 
 ## 从这里开始
 
-- [快速开始](./guide/quick-start)
-- [安装与更新](./guide/install-update)
-- [首页、工作区与连接管理](./guide/workspace-connections)
+- [快速开始：先选应用，再完成第一个任务](./guide/quick-start)
+- [安装与更新：安装包、平台差异与并排安装](./guide/install-update)
+- [首页、工作区与连接管理](./guide/workspace-connections)（三个应用）
 
 ## 按任务查找
 
-- [数据库连接、SQL、导入导出与 Schema 工具](./guide/database-connections)
-- [SQL 编辑器、事务与查询结果](./guide/sql-editor)
-- [SSH、SFTP、端口转发与 Agent Hub](./guide/ssh-terminal)
-- [FTP 与 FTPS 远程文件](./guide/ftp-remote-files)
-- [远程桌面、串口与服务器监控](./guide/remote-access)
-- [原生资源工作台（Docker 等）](./guide/resource-workbench)
-- [Notes Markdown 预览与源码编辑](./guide/notes)
-- [AI 工作台、Navop Skill 与 Public MCP](./guide/ai-workbench)
-- [团队同步与安全](./guide/teams-sync-security)
-- [设置与疑难排解](./guide/settings-shortcuts)
+- 数据库连接、SQL、导入导出与 Schema 工具（Navop / Navop Data）：[数据库连接](./guide/database-connections)
+- SQL 编辑器、事务与查询结果（Navop / Navop Data）：[SQL 编辑器](./guide/sql-editor)
+- SSH、SFTP、端口转发与 Agent Hub（Navop / Navop Shell）：[SSH 与终端](./guide/ssh-terminal)
+- FTP 与 FTPS 远程文件（Navop）：[FTP 与远程文件](./guide/ftp-remote-files)
+- 远程桌面、串口与服务器监控（远程桌面与串口：Navop / Navop Shell；服务器监控：Navop）：[远程接入](./guide/remote-access)
+- 原生资源工作台（Docker 等，Navop）：[资源工作台](./guide/resource-workbench)
+- Notes Markdown 预览与源码编辑（三个应用）：[Notes](./guide/notes)
+- AI 工作台、Navop Skill 与 Public MCP（三个应用，Public MCP 按产品分别发现）：[AI 与 MCP](./guide/ai-workbench)
+- 团队同步与安全（三个应用）：[团队同步](./guide/teams-sync-security)
+- 设置与疑难排解（三个应用）：[设置与疑难排解](./guide/settings-shortcuts)
 
-文档内容随 Navop 桌面端持续更新。涉及生产数据库、远程服务器、写入 SQL、文件覆盖和批量同步时，请先确认当前环境和操作范围。
+文档内容随三个应用持续更新。涉及生产数据库、远程服务器、写入 SQL、文件覆盖和批量同步时，请先确认当前环境和操作范围。

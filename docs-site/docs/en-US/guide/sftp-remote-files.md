@@ -2,6 +2,9 @@
 
 The SFTP manager provides navigation, favorites, transfer, permissions, extraction, and remote editing. Each side can switch between local storage and a searchable remote endpoint, and files or directories can be copied directly between two remote servers. Overwrites, deletion, permission changes, and automatic upload affect the server immediately.
 
+> [!NOTE]
+> This feature is available in **Navop** and **Navop Shell**. **Navop Data** has no SFTP or remote file editing.
+
 ## Navigate and coordinate with terminal
 
 Browse folders, show hidden files when needed, and favorite common paths. The SFTP left remote panel honors the configured SFTP initial directory and opens there. Open a terminal in the current directory; with shell integration, the terminal path can synchronize back to the file manager. Access remains limited by the remote account.

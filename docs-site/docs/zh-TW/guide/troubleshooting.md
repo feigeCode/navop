@@ -2,6 +2,9 @@
 
 排查時一次只改一個變數，先判斷屬於網路、驗證、權限、驅動、擴充、用戶端狀態或遠端服務。記錄平台、Navop 版本、連線類型、時間與最小重現步驟，不要用管理員帳號掩蓋設定錯誤。
 
+> [!NOTE]
+> 排查前先確認問題發生在哪個應用程式；三個應用程式共用目錄慣例，但可用連線類型與更新清單不同。
+
 ## 資料庫、Redis 與 MongoDB
 
 SQL 資料庫依序檢查 DNS、主機、連接埠、防火牆、帳號、資料庫/Schema、TLS、代理、SSH 通道、驅動和伺服器版本。SQL 錯誤縮小到單一語句並處理提交或回復；物件不可見時檢查權限和 Schema 過濾。
@@ -26,7 +29,7 @@ Linux 啟動報「無法建立表面」（Failed to create surface）代表主�
 
 模型失敗時檢查 Provider、API key、base URL、模型、網路與額度。工具缺少可能來自模式、資源或權限；ACP 授權不會移除 Public MCP 的審批。
 
-Public MCP 檢查 Navop 執行狀態、服務模式、Node.js 20+、`npx`、用戶端設定、discovery 權限、Tool Exposure 和即時 Schema。endpoint 重啟後重新連線，不要猜測資源 ID。
+Public MCP 檢查目前應用程式的執行狀態、服務模式、Node.js 20+、`npx`、用戶端設定、discovery 權限、Tool Exposure 和即時 Schema。endpoint 重啟後重新連線，不要猜測資源 ID。
 
 ## 同步、加密與更新
 

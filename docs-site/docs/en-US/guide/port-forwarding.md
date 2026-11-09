@@ -2,6 +2,9 @@
 
 Port forwarding uses a saved SSH/SFTP connection as a network path. Navop supports local forwarding, remote forwarding (SSH `-R`), and dynamic SOCKS forwarding, with state and activity logs. A tunnel does not grant application credentials or replace end-to-end TLS.
 
+> [!NOTE]
+> This feature is available in **Navop** and **Navop Shell**. **Navop Data** has no port forwarding.
+
 ## Select the base SSH connection
 
 Choose an SSH/SFTP connection that can already log in. It supplies jump-host address, authentication, proxy, and host verification. Stop dependent forwards before editing or deleting it.

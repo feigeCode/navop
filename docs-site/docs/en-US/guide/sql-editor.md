@@ -2,6 +2,9 @@
 
 The SQL editor writes, saves, explains, and executes statements. Execution scope, active database, and transaction mode determine the impact. Recheck the connection, schema, and selected text before every production write.
 
+> [!NOTE]
+> This feature is available in **Navop** and **Navop Data**. **Navop Shell** has no SQL workspace.
+
 ## Create and save queries
 
 Open a query from a database workspace, choose the active database or schema, and enter SQL. Queries can be saved, renamed, and reopened. Auto-save preserves editor content according to Settings, but it neither executes SQL nor replaces version control and backups.

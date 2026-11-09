@@ -2,6 +2,9 @@
 
 The Redis workspace supports standalone, Sentinel, and Cluster deployments. It includes key browsing, common type editors, CLI, server information, and live diagnostics. Deletes and namespace cleanup take effect immediately and are not recoverable.
 
+> [!NOTE]
+> This feature is available in **Navop** and **Navop Data**. **Navop Shell** has no Redis workspace.
+
 ## Create a Redis connection
 
 Choose standalone, Sentinel, or Cluster and enter nodes, port, user, password, and database where applicable. Enable TLS when required and use an SSH tunnel for restricted networks. Sentinel needs the correct service name. Cluster clients must reach every node address returned by redirects.

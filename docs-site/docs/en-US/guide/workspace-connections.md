@@ -1,8 +1,11 @@
 # Home, workspaces, and connections
 
-The home screen is the entry point for every saved resource. Workspaces group connections, while unified grid and tree views, search, and ordering make large sets easier to navigate. Organizing a connection does not change the remote service itself. Since v0.19.0 the connection-form field for choosing the owning group is consistently labeled "Group" — the same concept as a home-screen workspace.
+The home screen is the entry point for every saved resource. Workspaces group connections, while unified grid and tree views, search, and ordering make large sets easier to navigate. Organizing a connection does not change the remote service itself. The connection-form field for choosing the owning group is labeled "Group" — the same concept as a home-screen workspace.
 
 ![Recent connections dashboard](/images/app1.png)
+
+> [!NOTE]
+> All three apps have a home screen. Available connection types depend on the product: Navop covers everything, Navop Shell focuses on remote operations, and Navop Data focuses on data work.
 
 ## Organize the home screen
 

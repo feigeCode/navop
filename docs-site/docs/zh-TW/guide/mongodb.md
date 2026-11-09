@@ -2,6 +2,9 @@
 
 MongoDB Explorer 管理連線、資料庫、集合、文件、索引與驗證規則，並支援 Find、Aggregate、Count 和 Explain。刪除資料庫、集合或文件會直接修改伺服器。
 
+> [!NOTE]
+> 本頁功能在 **Navop** 與 **Navop Data** 中可用；**Navop Shell** 不含 MongoDB Explorer。
+
 ## 安全連線
 
 可使用連線字串，或填寫主機、連接埠和驗證欄位。依部署設定驗證資料庫、逾時和 TLS，也可加入 SSH 通道。副本集與分片環境需要正確探索參數，且網路必須能到達驅動選擇的節點。

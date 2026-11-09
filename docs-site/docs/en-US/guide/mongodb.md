@@ -2,6 +2,9 @@
 
 MongoDB Explorer manages connections, databases, collections, documents, indexes, validation rules, and Find, Aggregate, Count, or Explain operations. Deleting a database, collection, or document changes the server immediately.
 
+> [!NOTE]
+> This feature is available in **Navop** and **Navop Data**. **Navop Shell** has no MongoDB Explorer.
+
 ## Connect securely
 
 Use a connection string or host, port, and authentication fields. Configure authentication database, timeout, and TLS as required, or add an SSH tunnel. Replica-set and sharded connections need correct discovery parameters and network access to the nodes selected by the driver.

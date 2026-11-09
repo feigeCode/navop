@@ -2,6 +2,9 @@
 
 Navop 透過 Provider 擴充連接 RDP 和 VNC，並提供 Serial 串口終端及 SSH 伺服器監控。可用能力取決於平台、擴充版本和遠端系統。
 
+> [!NOTE]
+> RDP/VNC 與串口在 **Navop** 與 **Navop Shell** 中可用；SSH 伺服器監控僅在 **Navop**（完整版）中提供。
+
 ## RDP 與 VNC Provider
 
 先從擴充市場安裝相容的遠端桌面 Provider，再新增 RDP 或 VNC。填寫主機、連接埠、使用者和密碼；RDP 可能還需要 Domain。版本不相容時更新或重新載入擴充，不要任意修改憑證。
