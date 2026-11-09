@@ -767,7 +767,11 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(render_source.contains(".child(self.render_collapsed_hint(cx))"));
     assert!(!render_source.contains("TerminalCommandBar.keyboard_hint"));
     assert!(!render_source.contains("render_expanded_hint"));
-    let placeholder = include_str!("../../../locales/terminal_view.yml")
+    let command_bar_locale = include_str!("../../../locales/terminal_view.yml")
+        .split("\nTerminalCommandBar:")
+        .nth(1)
+        .expect("command bar locale section should exist");
+    let placeholder = command_bar_locale
         .split("  placeholder:")
         .nth(1)
         .and_then(|source| source.split("  search_quick_commands:").next())

@@ -1294,6 +1294,10 @@ TerminalSidebar:
     en: File Manager
     zh-CN: 文件管理器
     zh-HK: 檔案管理器
+  connection_notes:
+    en: Connection Notes
+    zh-CN: 连接笔记
+    zh-HK: 連線筆記
   server_monitor:
     en: Server Monitor
     zh-CN: 服务器监控
@@ -1338,6 +1342,22 @@ ServerMonitor:
     en: Server Monitor
     zh-CN: 服务器监控
     zh-HK: 伺服器監控
+  overview:
+    en: Overview
+    zh-CN: 总览
+    zh-HK: 總覽
+  gpu:
+    en: GPU
+    zh-CN: GPU
+    zh-HK: GPU
+  npu:
+    en: NPU
+    zh-CN: NPU
+    zh-HK: NPU
+  utilization:
+    en: Utilization
+    zh-CN: 使用率
+    zh-HK: 使用率
   start:
     en: Start Monitoring
     zh-CN: 开始监控
@@ -1406,6 +1426,40 @@ ServerMonitor:
     en: Unavailable
     zh-CN: 暂不可用
     zh-HK: 暫不可用
+
+ConnectionNotes:
+  placeholder:
+    en: Record server details, setup commands, maintenance steps, or reminders...
+    zh-CN: 记录服务器信息、安装命令、维护步骤或备忘事项...
+    zh-HK: 記錄伺服器資訊、安裝命令、維護步驟或備忘事項...
+  description:
+    en: Notes are saved with this connection and remain available whenever it is opened.
+    zh-CN: 笔记随当前连接保存，之后再次打开该连接时仍可查看。
+    zh-HK: 筆記會隨目前連線儲存，之後再次開啟該連線時仍可查看。
+  security_hint:
+    en: Do not store plaintext passwords or other secrets here.
+    zh-CN: 请勿在此保存明文密码或其他密钥。
+    zh-HK: 請勿在此儲存明文密碼或其他密鑰。
+  save:
+    en: Save notes
+    zh-CN: 保存笔记
+    zh-HK: 儲存筆記
+  unsaved:
+    en: Unsaved changes
+    zh-CN: 有未保存的修改
+    zh-HK: 有未儲存的修改
+  saved:
+    en: Saved
+    zh-CN: 已保存
+    zh-HK: 已儲存
+  storage_unavailable:
+    en: Connection storage is unavailable.
+    zh-CN: 连接存储不可用。
+    zh-HK: 連線儲存不可用。
+  save_failed:
+    en: "Failed to save notes: %{error}"
+    zh-CN: "保存笔记失败：%{error}"
+    zh-HK: "儲存筆記失敗：%{error}"
 
 QuickCommand:
   search:

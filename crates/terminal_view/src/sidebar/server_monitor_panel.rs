@@ -9,13 +9,14 @@ use gpui::{
     Window, div, linear_color_stop, linear_gradient, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Sizable, StyledExt,
+    ActiveTheme, Disableable, Sizable, Size, StyledExt,
     button::Button,
     chart::{AreaChart, LineChart, PieChart},
     h_flex,
     progress::Progress,
     spinner::Spinner,
     switch::Switch,
+    tab::{Tab, TabBar},
     tooltip::Tooltip,
     v_flex,
 };
@@ -66,6 +67,14 @@ emit_text() {
 
 emit_number() {
   printf '  %s: %s\n' "$1" "$2"
+}
+
+run_with_timeout() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 2 "$@"
+  else
+    "$@"
+  fi
 }
 
 supported=true
@@ -190,6 +199,130 @@ ps -eo pid=,pcpu=,rss=,args= --sort=-rss | head -n 5 | awk '
     printf "    - pid: %s\n      cpu: %s\n      memory: %s\n      command: \"%s\"\n", pid, cpu, mem, $0
   }
 '
+
+echo "accelerators:"
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia_output="$(run_with_timeout nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader,nounits 2>/dev/null)" || nvidia_output=""
+  if [ -n "$nvidia_output" ]; then
+    printf '%s\n' "$nvidia_output" | awk -F',' '
+      function trim(value) {
+        gsub(/^[ \t]+|[ \t]+$/, "", value)
+        return value
+      }
+      function is_number(value) {
+        return value ~ /^-?[0-9]+([.][0-9]+)?$/
+      }
+      {
+        device_index = trim($1)
+        name = trim($2)
+        utilization = trim($3)
+        memory_used = trim($4)
+        memory_total = trim($5)
+        temperature = trim($6)
+        power = trim($7)
+        if (device_index !~ /^[0-9]+$/ || name == "") next
+        gsub(/\\/, "\\\\", name)
+        gsub(/"/, "\\\"", name)
+        printf "  - vendor: \"nvidia\"\n"
+        printf "    index: %s\n", device_index
+        printf "    name: \"%s\"\n", name
+        if (is_number(utilization)) printf "    utilizationPercent: %s\n", utilization
+        if (is_number(memory_used)) printf "    memoryUsedMiB: %s\n", memory_used
+        if (is_number(memory_total)) printf "    memoryTotalMiB: %s\n", memory_total
+        if (is_number(temperature)) printf "    temperatureC: %s\n", temperature
+        if (is_number(power)) printf "    powerWatts: %s\n", power
+      }
+    '
+  fi
+fi
+
+if command -v npu-smi >/dev/null 2>&1; then
+  npu_output="$(run_with_timeout npu-smi info 2>/dev/null)" || npu_output=""
+  if [ -n "$npu_output" ]; then
+    printf '%s\n' "$npu_output" | awk '
+      function trim(value) {
+        gsub(/^[ \t]+|[ \t]+$/, "", value)
+        return value
+      }
+      function first_number(value) {
+        if (match(value, /-?[0-9]+([.][0-9]+)?/)) return substr(value, RSTART, RLENGTH)
+        return ""
+      }
+      function last_number(value,    count, parts, idx, result) {
+        count = split(value, parts, /[ \t]+/)
+        result = ""
+        for (idx = 1; idx <= count; idx++) {
+          if (parts[idx] ~ /^-?[0-9]+([.][0-9]+)?$/) result = parts[idx]
+        }
+        return result
+      }
+      function emit_device() {
+        if (pending_index == "" || pending_name == "") return
+        gsub(/\\/, "\\\\", pending_name)
+        gsub(/"/, "\\\"", pending_name)
+        printf "  - vendor: \"ascend\"\n"
+        printf "    index: %s\n", pending_index
+        printf "    name: \"%s\"\n", pending_name
+        if (utilization != "") printf "    utilizationPercent: %s\n", utilization
+        if (memory_used != "") printf "    memoryUsedMiB: %s\n", memory_used
+        if (memory_total != "") printf "    memoryTotalMiB: %s\n", memory_total
+        if (pending_temperature != "") printf "    temperatureC: %s\n", pending_temperature
+        if (pending_power != "") printf "    powerWatts: %s\n", pending_power
+      }
+      BEGIN {
+        pending_index = ""
+        pending_name = ""
+        pending_power = ""
+        pending_temperature = ""
+        utilization = ""
+        memory_used = ""
+        memory_total = ""
+      }
+      /^\|/ {
+        line = $0
+        sub(/^\|/, "", line)
+        sub(/\|[ \t]*$/, "", line)
+        cell_count = split(line, cells, "|")
+        if (cell_count != 3) next
+        for (cell_index = 1; cell_index <= 3; cell_index++) cells[cell_index] = trim(cells[cell_index])
+
+        if (pending_index != "" && cells[2] ~ /^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}[.][0-9]+$/) {
+          metrics = cells[3]
+          utilization = first_number(metrics)
+          slash_count = split(metrics, slash_parts, "/")
+          if (slash_count >= 2) {
+            memory_used = last_number(slash_parts[slash_count - 1])
+            memory_total = first_number(slash_parts[slash_count])
+          }
+          emit_device()
+          pending_index = ""
+          pending_name = ""
+          pending_power = ""
+          pending_temperature = ""
+          utilization = ""
+          memory_used = ""
+          memory_total = ""
+          next
+        }
+
+        if (cells[1] ~ /^[0-9]+[ \t]+[^ \t]/) {
+          split(cells[1], device_parts, /[ \t]+/)
+          pending_index = device_parts[1]
+          pending_name = substr(cells[1], length(device_parts[1]) + 1)
+          pending_name = trim(pending_name)
+          pending_power = first_number(cells[3])
+          pending_temperature = ""
+          if (match(cells[3], /-?[0-9]+([.][0-9]+)?[ \t]+(-?[0-9]+([.][0-9]+)?)/)) {
+            temperature_match = substr(cells[3], RSTART, RLENGTH)
+            split(temperature_match, temperature_parts, /[ \t]+/)
+            pending_temperature = temperature_parts[2]
+          }
+          if (pending_name !~ /^Ascend /) pending_name = "Ascend " pending_name
+        }
+      }
+    '
+  fi
+fi
 "#;
 
 #[derive(Clone, Debug)]
@@ -285,6 +418,35 @@ impl MemoryStats {
         } else {
             self.used as f64 * 100.0 / self.total as f64
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcceleratorVendor {
+    Nvidia,
+    Ascend,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AcceleratorStats {
+    pub vendor: AcceleratorVendor,
+    pub index: u32,
+    pub name: String,
+    pub utilization_percent: Option<f64>,
+    pub memory_used_mib: Option<u64>,
+    pub memory_total_mib: Option<u64>,
+    pub temperature_c: Option<f64>,
+    pub power_watts: Option<f64>,
+}
+
+impl AcceleratorStats {
+    pub fn memory_percent(&self) -> Option<f64> {
+        let total = self.memory_total_mib?;
+        let used = self.memory_used_mib?;
+        if total == 0 {
+            return None;
+        }
+        Some(used as f64 * 100.0 / total as f64)
     }
 }
 
@@ -389,10 +551,18 @@ struct ServerStats {
     cpu_snapshots: Vec<CpuSnapshot>,
     cpu_usage: Option<CpuUsageSample>,
     memory: Option<MemoryStats>,
+    accelerators: Vec<AcceleratorStats>,
     disks: Vec<DiskStats>,
     network_totals: Option<NetworkTotals>,
     network_rate: Option<NetworkRateSample>,
     process: Option<ProcessStats>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MonitorTab {
+    Overview,
+    Gpu,
+    Npu,
 }
 
 #[derive(Clone)]
@@ -456,6 +626,7 @@ pub struct ServerMonitorPanel {
     last_error: Option<String>,
     refresh_task: Option<Task<()>>,
     current_stats: Option<ServerStats>,
+    active_monitor_tab: MonitorTab,
     previous_cpu: Option<Vec<CpuSnapshot>>,
     previous_network: Option<NetworkTotals>,
     previous_timestamp: Option<i64>,
@@ -497,6 +668,7 @@ impl ServerMonitorPanel {
             last_error: None,
             refresh_task: None,
             current_stats: None,
+            active_monitor_tab: MonitorTab::Overview,
             previous_cpu: None,
             previous_network: None,
             previous_timestamp: None,
@@ -590,6 +762,7 @@ impl ServerMonitorPanel {
         self.preparing = false;
         self.in_flight = false;
         self.current_stats = None;
+        self.active_monitor_tab = MonitorTab::Overview;
         self.previous_cpu = None;
         self.previous_network = None;
         self.previous_timestamp = None;
@@ -715,6 +888,12 @@ impl ServerMonitorPanel {
         }
 
         self.current_stats = Some(stats);
+        if !self
+            .available_monitor_tabs()
+            .contains(&self.active_monitor_tab)
+        {
+            self.active_monitor_tab = MonitorTab::Overview;
+        }
     }
 
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -888,6 +1067,67 @@ impl ServerMonitorPanel {
         }
     }
 
+    fn available_monitor_tabs(&self) -> Vec<MonitorTab> {
+        let has_gpu = self.current_stats.as_ref().is_some_and(|stats| {
+            stats
+                .accelerators
+                .iter()
+                .any(|device| device.vendor == AcceleratorVendor::Nvidia)
+        });
+        let has_npu = self.current_stats.as_ref().is_some_and(|stats| {
+            stats
+                .accelerators
+                .iter()
+                .any(|device| device.vendor == AcceleratorVendor::Ascend)
+        });
+
+        let mut tabs = vec![MonitorTab::Overview];
+        if has_gpu {
+            tabs.push(MonitorTab::Gpu);
+        }
+        if has_npu {
+            tabs.push(MonitorTab::Npu);
+        }
+        tabs
+    }
+
+    fn render_monitor_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
+        let tabs = self.available_monitor_tabs();
+        let selected_index = tabs
+            .iter()
+            .position(|tab| *tab == self.active_monitor_tab)
+            .unwrap_or(0);
+        let tabs_for_click = tabs.clone();
+
+        let mut tab_bar = TabBar::new("server-monitor-tabs")
+            .with_size(Size::Small)
+            .underline()
+            .selected_index(selected_index)
+            .on_click(cx.listener(move |this, index: &usize, _window, cx| {
+                if let Some(tab) = tabs_for_click.get(*index) {
+                    this.active_monitor_tab = *tab;
+                    cx.notify();
+                }
+            }));
+
+        for tab in tabs {
+            let label = match tab {
+                MonitorTab::Overview => t!("ServerMonitor.overview").to_string(),
+                MonitorTab::Gpu => t!("ServerMonitor.gpu").to_string(),
+                MonitorTab::Npu => t!("ServerMonitor.npu").to_string(),
+            };
+            tab_bar = tab_bar.child(Tab::new().label(label));
+        }
+
+        h_flex()
+            .w_full()
+            .px_3()
+            .border_b_1()
+            .border_color(self.colors.border)
+            .child(tab_bar)
+            .into_any_element()
+    }
+
     fn render_metrics(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let stats = self.current_stats.as_ref();
         let cpu_value = stats
@@ -949,6 +1189,142 @@ impl ServerMonitorPanel {
                 self.render_process_lists(cx),
                 cx,
             ))
+    }
+
+    fn render_active_monitor_tab(&self, cx: &mut Context<Self>) -> AnyElement {
+        match self.active_monitor_tab {
+            MonitorTab::Overview => self.render_metrics(cx).into_any_element(),
+            MonitorTab::Gpu => self.render_accelerator_tab(AcceleratorVendor::Nvidia, cx),
+            MonitorTab::Npu => self.render_accelerator_tab(AcceleratorVendor::Ascend, cx),
+        }
+    }
+
+    fn render_accelerator_tab(
+        &self,
+        vendor: AcceleratorVendor,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let devices = self
+            .current_stats
+            .as_ref()
+            .map(|stats| {
+                stats
+                    .accelerators
+                    .iter()
+                    .filter(|device| device.vendor == vendor)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        if devices.is_empty() {
+            return placeholder(t!("ServerMonitor.unavailable"), cx);
+        }
+
+        v_flex()
+            .gap_3()
+            .children(
+                devices
+                    .into_iter()
+                    .map(|device| self.render_accelerator_device(device, cx)),
+            )
+            .into_any_element()
+    }
+
+    fn render_accelerator_device(
+        &self,
+        device: AcceleratorStats,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let vendor_key = match device.vendor {
+            AcceleratorVendor::Nvidia => "gpu",
+            AcceleratorVendor::Ascend => "npu",
+        };
+        let device_id = format!("{vendor_key}-{}", device.index);
+        let utilization = device
+            .utilization_percent
+            .map(|value| value.clamp(0.0, 100.0));
+        let memory_percent = device.memory_percent().map(|value| value.clamp(0.0, 100.0));
+        let environment = accelerator_environment_text(&device);
+
+        v_flex()
+            .w_full()
+            .gap_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(self.colors.border)
+            .bg(self.colors.background)
+            .p_3()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .items_start()
+                    .gap_3()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_semibold()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(device.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(self.colors.muted_foreground)
+                                    .child(format!(
+                                        "{} · #{}",
+                                        match device.vendor {
+                                            AcceleratorVendor::Nvidia =>
+                                                t!("ServerMonitor.gpu").to_string(),
+                                            AcceleratorVendor::Ascend =>
+                                                t!("ServerMonitor.npu").to_string(),
+                                        },
+                                        device.index
+                                    )),
+                            ),
+                    )
+                    .when(!environment.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(self.colors.muted_foreground)
+                                .child(environment),
+                        )
+                    }),
+            )
+            .when_some(utilization, |this, utilization| {
+                this.child(render_accelerator_metric(
+                    format!("{device_id}-utilization"),
+                    t!("ServerMonitor.utilization").to_string(),
+                    format!("{utilization:.1}%"),
+                    utilization,
+                    cx.theme().chart_1,
+                ))
+            })
+            .when(
+                device.memory_used_mib.is_some()
+                    && device.memory_total_mib.is_some_and(|total| total > 0),
+                |this| {
+                    this.child(render_accelerator_metric(
+                        format!("{device_id}-memory"),
+                        t!("ServerMonitor.memory").to_string(),
+                        format!(
+                            "{} / {}",
+                            format_mib(device.memory_used_mib.unwrap_or_default()),
+                            format_mib(device.memory_total_mib.unwrap_or_default())
+                        ),
+                        memory_percent.unwrap_or_default(),
+                        cx.theme().chart_2,
+                    ))
+                },
+            )
+            .into_any_element()
     }
 
     fn render_card(
@@ -1159,11 +1535,16 @@ impl Focusable for ServerMonitorPanel {
 
 impl Render for ServerMonitorPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let show_tabs =
+            self.monitor_enabled && !self.preparing && self.available_monitor_tabs().len() > 1;
+        let tabs = show_tabs.then(|| self.render_monitor_tabs(cx));
+
         v_flex()
             .size_full()
             .bg(self.colors.background)
             .text_color(self.colors.foreground)
             .child(self.render_status_bar(cx))
+            .when_some(tabs, |this, tabs| this.child(tabs))
             .child(
                 div()
                     .id("server-monitor-scroll")
@@ -1178,7 +1559,7 @@ impl Render for ServerMonitorPanel {
                             .child(if self.preparing {
                                 self.render_preparing(cx).into_any_element()
                             } else if self.monitor_enabled {
-                                self.render_metrics(cx).into_any_element()
+                                self.render_active_monitor_tab(cx)
                             } else {
                                 self.render_start_state(cx).into_any_element()
                             }),
@@ -1260,6 +1641,40 @@ fn render_process_column(
                 )
         }))
         .into_any_element()
+}
+
+fn render_accelerator_metric(
+    id: String,
+    label: String,
+    value: String,
+    percent: f64,
+    color: Hsla,
+) -> AnyElement {
+    v_flex()
+        .gap_1()
+        .child(
+            h_flex()
+                .justify_between()
+                .child(div().text_xs().text_color(color.opacity(0.9)).child(label))
+                .child(div().text_xs().font_semibold().child(value)),
+        )
+        .child(
+            Progress::new(SharedString::from(id))
+                .color(color)
+                .value(percent.clamp(0.0, 100.0) as f32),
+        )
+        .into_any_element()
+}
+
+fn accelerator_environment_text(device: &AcceleratorStats) -> String {
+    let mut values = Vec::new();
+    if let Some(temperature) = device.temperature_c {
+        values.push(format!("{temperature:.0}°C"));
+    }
+    if let Some(power) = device.power_watts {
+        values.push(format!("{power:.0} W"));
+    }
+    values.join(" · ")
 }
 
 fn render_cpu_core_grid(
@@ -1594,6 +2009,7 @@ fn parse_server_stats(input: &str) -> Result<ServerStats> {
 
     let cpu_snapshots = parse_cpu_snapshots(sections.get("cpu"));
     let memory = sections.get("memory").and_then(parse_memory_stats);
+    let accelerators = parse_accelerators(sections.get("accelerators"));
     let disks = parse_disk_stats(sections.get("fsSize"));
     let network_totals = sections.get("network").map(parse_network_totals);
     let process = sections.get("process").and_then(parse_process_stats);
@@ -1605,6 +2021,7 @@ fn parse_server_stats(input: &str) -> Result<ServerStats> {
         cpu_snapshots,
         cpu_usage: None,
         memory,
+        accelerators,
         disks,
         network_totals,
         network_rate: None,
@@ -1641,6 +2058,48 @@ fn parse_memory_stats(section: &BTreeMap<String, String>) -> Option<MemoryStats>
         swap_used: parse_u64(section.get("swapUsed")?)?,
         swap_free: parse_u64(section.get("swapFree")?)?,
     })
+}
+
+fn parse_accelerators(section: Option<&BTreeMap<String, String>>) -> Vec<AcceleratorStats> {
+    let Some(section) = section else {
+        return Vec::new();
+    };
+
+    parse_indexed("", section)
+        .into_iter()
+        .filter_map(|index| {
+            let vendor = match section.get(&format!("[{index}].vendor"))?.as_str() {
+                "nvidia" => AcceleratorVendor::Nvidia,
+                "ascend" => AcceleratorVendor::Ascend,
+                _ => return None,
+            };
+            let name = section.get(&format!("[{index}].name"))?.trim();
+            if name.is_empty() {
+                return None;
+            }
+
+            Some(AcceleratorStats {
+                vendor,
+                index: parse_u32(section.get(&format!("[{index}].index"))?)?,
+                name: name.to_string(),
+                utilization_percent: parse_optional_percent(
+                    section.get(&format!("[{index}].utilizationPercent")),
+                ),
+                memory_used_mib: section
+                    .get(&format!("[{index}].memoryUsedMiB"))
+                    .and_then(|value| parse_u64(value)),
+                memory_total_mib: section
+                    .get(&format!("[{index}].memoryTotalMiB"))
+                    .and_then(|value| parse_u64(value)),
+                temperature_c: section
+                    .get(&format!("[{index}].temperatureC"))
+                    .and_then(|value| parse_f64(value)),
+                power_watts: section
+                    .get(&format!("[{index}].powerWatts"))
+                    .and_then(|value| parse_f64(value)),
+            })
+        })
+        .collect()
 }
 
 fn parse_disk_stats(section: Option<&BTreeMap<String, String>>) -> Vec<DiskStats> {
@@ -1745,11 +2204,22 @@ fn parse_i64(value: &str) -> Option<i64> {
 }
 
 fn parse_f64(value: &str) -> Option<f64> {
-    value.trim_end_matches('%').parse::<f64>().ok()
+    value
+        .trim()
+        .trim_end_matches('%')
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
 }
 
 fn parse_percent(value: &str) -> Option<f64> {
     parse_f64(value)
+}
+
+fn parse_optional_percent(value: Option<&String>) -> Option<f64> {
+    value
+        .and_then(|value| parse_percent(value))
+        .filter(|value| *value >= 0.0)
 }
 
 async fn refresh_remote_stats_inner(
@@ -1900,6 +2370,10 @@ fn format_kib(value: u64) -> String {
     format_bytes(value * 1024)
 }
 
+fn format_mib(value: u64) -> String {
+    format_bytes(value.saturating_mul(1024 * 1024))
+}
+
 fn format_bytes(value: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
@@ -1923,9 +2397,10 @@ fn format_bytes_per_sec(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CpuSnapshot, HistoryLimit, MemoryStats, NetworkTotals, ProcessEntry, build_collect_command,
-        build_legacy_cleanup_command, history_points, history_tick_margin, parse_server_stats,
-        push_history_point, sample_cpu_usage, sample_network_rates, split_sections,
+        AcceleratorVendor, CpuSnapshot, HistoryLimit, MemoryStats, NetworkTotals, ProcessEntry,
+        REMOTE_MONITOR_SCRIPT, build_collect_command, build_legacy_cleanup_command, history_points,
+        history_tick_margin, parse_server_stats, push_history_point, sample_cpu_usage,
+        sample_network_rates, split_sections,
     };
 
     #[test]
@@ -2039,6 +2514,121 @@ cpu:
                 .any(|snapshot| snapshot.name == "cpu")
         );
         assert!(sampled.total_percent > 0.0);
+    }
+
+    #[test]
+    fn parse_server_stats_reads_per_device_gpu_metrics() {
+        let stats = parse_server_stats(
+            r#"
+accelerators:
+  - vendor: "nvidia"
+    index: 0
+    name: "NVIDIA A100-SXM4-40GB"
+    utilizationPercent: 42.5
+    memoryUsedMiB: 10240
+    memoryTotalMiB: 40960
+    temperatureC: 51
+    powerWatts: 120.5
+  - vendor: "nvidia"
+    index: 1
+    name: "NVIDIA A100-SXM4-40GB"
+    utilizationPercent: 0
+    memoryUsedMiB: 0
+    memoryTotalMiB: 40960
+"#,
+        )
+        .expect("GPU payload should parse");
+
+        assert_eq!(stats.accelerators.len(), 2);
+        let first = &stats.accelerators[0];
+        assert_eq!(first.vendor, AcceleratorVendor::Nvidia);
+        assert_eq!(first.index, 0);
+        assert_eq!(first.name, "NVIDIA A100-SXM4-40GB");
+        assert_eq!(first.utilization_percent, Some(42.5));
+        assert_eq!(first.memory_percent(), Some(25.0));
+        assert_eq!(first.temperature_c, Some(51.0));
+        assert_eq!(first.power_watts, Some(120.5));
+        assert_eq!(stats.accelerators[1].index, 1);
+    }
+
+    #[test]
+    fn parse_server_stats_reads_ascend_npu_metrics() {
+        let stats = parse_server_stats(
+            r#"
+accelerators:
+  - vendor: "ascend"
+    index: 3
+    name: "Ascend 910B2"
+    utilizationPercent: 81
+    memoryUsedMiB: 1221
+    memoryTotalMiB: 65536
+    temperatureC: 46
+    powerWatts: 69
+"#,
+        )
+        .expect("NPU payload should parse");
+
+        assert_eq!(stats.accelerators.len(), 1);
+        let npu = &stats.accelerators[0];
+        assert_eq!(npu.vendor, AcceleratorVendor::Ascend);
+        assert_eq!(npu.index, 3);
+        assert_eq!(npu.name, "Ascend 910B2");
+        assert_eq!(npu.utilization_percent, Some(81.0));
+        assert_eq!(npu.memory_used_mib, Some(1221));
+        assert_eq!(npu.memory_total_mib, Some(65536));
+    }
+
+    #[test]
+    fn malformed_accelerator_rows_do_not_break_other_server_stats() {
+        let stats = parse_server_stats(
+            r#"
+memory:
+  total: 2048
+  free: 512
+  used: 1024
+  buffcache: 512
+  swapTotal: 0
+  swapUsed: 0
+  swapFree: 0
+accelerators:
+  - vendor: "nvidia"
+    index: 0
+    name: ""
+  - vendor: "unknown"
+    index: 1
+    name: "Mystery device"
+  - vendor: "ascend"
+    index: nope
+    name: "Ascend 910B"
+"#,
+        )
+        .expect("malformed accelerator rows should be ignored");
+
+        assert!(stats.accelerators.is_empty());
+        assert_eq!(stats.memory.expect("memory should still parse").total, 2048);
+    }
+
+    #[test]
+    fn accelerator_collection_is_optional_and_time_bounded() {
+        assert!(REMOTE_MONITOR_SCRIPT.contains("command -v nvidia-smi"));
+        assert!(REMOTE_MONITOR_SCRIPT.contains("command -v npu-smi"));
+        assert!(
+            REMOTE_MONITOR_SCRIPT
+                .contains("run_with_timeout nvidia-smi --query-gpu=index,name,utilization.gpu")
+        );
+        assert!(REMOTE_MONITOR_SCRIPT.contains("run_with_timeout npu-smi info"));
+        assert!(REMOTE_MONITOR_SCRIPT.contains("if [ -n \"$nvidia_output\" ]"));
+        assert!(REMOTE_MONITOR_SCRIPT.contains("if [ -n \"$npu_output\" ]"));
+    }
+
+    #[test]
+    fn monitor_panel_exposes_gpu_and_npu_tabs() {
+        let source = include_str!("server_monitor_panel.rs");
+
+        assert!(source.contains("TabBar::new(\"server-monitor-tabs\")"));
+        assert!(source.contains("MonitorTab::Gpu"));
+        assert!(source.contains("MonitorTab::Npu"));
+        assert!(source.contains("render_active_monitor_tab"));
     }
 
     #[test]

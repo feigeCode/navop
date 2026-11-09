@@ -8,6 +8,7 @@
 
 mod broadcast_input_panel;
 mod composer_context;
+mod connection_notes_panel;
 pub mod file_manager_panel;
 mod history_command_panel;
 mod quick_command_panel;
@@ -17,6 +18,7 @@ mod settings_panel;
 pub(crate) mod tool_dock;
 
 use broadcast_input_panel::{BroadcastInputPanel, BroadcastInputPanelConfig};
+use connection_notes_panel::ConnectionNotesPanel;
 pub use file_manager_panel::{FileManagerPanel, FileManagerPanelEvent};
 pub use history_command_panel::{HistoryCommandPanel, HistoryCommandPanelEvent};
 pub use quick_command_panel::QuickCommandPanel;
@@ -349,12 +351,14 @@ pub enum SidebarPanel {
     BroadcastInput,
     /// 文件管理器面板（仅 SSH 终端）
     FileManager,
+    /// 当前连接的备注与运维笔记
+    ConnectionNotes,
     /// 服务器监控面板（仅 SSH 终端）
     ServerMonitor,
 }
 
 impl SidebarPanel {
-    pub const ALL: [SidebarPanel; 8] = [
+    pub const ALL: [SidebarPanel; 9] = [
         SidebarPanel::FileExplorer,
         SidebarPanel::Settings,
         SidebarPanel::QuickCommand,
@@ -362,6 +366,7 @@ impl SidebarPanel {
         SidebarPanel::AiChat,
         SidebarPanel::BroadcastInput,
         SidebarPanel::FileManager,
+        SidebarPanel::ConnectionNotes,
         SidebarPanel::ServerMonitor,
     ];
 
@@ -378,6 +383,7 @@ impl SidebarPanel {
             SidebarPanel::AiChat => "terminal.ai-chat",
             SidebarPanel::BroadcastInput => "terminal.broadcast-input",
             SidebarPanel::FileManager => "terminal.file-manager",
+            SidebarPanel::ConnectionNotes => "terminal.connection-notes",
             SidebarPanel::ServerMonitor => "terminal.server-monitor",
         }
     }
@@ -392,6 +398,7 @@ impl SidebarPanel {
             SidebarPanel::AiChat => Icon::new(IconName::AILine),
             SidebarPanel::BroadcastInput => Icon::new(IconName::Network),
             SidebarPanel::FileManager => Icon::new(IconName::Folder),
+            SidebarPanel::ConnectionNotes => Icon::new(IconName::File),
             SidebarPanel::ServerMonitor => Icon::new(IconName::Monitor),
         }
     }
@@ -406,6 +413,7 @@ impl SidebarPanel {
             SidebarPanel::AiChat => t!("TerminalSidebar.ai_chat"),
             SidebarPanel::BroadcastInput => t!("TerminalSidebar.broadcast_input"),
             SidebarPanel::FileManager => t!("TerminalSidebar.file_manager"),
+            SidebarPanel::ConnectionNotes => t!("TerminalSidebar.connection_notes"),
             SidebarPanel::ServerMonitor => t!("TerminalSidebar.server_monitor"),
         }
         .into()
@@ -478,6 +486,7 @@ fn terminal_sidebar_available_panels(
     has_file_explorer: bool,
     has_file_manager: bool,
     has_server_monitor: bool,
+    has_connection_notes: bool,
     history_supported: bool,
     broadcast_supported: bool,
 ) -> Vec<SidebarPanel> {
@@ -493,6 +502,9 @@ fn terminal_sidebar_available_panels(
     }
     if has_file_manager {
         panels.push(SidebarPanel::FileManager);
+    }
+    if has_connection_notes {
+        panels.push(SidebarPanel::ConnectionNotes);
     }
     if has_server_monitor {
         panels.push(SidebarPanel::ServerMonitor);
@@ -816,6 +828,8 @@ pub struct TerminalSidebar {
     broadcast_input_panel: Option<Entity<BroadcastInputPanel>>,
     /// 文件管理器面板（仅 SSH 终端时创建）
     file_manager_panel: Option<Entity<FileManagerPanel>>,
+    /// 当前连接的备注与运维笔记
+    connection_notes_panel: Option<Entity<ConnectionNotesPanel>>,
     /// 本地工作区文件浏览器（仅本地终端时创建）
     file_explorer_panel: Option<Entity<WorkspaceExplorer>>,
     /// 服务器监控面板（仅 SSH 终端时创建）
@@ -1035,6 +1049,7 @@ impl TerminalSidebar {
                 self.file_explorer_panel.is_some(),
                 self.file_manager_panel.is_some(),
                 self.server_monitor_panel.is_some(),
+                self.connection_notes_panel.is_some(),
                 self.history_command_panel.is_some(),
                 self.broadcast_input_panel.is_some(),
             ));
@@ -1114,6 +1129,14 @@ impl TerminalSidebar {
             });
         let quick_command_panel =
             cx.new(|cx| QuickCommandPanel::new(connection_id, colors.clone(), window, cx));
+        let connection_notes_panel = sidebar_connection
+            .as_ref()
+            .filter(|connection| connection.id.is_some())
+            .map(|connection| {
+                cx.new(|cx| {
+                    ConnectionNotesPanel::new(connection.clone(), colors.clone(), window, cx)
+                })
+            });
         let history_command_panel = history_scope.map(|scope| {
             cx.new(|cx| {
                 HistoryCommandPanel::new(scope, history_user.clone(), colors.clone(), window, cx)
@@ -1427,6 +1450,7 @@ impl TerminalSidebar {
             file_explorer_panel.is_some(),
             file_manager_panel.is_some(),
             server_monitor_panel.is_some(),
+            connection_notes_panel.is_some(),
             history_command_panel.is_some(),
             broadcast_input_panel.is_some(),
         );
@@ -1439,6 +1463,7 @@ impl TerminalSidebar {
             ai_connection_resource,
             broadcast_input_panel,
             file_manager_panel,
+            connection_notes_panel,
             file_explorer_panel,
             server_monitor_panel,
             sync_path_enabled,
@@ -1561,6 +1586,10 @@ impl TerminalSidebar {
                 .map(|panel| panel.clone().into()),
             SidebarPanel::FileManager => self
                 .file_manager_panel
+                .as_ref()
+                .map(|panel| panel.clone().into()),
+            SidebarPanel::ConnectionNotes => self
+                .connection_notes_panel
                 .as_ref()
                 .map(|panel| panel.clone().into()),
             SidebarPanel::ServerMonitor => self
@@ -2013,6 +2042,7 @@ impl TerminalSidebar {
                 | SidebarPanel::QuickCommand
                 | SidebarPanel::HistoryCommand
                 | SidebarPanel::BroadcastInput
+                | SidebarPanel::ConnectionNotes
                 | SidebarPanel::ServerMonitor
         );
         if !needs_embedded_header {
@@ -2346,7 +2376,7 @@ mod tests {
 
     #[test]
     fn sidebar_default_panels_do_not_include_rich_input() {
-        assert_eq!(8, SidebarPanel::all().len());
+        assert_eq!(9, SidebarPanel::all().len());
         assert!(
             SidebarPanel::all()
                 .iter()
@@ -2363,35 +2393,38 @@ mod tests {
 
     #[test]
     fn history_command_panel_is_available_for_local_terminals() {
-        let panels = terminal_sidebar_available_panels(true, false, false, true, false);
+        let panels = terminal_sidebar_available_panels(true, false, false, false, true, false);
 
         assert!(panels.contains(&SidebarPanel::FileExplorer));
         assert!(panels.contains(&SidebarPanel::HistoryCommand));
         assert!(!panels.contains(&SidebarPanel::BroadcastInput));
         assert!(!panels.contains(&SidebarPanel::FileManager));
+        assert!(!panels.contains(&SidebarPanel::ConnectionNotes));
         assert!(!panels.contains(&SidebarPanel::ServerMonitor));
     }
 
     #[test]
     fn history_command_panel_is_available_for_ssh_terminals() {
-        let panels = terminal_sidebar_available_panels(false, true, true, true, true);
+        let panels = terminal_sidebar_available_panels(false, true, true, true, true, true);
 
         assert!(!panels.contains(&SidebarPanel::FileExplorer));
         assert!(panels.contains(&SidebarPanel::HistoryCommand));
         assert!(panels.contains(&SidebarPanel::BroadcastInput));
         assert!(panels.contains(&SidebarPanel::FileManager));
+        assert!(panels.contains(&SidebarPanel::ConnectionNotes));
         assert!(panels.contains(&SidebarPanel::ServerMonitor));
     }
 
     #[test]
     fn ai_chat_is_available_in_the_terminal_sidebar() {
-        for (explorer, manager, monitor, history, broadcast) in [
-            (true, false, false, true, false),
-            (false, true, true, true, true),
-            (false, false, false, false, false),
+        for (explorer, manager, monitor, notes, history, broadcast) in [
+            (true, false, false, false, true, false),
+            (false, true, true, true, true, true),
+            (false, false, false, false, false, false),
         ] {
-            let panels =
-                terminal_sidebar_available_panels(explorer, manager, monitor, history, broadcast);
+            let panels = terminal_sidebar_available_panels(
+                explorer, manager, monitor, notes, history, broadcast,
+            );
             assert!(
                 panels.contains(&SidebarPanel::AiChat),
                 "原始终端侧栏应保留 AI 面板: {panels:?}"
@@ -2401,12 +2434,13 @@ mod tests {
 
     #[test]
     fn history_command_panel_is_not_available_for_serial_terminals() {
-        let panels = terminal_sidebar_available_panels(false, false, false, false, false);
+        let panels = terminal_sidebar_available_panels(false, false, false, false, false, false);
 
         assert!(!panels.contains(&SidebarPanel::FileExplorer));
         assert!(!panels.contains(&SidebarPanel::HistoryCommand));
         assert!(!panels.contains(&SidebarPanel::BroadcastInput));
         assert!(!panels.contains(&SidebarPanel::FileManager));
+        assert!(!panels.contains(&SidebarPanel::ConnectionNotes));
         assert!(!panels.contains(&SidebarPanel::ServerMonitor));
     }
 
@@ -2416,6 +2450,7 @@ mod tests {
         assert!(!SidebarPanel::FileExplorer.needs_internal_tool_frame_header());
         assert!(SidebarPanel::Settings.needs_internal_tool_frame_header());
         assert!(!SidebarPanel::AiChat.needs_internal_tool_frame_header());
+        assert!(SidebarPanel::ConnectionNotes.needs_internal_tool_frame_header());
         assert!(SidebarPanel::ServerMonitor.needs_internal_tool_frame_header());
     }
 
