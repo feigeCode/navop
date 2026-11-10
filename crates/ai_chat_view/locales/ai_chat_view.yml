@@ -527,10 +527,6 @@ AgentUi:
     en: Copy code
     zh-CN: 复制代码
     zh-HK: 複製程式碼
-  transcript_selection_count:
-    en: "%{count} selected"
-    zh-CN: "已选 %{count} 条"
-    zh-HK: "已選 %{count} 條"
   copy:
     en: Copy
     zh-CN: 复制

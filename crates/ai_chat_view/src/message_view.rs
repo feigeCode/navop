@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, Div, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, StyledImage,
-    Window, div, ease_out_quint, img, px,
+    Animation, AnimationExt, AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement,
+    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div,
+    ease_out_quint, img, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, Sizable, Size, clipboard::Clipboard, h_flex, spinner::Spinner, v_flex,
@@ -39,13 +39,6 @@ fn trim_leading_blank_lines(content: &str) -> &str {
         content_start += line.len();
     }
     &content[content_start..]
-}
-
-/// 单条消息该被复制的文本；不可复制的消息（工具卡片等）返回 `None`。
-///
-/// 对 crate 内公开：块级选中复制要复用同一口径，别让两种复制给出不同答案。
-pub(crate) fn message_copy_text(message: &ChatMessageUI) -> Option<SharedString> {
-    message_copy_value(message)
 }
 
 fn message_copy_value<E: MessageExtension>(
@@ -72,16 +65,9 @@ fn render_message_copy<E: MessageExtension>(
             .debug_selector(|| "ai-chat-message-copy".to_string())
             .flex_shrink_0()
             .child(
-                div()
-                    // `Clipboard` 的 on_click 会阻止冒泡，但块级选中的起点在 mouse_down。
-                    // 不在这里截断，点复制会先被父级可选中槽位当成选中操作。
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        Clipboard::new(message_copy_id(&message.id))
-                            .value(value)
-                            .tooltip(t!("AgentUi.copy_message").to_string()),
-                    ),
+                Clipboard::new(message_copy_id(&message.id))
+                    .value(value)
+                    .tooltip(t!("AgentUi.copy_message").to_string()),
             )
             .into_any_element(),
     )
