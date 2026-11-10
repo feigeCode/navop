@@ -47,6 +47,16 @@ fn quick_command_parameters_are_handled_by_every_execution_entry() {
         shortcut.contains(prompt),
         "快捷指令键盘快捷键必须解析 {{name}} 参数"
     );
+    let shortcut_submission = function_region(
+        shortcut,
+        "if let Some(command) = self",
+        "let backspace_code",
+    );
+    assert!(
+        shortcut_submission.contains("terminal.write_to_pty(command.into_bytes(), cx)")
+            && shortcut_submission.contains("terminal.focus_terminal(window, cx)"),
+        "快捷键参数表单确认后必须把焦点交回终端，否则下一次 Enter 无法发送"
+    );
 }
 
 #[test]

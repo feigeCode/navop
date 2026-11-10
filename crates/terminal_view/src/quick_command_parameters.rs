@@ -66,6 +66,9 @@ pub(crate) fn replace_quick_command_parameters(
 
 /// 有参数时打开填写对话框，并在确认后把替换完成的命令交给调用方。
 ///
+/// 确认时先同步关闭对话框，再执行回调。对话框默认的延迟关闭会在动画结束时
+/// 恢复打开前的焦点；若回调已把焦点交给终端，这个恢复会随后把焦点抢回去。
+///
 /// 返回 `false` 表示命令不含参数，调用方应继续原来的执行路径。
 pub(crate) fn prompt_for_quick_command_parameters(
     command: &str,
@@ -110,8 +113,9 @@ pub(crate) fn prompt_for_quick_command_parameters(
                     .collect::<Vec<_>>();
                 let command =
                     replace_quick_command_parameters(&command, &parameters_for_ok, &values);
+                window.close_dialog(cx);
                 on_submit(command, window, cx);
-                true
+                false
             })
             .child(
                 v_flex()
@@ -142,7 +146,36 @@ pub(crate) fn prompt_for_quick_command_parameters(
 
 #[cfg(test)]
 mod tests {
-    use super::{quick_command_parameters, replace_quick_command_parameters};
+    use std::{cell::RefCell, rc::Rc, time::Duration};
+
+    use gpui::{
+        AppContext as _, FocusHandle, InteractiveElement as _, IntoElement, ParentElement as _,
+        Render, Styled as _, TestAppContext, div,
+    };
+    use gpui_component::{Root, Theme};
+
+    use super::{
+        prompt_for_quick_command_parameters, quick_command_parameters,
+        replace_quick_command_parameters,
+    };
+
+    struct ParameterDialogFocusHost {
+        terminal_focus: FocusHandle,
+        previous_focus: FocusHandle,
+    }
+
+    impl Render for ParameterDialogFocusHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(div().size_full().track_focus(&self.previous_focus))
+                .child(div().size_full().track_focus(&self.terminal_focus))
+        }
+    }
 
     #[test]
     fn parameterized_quick_commands_extract_unique_names_and_replace_values() {
@@ -166,5 +199,70 @@ mod tests {
             replace_quick_command_parameters(command, &parameters, &["production".to_string()]);
 
         assert_eq!("deploy production\n", rendered);
+    }
+
+    #[gpui::test]
+    fn multiple_parameters_submit_once_and_restore_terminal_focus(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+        });
+
+        let focus_slot = Rc::new(RefCell::new(None));
+        let focus_slot_for_window = focus_slot.clone();
+        let (_root, cx) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|cx| ParameterDialogFocusHost {
+                terminal_focus: cx.focus_handle(),
+                previous_focus: cx.focus_handle(),
+            });
+            let (terminal_focus, previous_focus) = {
+                let host = host.read(cx);
+                (host.terminal_focus.clone(), host.previous_focus.clone())
+            };
+            previous_focus.focus(window, cx);
+            *focus_slot_for_window.borrow_mut() = Some((terminal_focus, previous_focus));
+            Root::new(host, window, cx)
+        });
+        let (terminal_focus, previous_focus) = focus_slot
+            .borrow_mut()
+            .take()
+            .expect("focus handles from the dialog host");
+
+        let submitted = Rc::new(RefCell::new(Vec::<String>::new()));
+        let submitted_for_dialog = submitted.clone();
+        let terminal_focus_for_dialog = terminal_focus.clone();
+        cx.update(|window, cx| {
+            assert!(prompt_for_quick_command_parameters(
+                "ssh {{user}}@{{host}}",
+                gpui::black(),
+                window,
+                cx,
+                move |command, window, cx| {
+                    submitted_for_dialog.borrow_mut().push(command);
+                    terminal_focus_for_dialog.focus(window, cx);
+                },
+            ));
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        cx.simulate_keystrokes("enter");
+        cx.background_executor
+            .advance_clock(Duration::from_millis(300));
+        cx.run_until_parked();
+
+        assert_eq!(
+            submitted.borrow().len(),
+            1,
+            "multiple placeholders must share one form and one submit"
+        );
+        cx.update(|window, _cx| {
+            assert!(
+                terminal_focus.is_focused(window),
+                "closing the parameter form must not restore focus to the pre-dialog control"
+            );
+            assert!(!previous_focus.is_focused(window));
+        });
+        let _ = cx;
     }
 }
