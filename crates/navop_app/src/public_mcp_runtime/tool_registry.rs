@@ -1,4 +1,4 @@
-use super::{access_guard, diagnostics, internal_functions, resource_pool};
+use super::{access_guard, diagnostics, internal_functions, notes_tools, resource_pool};
 use gpui::App;
 use one_core::settings::ToolExposureToolsetSettings;
 use one_core::tab_container::TabOpenMode;
@@ -63,6 +63,9 @@ fn build_tool_registry_for_surface(
         runtime_registries.push(internal_function_tool_registry(
             internal_functions::definitions(cx),
         ));
+    }
+    if toolsets.notes {
+        runtime_registries.push(notes_tools::notes_tool_registry());
     }
     if toolsets.connections {
         if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
@@ -841,6 +844,30 @@ mod tests {
             })),
             result.structured_content
         );
+    }
+
+    #[gpui::test]
+    fn build_tool_registry_exposes_the_dedicated_notes_group(cx: &mut TestAppContext) {
+        let toolsets = ToolExposureToolsetSettings {
+            terminal: false,
+            connections: false,
+            notes: true,
+            ..Default::default()
+        };
+        let registry = cx
+            .update(|cx| build_tool_registry(cx, &toolsets).expect("notes registry should build"));
+
+        let tool_names = registry
+            .tools()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        for name in ["notes.list", "notes.read", "notes.create", "notes.write"] {
+            assert!(
+                tool_names.iter().any(|tool| tool == name),
+                "missing {name}: {tool_names:?}"
+            );
+        }
     }
 
     fn internal_function_toolsets() -> ToolExposureToolsetSettings {

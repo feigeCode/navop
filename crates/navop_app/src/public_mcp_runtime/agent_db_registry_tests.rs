@@ -69,6 +69,7 @@ fn agent_runtime_tool_registry_ignores_public_mcp_toolset_exposure(cx: &mut Test
             database: false,
             redis: false,
             mongo: false,
+            notes: false,
             internal_functions: false,
             extensions: false,
         };

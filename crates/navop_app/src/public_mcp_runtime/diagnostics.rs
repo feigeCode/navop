@@ -63,6 +63,7 @@ impl ToolHandler for RuntimeStatusTool {
                     group("database", toolsets.database),
                     group("redis", toolsets.redis),
                     group("mongodb", toolsets.mongo),
+                    group("notes", toolsets.notes),
                     group("internal_functions", toolsets.internal_functions)
                 ]
             })))
