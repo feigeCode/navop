@@ -18,6 +18,7 @@ workspace_explorer = { workspace = true }
 
 # GPUI
 gpui = { workspace = true }
+gpui-base = { workspace = true }
 gpui-component = { workspace = true }
 palette = { workspace = true }
 ai_chat_view = { workspace = true, default-features = false }

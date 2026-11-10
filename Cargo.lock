@@ -14101,6 +14101,7 @@ dependencies = [
  "chrono",
  "connection-form",
  "ftp",
+ "gpui-base",
  "gpui-component",
  "gpui-fast",
  "one-assets",
