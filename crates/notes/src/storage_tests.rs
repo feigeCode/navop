@@ -69,6 +69,25 @@ fn markdown_documents_use_stable_index_ids() -> Result<()> {
 }
 
 #[test]
+fn reads_and_writes_documents_through_validated_storage_api() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let storage = NotesStorage::open(temp.path().join("notes"))?;
+    storage.create_notebook("Notes", "")?;
+    let document = storage.create_document(Path::new(""), "Runbook")?;
+
+    storage.write_document(&document.relative_path, "# Deploy\n")?;
+    let (descriptor, source) = storage.read_document(&document.relative_path)?;
+
+    assert_eq!(document.relative_path, descriptor.relative_path);
+    assert_eq!("# Deploy\n", source);
+    assert!(
+        storage.read_document(Path::new("../outside.md")).is_err(),
+        "MCP note reads must keep the existing notes-root boundary"
+    );
+    Ok(())
+}
+
+#[test]
 fn scan_discovers_external_markdown_once() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let root = temp.path().join("notes");

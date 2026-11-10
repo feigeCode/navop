@@ -496,6 +496,9 @@ pub struct ToolExposureToolsetSettings {
     pub redis: bool,
     #[serde(default)]
     pub mongo: bool,
+    /// 内置笔记工具（列表、读取、创建、写入）。
+    #[serde(default)]
+    pub notes: bool,
     #[serde(default)]
     pub internal_functions: bool,
     /// 扩展声明的 AI 工具（`contributes.tools`）。
@@ -516,6 +519,7 @@ impl ToolExposureToolsetSettings {
             database: false,
             redis: false,
             mongo: false,
+            notes: false,
             internal_functions: false,
             extensions: false,
         }
@@ -531,6 +535,7 @@ impl ToolExposureToolsetSettings {
             database: true,
             redis: true,
             mongo: true,
+            notes: true,
             internal_functions: true,
             extensions: false,
         }
@@ -2836,6 +2841,7 @@ mod tests {
         assert!(!settings.tool_exposure.mcp.database);
         assert!(!settings.tool_exposure.mcp.redis);
         assert!(!settings.tool_exposure.mcp.sftp);
+        assert!(!settings.tool_exposure.mcp.notes);
         assert!(settings.tool_exposure.agent.terminal);
         assert!(settings.tool_exposure.agent.terminal_ssh_exec);
         assert!(settings.tool_exposure.agent.terminal_exec);
@@ -2843,6 +2849,7 @@ mod tests {
         assert!(settings.tool_exposure.agent.database);
         assert!(settings.tool_exposure.agent.redis);
         assert!(settings.tool_exposure.agent.sftp);
+        assert!(settings.tool_exposure.agent.notes);
     }
 
     #[test]
@@ -3394,7 +3401,9 @@ mod tests {
         assert!(settings.tool_exposure.mcp.terminal_ssh_exec);
         assert!(settings.tool_exposure.mcp.terminal_exec);
         assert!(settings.tool_exposure.mcp.connections);
+        assert!(!settings.tool_exposure.mcp.notes);
         assert!(settings.tool_exposure.agent.database);
+        assert!(settings.tool_exposure.agent.notes);
     }
 
     #[test]
@@ -3668,6 +3677,7 @@ mod tests {
         settings.tool_exposure.mcp.connections = false;
         settings.tool_exposure.mcp.database = true;
         settings.tool_exposure.mcp.redis = true;
+        settings.tool_exposure.mcp.notes = true;
         settings.tool_exposure.agent.terminal_exec = false;
 
         let json = serde_json::to_string(&settings).expect("应序列化 AppSettings");
@@ -3683,6 +3693,7 @@ mod tests {
         assert!(!loaded.tool_exposure.mcp.connections);
         assert!(loaded.tool_exposure.mcp.database);
         assert!(loaded.tool_exposure.mcp.redis);
+        assert!(loaded.tool_exposure.mcp.notes);
         assert!(!loaded.tool_exposure.agent.terminal_exec);
     }
 

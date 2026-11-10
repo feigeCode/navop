@@ -331,6 +331,13 @@
 - **验证方式**：`cargo check -p navop_app` 足以暴露（borrowck 在 type check 之后运行，type check 全绿不代表 borrowck 全绿）；若只想快速验证某个 view，可在 `use_keyed_state` 内故意引用一个外层局部变量看是否复现 E0373。
 - **适用范围**：所有在 `use_keyed_state` / `cx.new` 初始化闭包里订阅自身事件并引用外层局部变量的 GPUI 设置项与自定义组件。
 
+- **标题**：GPUI dropdown setter 内不能同步重入 `update_window` 打开弹窗
+- **触发信号**：`SettingField::dropdown` 选中某项后完全无反应；下拉仍显示旧值，确认框不出现，设置也未落盘。
+- **根因 / 约束**：下拉项的 `set_value` 回调在窗口更新栈内执行。此时 GPUI 已把当前 `Window` 从 App 的窗口表临时取走，再调用 `cx.update_window(cx.active_window(), ...)` 打开 alert dialog 会返回 `window not found`；若返回值被 `let _ =` 忽略，就表现为静默无效。
+- **正确做法**：把需要打开弹窗、通知或再次更新窗口的动作用 `cx.defer(move |cx| ...)` 延后到当前 effect cycle 结束，等窗口归还给 App 后再调用 `update_window`。确认框的 `on_ok` 也仍在窗口更新栈内，因此其中的通知同样应延后或直接使用回调提供的 `window`。
+- **验证方式**：设置模块定向测试断言 dropdown setter 在 `cx.defer` 之后才执行确认/落盘；实际点击下拉项确认弹窗出现、选择保存后下拉值更新。
+- **适用范围**：所有 `gpui_component::setting::SettingField::dropdown` / `scrollable_dropdown` 的 setter，以及其他从 UI 回调里通过 `App::update_window` 间接操作当前窗口的路径。
+
 #### 已沉淀经验
 
 - **标题**：发布构建会被 Rust 工具链漂移打断，`setup-rust-toolchain` 默认带 `-D warnings`

@@ -334,9 +334,10 @@ impl TerminalView {
                 cx.theme().muted_foreground,
                 _window,
                 cx,
-                move |command, _, cx| {
+                move |command, window, cx| {
                     terminal.update(cx, |terminal, cx| {
-                        terminal.write_to_pty(command.into_bytes(), cx)
+                        terminal.write_to_pty(command.into_bytes(), cx);
+                        terminal.focus_terminal(window, cx);
                     });
                 },
             ) {

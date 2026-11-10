@@ -64,12 +64,13 @@ enum ToolExposureItem {
     Redis,
     Mongo,
     Database,
+    Notes,
     InternalFunctions,
     Extensions,
 }
 
 impl ToolExposureItem {
-    const MCP_VISIBLE: [Self; 10] = [
+    const MCP_VISIBLE: [Self; 11] = [
         Self::Terminal,
         Self::TerminalSshExec,
         Self::TerminalExec,
@@ -78,10 +79,11 @@ impl ToolExposureItem {
         Self::Redis,
         Self::Mongo,
         Self::Database,
+        Self::Notes,
         Self::InternalFunctions,
         Self::Extensions,
     ];
-    const AGENT_VISIBLE: [Self; 10] = [
+    const AGENT_VISIBLE: [Self; 11] = [
         Self::Terminal,
         Self::TerminalSshExec,
         Self::TerminalExec,
@@ -90,6 +92,7 @@ impl ToolExposureItem {
         Self::Redis,
         Self::Mongo,
         Self::Database,
+        Self::Notes,
         Self::InternalFunctions,
         Self::Extensions,
     ];
@@ -105,6 +108,7 @@ impl ToolExposureItem {
             Self::Redis => "redis",
             Self::Mongo => "mongo",
             Self::Database => "database",
+            Self::Notes => "notes",
             Self::InternalFunctions => "internal_functions",
             Self::Extensions => "extensions",
         }
@@ -120,6 +124,7 @@ impl ToolExposureItem {
             Self::Redis => "Settings.General.ToolExposure.redis",
             Self::Mongo => "Settings.General.ToolExposure.mongo",
             Self::Database => "Settings.General.ToolExposure.database",
+            Self::Notes => "Settings.General.ToolExposure.notes",
             Self::InternalFunctions => "Settings.General.ToolExposure.internal_functions",
             Self::Extensions => "Settings.General.ToolExposure.extensions",
         }
@@ -135,6 +140,7 @@ impl ToolExposureItem {
             Self::Redis => "Settings.General.ToolExposure.redis_desc",
             Self::Mongo => "Settings.General.ToolExposure.mongo_desc",
             Self::Database => "Settings.General.ToolExposure.database_desc",
+            Self::Notes => "Settings.General.ToolExposure.notes_desc",
             Self::InternalFunctions => "Settings.General.ToolExposure.internal_functions_desc",
             Self::Extensions => "Settings.General.ToolExposure.extensions_desc",
         }
@@ -150,6 +156,7 @@ impl ToolExposureItem {
             Self::Redis => settings.redis,
             Self::Mongo => settings.mongo,
             Self::Database => settings.database,
+            Self::Notes => settings.notes,
             Self::InternalFunctions => settings.internal_functions,
             Self::Extensions => settings.extensions,
         }
@@ -165,6 +172,7 @@ impl ToolExposureItem {
             Self::Redis => settings.redis = enabled,
             Self::Mongo => settings.mongo = enabled,
             Self::Database => settings.database = enabled,
+            Self::Notes => settings.notes = enabled,
             Self::InternalFunctions => settings.internal_functions = enabled,
             Self::Extensions => settings.extensions = enabled,
         }
@@ -251,6 +259,7 @@ mod tests {
                 "redis",
                 "mongo",
                 "database",
+                "notes",
                 "internal_functions",
                 "extensions"
             ],
@@ -272,6 +281,7 @@ mod tests {
                 "redis",
                 "mongo",
                 "database",
+                "notes",
                 "internal_functions",
                 "extensions"
             ],

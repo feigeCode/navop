@@ -3621,6 +3621,14 @@ Settings:
         en: Expose database query, schema, and execution tools
         zh-CN: 暴露数据库查询、结构和执行工具
         zh-HK: 暴露資料庫查詢、結構和執行工具
+      notes:
+        en: Notes Tools
+        zh-CN: 笔记工具
+        zh-HK: 筆記工具
+      notes_desc:
+        en: Expose notebook listing, reading, creation, and writing tools
+        zh-CN: 暴露笔记列表、读取、创建和写入工具
+        zh-HK: 暴露筆記列表、讀取、建立和寫入工具
       internal_functions:
         en: Internal Function Tools
         zh-CN: 内置函数工具

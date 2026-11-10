@@ -3,6 +3,7 @@ mod config;
 mod connection_sessions;
 mod diagnostics;
 mod internal_functions;
+mod notes_tools;
 mod resource_pool;
 mod session;
 mod status;

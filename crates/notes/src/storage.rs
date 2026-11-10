@@ -31,6 +31,11 @@ impl NotesStorage {
         Self::open_with_layout(root, true)
     }
 
+    pub fn configured_storage() -> Result<Self> {
+        let (root, use_files_subdir) = Self::configured_location()?;
+        Self::open_with_layout(root, use_files_subdir)
+    }
+
     pub fn open_with_layout(root: PathBuf, use_files_subdir: bool) -> Result<Self> {
         fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
         Ok(Self {
@@ -121,6 +126,19 @@ impl NotesStorage {
             relative_path,
             absolute_path: path,
         })
+    }
+
+    pub fn read_document(&self, relative_path: &Path) -> Result<(DocumentDescriptor, String)> {
+        let descriptor = self.descriptor(relative_path)?;
+        let source = fs::read_to_string(&descriptor.absolute_path)
+            .with_context(|| format!("read {}", descriptor.absolute_path.display()))?;
+        Ok((descriptor, source))
+    }
+
+    pub fn write_document(&self, relative_path: &Path, source: &str) -> Result<DocumentDescriptor> {
+        let descriptor = self.descriptor(relative_path)?;
+        write_text_atomic(&descriptor.absolute_path, source)?;
+        Ok(descriptor)
     }
 
     pub(crate) fn absolute_path(&self, relative_path: &Path) -> Result<PathBuf> {
