@@ -1121,11 +1121,12 @@ impl AgentInput {
     /// overlay，弹层宽度按最长候选估，名字被省略时 tooltip 给全名。
     fn render_model_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.local_theme(cx);
-        let model_label = match &self.context.model {
-            Some(model) if model.model_only => model.model.clone(),
-            Some(model) => SharedString::from(format!("{} / {}", model.provider, model.model)),
-            None => SharedString::from(t!("AgentUi.select_model").to_string()),
-        };
+        let model_label = self
+            .context
+            .model
+            .as_ref()
+            .map(|model| model.display_label())
+            .unwrap_or_else(|| SharedString::from(t!("AgentUi.select_model").to_string()));
         composer_model_chip(
             &self.model_select,
             "agent-model-control",

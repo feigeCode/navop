@@ -7667,16 +7667,10 @@ fn acp_model_option(
     };
     let value = &select.current_value;
     let selected = select_config_value(&select.options, value)?;
-    Some(
-        ComposerModelOption::new(
-            format!("acp:{}:{}:{}", agent_id, option.id, value),
-            agent_id.clone(),
-            agent_id.clone(),
-            value.to_string(),
-        )
-        .with_model_only()
-        .with_hint(selected),
-    )
+    let value = value.to_string();
+    Some(acp_composer_model_option(
+        agent_id, &option.id, &value, &selected,
+    ))
 }
 
 /// 由探测结果构造连接前可用的模型候选。
@@ -7689,16 +7683,7 @@ fn acp_model_options_from_probe(
 ) -> Vec<ComposerModelOption> {
     models
         .iter()
-        .map(|model| {
-            ComposerModelOption::new(
-                format!("acp:{}:probe:{}", agent_id, model.id),
-                agent_id.clone(),
-                agent_id.clone(),
-                model.id.clone(),
-            )
-            .with_model_only()
-            .with_hint(model.label.clone())
-        })
+        .map(|model| acp_composer_model_option(agent_id, "probe", &model.id, &model.label))
         .collect()
 }
 
@@ -7715,17 +7700,86 @@ fn acp_model_options(
     state
         .model_options()
         .into_iter()
-        .map(|(value, label)| {
-            ComposerModelOption::new(
-                format!("acp:{}:{}:{}", agent_id, config.id, value),
-                agent_id.clone(),
-                agent_id.clone(),
-                value,
-            )
-            .with_model_only()
-            .with_hint(label)
-        })
+        .map(|(value, label)| acp_composer_model_option(agent_id, &config.id, &value, &label))
         .collect()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AcpModelPresentation {
+    provider_label: SharedString,
+    model: SharedString,
+    display_model: Option<SharedString>,
+    hint: Option<SharedString>,
+}
+
+/// 把 ACP 的 `SessionConfigSelectOption` 投影成展示模型。
+///
+/// 大多数 agent 的 `value` 本身就是模型 id；dsh 则把
+/// `["provider","model"]` 作为不透明 value 回传。后者必须继续把原串交给
+/// `session/set_config_option`，但界面不能直接把 JSON 当模型名展示。
+fn acp_model_presentation(
+    agent_id: &SharedString,
+    value: &str,
+    label: &str,
+) -> AcpModelPresentation {
+    let label = label.trim();
+    let composite = serde_json::from_str::<Vec<String>>(value)
+        .ok()
+        .and_then(|parts| match parts.as_slice() {
+            [provider, model] if !provider.trim().is_empty() && !model.trim().is_empty() => {
+                Some((provider.trim().to_string(), model.trim().to_string()))
+            }
+            _ => None,
+        });
+
+    if let Some((provider, model_id)) = composite {
+        let display_model = if !label.is_empty() && label != value {
+            label.to_string()
+        } else {
+            model_id.clone()
+        };
+        let hint = if display_model == model_id {
+            provider.clone()
+        } else {
+            format!("{provider} · {model_id}")
+        };
+        AcpModelPresentation {
+            provider_label: SharedString::from(provider),
+            model: SharedString::from(value),
+            display_model: Some(SharedString::from(display_model)),
+            hint: Some(SharedString::from(hint)),
+        }
+    } else {
+        AcpModelPresentation {
+            provider_label: agent_id.clone(),
+            model: SharedString::from(value),
+            display_model: None,
+            hint: (!label.is_empty()).then(|| SharedString::from(label)),
+        }
+    }
+}
+
+fn acp_composer_model_option(
+    agent_id: &SharedString,
+    config_id: impl std::fmt::Display,
+    value: &str,
+    label: &str,
+) -> ComposerModelOption {
+    let presentation = acp_model_presentation(agent_id, value, label);
+    let mut option = ComposerModelOption::new(
+        format!("acp:{}:{}:{}", agent_id, config_id, value),
+        agent_id.clone(),
+        presentation.provider_label,
+        presentation.model,
+    )
+    .with_model_only();
+    if let Some(display_model) = presentation.display_model {
+        option = option.with_display_model(display_model);
+    }
+    if let Some(hint) = presentation.hint {
+        option = option.with_hint(hint);
+    }
+    option
 }
 
 fn select_config_value(
@@ -19457,6 +19511,86 @@ mod acp_preconnect_model_tests {
     #[test]
     fn empty_probe_models_produce_no_options() {
         assert!(acp_model_options_from_probe(&SharedString::from("a"), &[]).is_empty());
+    }
+
+    #[test]
+    fn composite_probe_model_values_are_presented_without_the_raw_json() {
+        let agent = SharedString::from("dsh-acp");
+        let models = vec![model(
+            "[\"deepseek-official\",\"deepseek-v4-pro\"]",
+            "DeepSeek-V4-Pro",
+        )];
+
+        let options = acp_model_options_from_probe(&agent, &models);
+
+        assert_eq!(1, options.len());
+        assert_eq!(
+            "[\"deepseek-official\",\"deepseek-v4-pro\"]",
+            options[0].model.as_ref(),
+            "协议回传值必须保持原样"
+        );
+        assert_eq!("deepseek-official", options[0].provider_label.as_ref());
+        assert_eq!("DeepSeek-V4-Pro", options[0].display_label().as_ref());
+        assert_eq!(
+            "deepseek-official · deepseek-v4-pro",
+            options[0].hint.as_ref().map(AsRef::as_ref).unwrap_or("")
+        );
+    }
+}
+
+#[cfg(test)]
+mod acp_model_adaptation_tests {
+    use agent_client_protocol::schema::v1::{
+        NewSessionResponse, SessionConfigOption, SessionConfigSelectOption,
+    };
+    use gpui::SharedString;
+
+    use super::{AcpSessionState, acp_model_option, acp_model_options};
+
+    fn dsh_state() -> AcpSessionState {
+        let mut state = AcpSessionState::default();
+        state.apply_new_session_response(&NewSessionResponse::new("s1").config_options(vec![
+            SessionConfigOption::select(
+                "model",
+                "Model",
+                "[\"deepseek-official\",\"deepseek-v4-pro\"]",
+                vec![
+                    SessionConfigSelectOption::new(
+                        "[\"deepseek-official\",\"deepseek-v4-flash\"]",
+                        "deepseek-v4-flash",
+                    ),
+                    SessionConfigSelectOption::new(
+                        "[\"deepseek-official\",\"deepseek-v4-pro\"]",
+                        "DeepSeek-V4-Pro",
+                    ),
+                ],
+            ),
+        ]));
+        state
+    }
+
+    #[test]
+    fn dsh_composite_values_keep_protocol_ids_and_use_readable_labels() {
+        let state = dsh_state();
+        let agent = SharedString::from("dsh-acp");
+
+        let options = acp_model_options(&state, Some(&agent));
+
+        assert_eq!(2, options.len());
+        assert_eq!(
+            "[\"deepseek-official\",\"deepseek-v4-pro\"]",
+            options[1].model.as_ref()
+        );
+        assert_eq!("deepseek-official", options[1].provider_label.as_ref());
+        assert_eq!("DeepSeek-V4-Pro", options[1].display_label().as_ref());
+        assert_eq!(
+            "DeepSeek-V4-Pro",
+            options[1].to_composer_model().display_label().as_ref()
+        );
+
+        let selected = acp_model_option(&state, Some(&agent)).expect("selected model");
+        assert_eq!(options[1].id, selected.id);
+        assert_eq!("DeepSeek-V4-Pro", selected.display_label().as_ref());
     }
 }
 

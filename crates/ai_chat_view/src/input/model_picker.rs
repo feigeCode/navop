@@ -76,6 +76,10 @@ impl SelectItem for ModelChoice {
         }
         let option = &self.option;
         option.model.to_lowercase().contains(&query)
+            || option
+                .display_model
+                .as_ref()
+                .is_some_and(|display| display.to_lowercase().contains(&query))
             || option.provider_label.to_lowercase().contains(&query)
             || option.id.to_lowercase().contains(&query)
             || option
@@ -208,6 +212,20 @@ mod tests {
         // 空查询 = 全部命中（清空搜索框后要能看到完整列表）。
         assert!(claude.matches("   "));
         assert!(!claude.matches("gpt"));
+    }
+
+    #[test]
+    fn search_matches_the_display_model_when_the_protocol_value_is_opaque() {
+        let item = ModelChoice::new(
+            option(
+                "deepseek-official",
+                "[\"deepseek-official\",\"deepseek-v4-pro\"]",
+            )
+            .with_display_model("DeepSeek-V4-Pro")
+            .with_model_only(),
+        );
+
+        assert!(item.matches("v4-pro"));
     }
 
     #[test]

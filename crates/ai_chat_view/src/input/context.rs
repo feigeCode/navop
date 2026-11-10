@@ -225,7 +225,10 @@ impl ComposerScope {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ComposerModel {
     pub provider: SharedString,
+    /// 回传给后端 / 用于反查的模型标识。
     pub model: SharedString,
+    /// 展示时优先使用的模型名。ACP 的配置值可能是不适合直接展示的复合 id。
+    pub display_model: Option<SharedString>,
     /// true 时标签只显示模型名，隐藏 provider 前缀（ACP 的 provider 是 agent 名，
     /// 工具栏已单独展示 agent，再拼一遍是重复）。
     pub model_only: bool,
@@ -236,13 +239,28 @@ impl ComposerModel {
         Self {
             provider: provider.into(),
             model: model.into(),
+            display_model: None,
             model_only: false,
         }
+    }
+
+    pub fn with_display_model(mut self, display_model: impl Into<SharedString>) -> Self {
+        self.display_model = Some(display_model.into());
+        self
     }
 
     pub fn with_model_only(mut self) -> Self {
         self.model_only = true;
         self
+    }
+
+    pub fn display_label(&self) -> SharedString {
+        let model = self.display_model.as_ref().unwrap_or(&self.model);
+        if self.model_only {
+            model.clone()
+        } else {
+            SharedString::from(format!("{} / {}", self.provider, model))
+        }
     }
 }
 
@@ -257,6 +275,8 @@ pub struct ComposerModelOption {
     pub provider_label: SharedString,
     /// 模型名,原样传给模型客户端。
     pub model: SharedString,
+    /// 展示时优先使用的模型名；协议值本身不适合展示时使用。
+    pub display_model: Option<SharedString>,
     /// 次要说明(可选,显示在标签下方)。
     pub hint: Option<SharedString>,
     /// true 时标签只显示模型名，不拼 provider 前缀（ACP 模型用）。
@@ -275,9 +295,15 @@ impl ComposerModelOption {
             provider_id: provider_id.into(),
             provider_label: provider_label.into(),
             model: model.into(),
+            display_model: None,
             hint: None,
             model_only: false,
         }
+    }
+
+    pub fn with_display_model(mut self, display_model: impl Into<SharedString>) -> Self {
+        self.display_model = Some(display_model.into());
+        self
     }
 
     pub fn with_hint(mut self, hint: impl Into<SharedString>) -> Self {
@@ -291,15 +317,20 @@ impl ComposerModelOption {
     }
 
     pub fn display_label(&self) -> SharedString {
+        let model = self.display_model.as_ref().unwrap_or(&self.model);
         if self.model_only {
-            self.model.clone()
+            model.clone()
         } else {
-            SharedString::from(format!("{} / {}", self.provider_label, self.model))
+            SharedString::from(format!("{} / {}", self.provider_label, model))
         }
     }
 
     pub fn to_composer_model(&self) -> ComposerModel {
         let model = ComposerModel::new(self.provider_label.clone(), self.model.clone());
+        let model = match &self.display_model {
+            Some(display_model) => model.with_display_model(display_model.clone()),
+            None => model,
+        };
         if self.model_only {
             model.with_model_only()
         } else {
@@ -784,5 +815,30 @@ mod tests {
         assert!(model.model_only);
         assert_eq!(model.provider.as_ref(), "opencode-acp.opencode-acp");
         assert_eq!(model.model.as_ref(), "9router/deepseek-v4-flash");
+    }
+
+    #[test]
+    fn model_only_option_can_show_a_display_model_without_changing_the_protocol_value() {
+        let option = ComposerModelOption::new(
+            "acp:dsh-acp:model:[\"deepseek-official\",\"deepseek-v4-pro\"]",
+            "dsh-acp",
+            "deepseek-official",
+            "[\"deepseek-official\",\"deepseek-v4-pro\"]",
+        )
+        .with_display_model("DeepSeek-V4-Pro")
+        .with_model_only();
+
+        assert_eq!("DeepSeek-V4-Pro", option.display_label().as_ref());
+        assert_eq!(
+            "[\"deepseek-official\",\"deepseek-v4-pro\"]",
+            option.model.as_ref()
+        );
+
+        let model = option.to_composer_model();
+        assert_eq!("DeepSeek-V4-Pro", model.display_label().as_ref());
+        assert_eq!(
+            "[\"deepseek-official\",\"deepseek-v4-pro\"]",
+            model.model.as_ref()
+        );
     }
 }
