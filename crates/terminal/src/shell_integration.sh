@@ -137,6 +137,11 @@ else
     if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) == "declare -a"* ]]; then
         PROMPT_COMMAND+=("$__ONETCLI_PROMPT_TRAILER_HOOK")
     else
+        # 远端 rc 常以分号结尾（如 `history -a;`）。先去掉尾部分隔符再追加，
+        # 否则会拼出 `history -a;; ...`，bash 在提示符阶段直接报语法错误。
+        while [[ "${PROMPT_COMMAND}" =~ [[:space:]\;]$ ]]; do
+            PROMPT_COMMAND="${PROMPT_COMMAND%?}"
+        done
         PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND}; }$__ONETCLI_PROMPT_TRAILER_HOOK"
     fi
 
