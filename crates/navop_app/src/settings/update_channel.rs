@@ -63,12 +63,20 @@ pub fn update_channel_item() -> SettingItem {
             |cx: &App| SharedString::from(displayed_channel(cx).as_str()),
             |value: SharedString, cx: &mut App| {
                 let channel = UpdateChannel::from_str(&value);
-                // 切到测试通道要先确认：装上测试版后没有一键回退，得说清楚。
-                if channel == UpdateChannel::Beta && displayed_channel(cx) != UpdateChannel::Beta {
-                    confirm_switch_to_beta(cx);
-                } else {
-                    apply_channel(cx, channel);
-                }
+                // `SettingField::dropdown` 的 setter 在窗口更新栈内执行。Beta 分支需要
+                // `update_window(active_window, ...)` 打开确认框，若在这里同步调用，
+                // GPUI 会因为同一窗口正在更新而返回 `window not found`，表现为点击无反应。
+                // 延后到当前 effect cycle 结束，等窗口回到 App 后再处理。
+                cx.defer(move |cx| {
+                    // 切到测试通道要先确认：装上测试版后没有一键回退，得说清楚。
+                    if channel == UpdateChannel::Beta
+                        && displayed_channel(cx) != UpdateChannel::Beta
+                    {
+                        confirm_switch_to_beta(cx);
+                    } else {
+                        apply_channel(cx, channel);
+                    }
+                });
             },
         )
         .default_value(SharedString::from(
@@ -127,11 +135,15 @@ fn apply_channel(cx: &mut App, channel: UpdateChannel) {
 }
 
 fn notify(cx: &mut App, message: String) {
-    if let Some(window_id) = cx.active_window() {
-        let _ = cx.update_window(window_id, |_, window, cx| {
-            window.push_notification(Notification::info(message).autohide(true), cx);
-        });
-    }
+    // 调用方也可能正处在窗口更新栈中（例如确认框的 on_ok），同样要延后，
+    // 否则嵌套 `update_window` 不会执行。
+    cx.defer(move |cx| {
+        if let Some(window_id) = cx.active_window() {
+            let _ = cx.update_window(window_id, |_, window, cx| {
+                window.push_notification(Notification::info(message).autohide(true), cx);
+            });
+        }
+    });
 }
 
 fn confirm_switch_to_beta(cx: &mut App) {
@@ -184,6 +196,34 @@ mod tests {
         assert_eq!(
             UpdateChannel::Stable,
             UpdateChannel::resolve(Some(UpdateChannel::Stable), "0.23.0-beta.2")
+        );
+    }
+
+    #[test]
+    fn channel_change_is_deferred_out_of_the_dropdown_window_update() {
+        let source = include_str!("update_channel.rs").replace("\r\n", "\n");
+        let start = source
+            .find("pub fn update_channel_item()")
+            .expect("update_channel_item should exist");
+        let rest = &source[start + 1..];
+        let end = rest
+            .find("\n/// 正在用测试版")
+            .map(|offset| start + 1 + offset)
+            .unwrap_or(source.len());
+        let body = &source[start..end];
+
+        assert!(
+            body.contains("cx.defer(move |cx|"),
+            "dropdown setter 必须延后到窗口更新栈之外再打开确认框或落盘"
+        );
+        let before_defer = body
+            .split_once("let channel = UpdateChannel::from_str(&value);")
+            .and_then(|(_, rest)| rest.split_once("cx.defer(move |cx|"))
+            .map(|(before, _)| before)
+            .expect("setter should parse the channel before deferring");
+        assert!(
+            !before_defer.contains("confirm_switch_to_beta"),
+            "不能在 dropdown setter 内同步重入 update_window"
         );
     }
 }
