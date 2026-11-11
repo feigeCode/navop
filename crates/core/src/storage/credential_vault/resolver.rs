@@ -41,7 +41,13 @@ impl CredentialRepository {
     }
 
     pub fn resolve_ssh(&self, mut params: SshParams) -> Result<SshParams> {
-        params.account_expect = SshAccountExpect::default();
+        // 提权（su/sudo）应答属于终端行为，不是登录期望：钥匙串只提供缺省的
+        // 登录提示匹配，连接级的提权配置优先保留。
+        let connection_elevation = params.account_expect.elevation.clone();
+        params.account_expect = SshAccountExpect {
+            elevation: connection_elevation.clone(),
+            ..SshAccountExpect::default()
+        };
         let Some(reference) = params.credential_reference.as_ref() else {
             self.resolve_optional_proxy(params.proxy.as_mut())?;
             self.resolve_optional_jump(params.jump_server.as_mut())?;
@@ -58,6 +64,9 @@ impl CredentialRepository {
         params.prompt_password = None;
         if let Some(credential) = credential.as_ref() {
             params.account_expect = credential.ssh_expect.clone();
+            if !connection_elevation.is_empty() {
+                params.account_expect.elevation = connection_elevation;
+            }
             // 仅当凭据带私钥且标记「转发到 ssh-agent」时开启 ForwardAgent，
             // 让远端（如跳板机）可用这把本地私钥继续向更内层主机认证。
             //

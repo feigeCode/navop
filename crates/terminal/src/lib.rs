@@ -13,6 +13,7 @@ mod selection_text;
 pub mod serial_backend;
 mod serial_ingress;
 mod session_logging;
+mod session_password;
 pub mod shell_integration;
 pub mod ssh_backend;
 mod ssh_expect;

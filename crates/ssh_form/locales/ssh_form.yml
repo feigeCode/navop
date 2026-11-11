@@ -329,6 +329,22 @@ SSH:
     en: Fix the one-time password secret before saving.
     zh-CN: 一次性验证码密钥有误，请先修正再保存。
     zh-HK: 一次性驗證碼密鑰有誤，請先修正再儲存。
+  sudo_auto_fill:
+    en: Auto-fill su/sudo password
+    zh-CN: 自动填入 su/sudo 密码
+    zh-HK: 自動填入 su/sudo 密碼
+  sudo_auto_fill_desc:
+    en: Submit the password automatically when su or sudo asks for it. Auto-filling stops for the session after a rejected password.
+    zh-CN: 执行 su 或 sudo 提示输入密码时自动提交密码；密码被拒后本次会话不再自动填写。
+    zh-HK: 執行 su 或 sudo 提示輸入密碼時自動提交密碼；密碼被拒後本次工作階段不再自動填寫。
+  sudo_password:
+    en: Elevation password
+    zh-CN: 提权密码
+    zh-HK: 提權密碼
+  sudo_password_placeholder:
+    en: Leave empty to use the login password
+    zh-CN: 留空则使用登录密码
+    zh-HK: 留空則使用登入密碼
   otp_error_scheme:
     en: "Unsupported link %{scheme}: only otpauth:// links are accepted."
     zh-CN: "不支持的链接 %{scheme}：只接受 otpauth:// 链接。"

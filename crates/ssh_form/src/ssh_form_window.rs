@@ -37,8 +37,8 @@ use one_core::storage::traits::Repository;
 use one_core::storage::{
     FtpParams, JumpServerConfig, PreferredOpenMode, ProxyConfig, ProxyType as StorageProxyType,
     RemoteFileParams, RemoteFileProtocol as StoredRemoteFileProtocol, SSH_ICON_IDS, SftpAccount,
-    SshAccountExpect, SshAgentForwardKey, SshAuthMethod, SshParams, StoredConnection,
-    StoredTerminalEncoding, StoredTerminalType, Workspace, ssh_os_icon,
+    SshAccountExpect, SshAgentForwardKey, SshAuthMethod, SshElevationExpect, SshParams,
+    StoredConnection, StoredTerminalEncoding, StoredTerminalType, Workspace, ssh_os_icon,
 };
 use otp::OtpSecret;
 use rust_i18n::t;
@@ -243,6 +243,12 @@ pub struct SshFormWindow {
     otp_secret: Option<OtpSecret>,
     /// 密钥解析失败时的提示（输入框旁的红字）。
     otp_error: Option<SharedString>,
+    /// 是否自动应答会话内 `su` / `sudo` 的密码提示。
+    ///
+    /// `None` 表示按登录方式取默认值：密码认证默认开启，密钥 / Agent 认证默认关闭。
+    sudo_password_auto_fill: Option<bool>,
+    /// 提权密码输入框；留空时终端后端使用本次连接的登录密码。
+    sudo_password_input: Entity<InputState>,
     terminal_encoding_select: Entity<SelectState<Vec<TerminalEncodingSelectItem>>>,
     terminal_type_select: Entity<SelectState<Vec<TerminalTypeSelectItem>>>,
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
@@ -846,6 +852,11 @@ impl SshFormWindow {
         });
         let otp_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.otp_placeholder")));
+        let sudo_password_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("SSH.sudo_password_placeholder"))
+                .masked(true)
+        });
         let key_path_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.key_path_placeholder")));
         let private_key_content_input = cx.new(|cx| {
@@ -1016,6 +1027,7 @@ impl SshFormWindow {
         let mut save_password = true;
         let mut keyboard_interactive = true;
         let mut otp_secret: Option<OtpSecret> = None;
+        let mut sudo_password_auto_fill: Option<bool> = None;
         let mut jump_auth_method = AuthMethodSelection::Password;
         // 新建连接向导指定了目标分组时预选该分组（编辑 / 复制连接走下面的回填逻辑）。
         let mut workspace_id: Option<i64> = if is_editing || config.initial_connection.is_some() {
@@ -1062,6 +1074,13 @@ impl SshFormWindow {
                         s.set_value(&secret.otpauth_uri(), window, cx);
                     });
                     otp_secret = Some(secret);
+                }
+                sudo_password_auto_fill = params.account_expect.elevation.auto_fill;
+                if !params.account_expect.elevation.password.is_empty() {
+                    let elevation_password = params.account_expect.elevation.password.clone();
+                    sudo_password_input.update(cx, |s, cx| {
+                        s.set_value(&elevation_password, window, cx);
+                    });
                 }
                 detected_os_id = params.os_id.clone();
                 manual_icon = params.icon.clone();
@@ -1369,6 +1388,8 @@ impl SshFormWindow {
             otp_input,
             otp_secret,
             otp_error: None,
+            sudo_password_auto_fill,
+            sudo_password_input,
             terminal_encoding_select,
             terminal_type_select,
             workspace_select,
@@ -1818,7 +1839,20 @@ impl SshFormWindow {
             os_id: self.detected_os_id.clone(),
             icon: self.manual_icon.clone(),
             icon_file_path: self.custom_icon_file_path.clone(),
-            account_expect: SshAccountExpect::default(),
+            account_expect: SshAccountExpect {
+                elevation: SshElevationExpect {
+                    // 只有用户显式切换过开关时才落库；`None` 留给终端后端按登录方式取默认值。
+                    auto_fill: self.sudo_password_auto_fill,
+                    password: self
+                        .sudo_password_input
+                        .read(cx)
+                        .text()
+                        .to_string()
+                        .trim()
+                        .to_string(),
+                },
+                ..SshAccountExpect::default()
+            },
         })
     }
 
@@ -2544,6 +2578,54 @@ impl SshFormWindow {
             .children(hints)
     }
 
+    /// 提权密码自动应答的生效值：用户没显式设置时跟随登录方式。
+    ///
+    /// 密码登录时服务器本来就知道这个密码，默认自动填入不增加泄露面；密钥 /
+    /// Agent 登录时服务器不知道密码，默认关闭，避免把密码交给远端伪造的提示。
+    fn sudo_password_auto_fill_enabled(&self) -> bool {
+        self.sudo_password_auto_fill
+            .unwrap_or_else(|| self.auth_method.requires_password())
+    }
+
+    fn render_sudo_password_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let enabled = self.sudo_password_auto_fill_enabled();
+        v_flex()
+            .w_full()
+            .gap_1()
+            .child(
+                self.render_form_row(
+                    &t!("SSH.sudo_auto_fill"),
+                    h_flex()
+                        .w_full()
+                        .gap_1()
+                        .items_center()
+                        .child(
+                            Checkbox::new("sudo-password-auto-fill")
+                                .label(t!("SSH.enable").to_string())
+                                .checked(enabled)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    let next = !this.sudo_password_auto_fill_enabled();
+                                    this.sudo_password_auto_fill = Some(next);
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("sudo-password-auto-fill-help")
+                                .icon(IconName::Info)
+                                .ghost()
+                                .xsmall()
+                                .tooltip(t!("SSH.sudo_auto_fill_desc").to_string()),
+                        ),
+                ),
+            )
+            .when(enabled, |form| {
+                form.child(self.render_form_row(
+                    &t!("SSH.sudo_password"),
+                    self.render_form_input(&self.sudo_password_input),
+                ))
+            })
+    }
+
     /// 解析输入框内容：空输入表示不需要 OTP，解析失败时清空已解析密钥并保留错误提示。
     fn apply_otp_input(&mut self, value: &str, cx: &mut Context<Self>) {
         let trimmed = value.trim();
@@ -3149,6 +3231,7 @@ impl SshFormWindow {
                 ),
             )
             .child(self.render_otp_row(cx))
+            .child(self.render_sudo_password_row(cx))
             .child(self.render_form_row(
                 &t!("SSH.terminal_encoding"),
                 Select::new(&self.terminal_encoding_select).w_full(),
@@ -4263,7 +4346,8 @@ mod tests {
     use one_core::storage::{
         ConnectionType, CredentialReference, FtpParams, JumpServerConfig, PreferredOpenMode,
         RemoteFileParams, RemoteFileProtocol as StoredRemoteFileProtocol, SftpAccount,
-        SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType,
+        SshAuthMethod, SshElevationExpect, SshParams, StoredConnection, StoredTerminalEncoding,
+        StoredTerminalType,
     };
     use rust_i18n::t;
     use ssh::{HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyRoute};
@@ -4643,6 +4727,101 @@ mod tests {
             form.apply_otp_input("", cx);
             assert!(form.otp_secret.is_none());
             assert!(form.otp_error.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn ssh_form_prefills_and_builds_elevation_password(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let mut params = sample_params();
+        params.account_expect.elevation = SshElevationExpect {
+            auto_fill: Some(true),
+            password: "  spaced-pass  ".to_string(),
+        };
+        let initial_connection = StoredConnection::new_ssh("sudo".to_string(), params, None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    initial_workspace_id: None,
+                    editing_connection: None,
+                    initial_connection: Some(initial_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        // 编辑已有连接时把开关和提权密码回填到表单。
+        form.read_with(cx, |form, cx| {
+            assert_eq!(Some(true), form.sudo_password_auto_fill);
+            assert_eq!(
+                "  spaced-pass  ",
+                form.sudo_password_input.read(cx).text().to_string()
+            );
+        });
+
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("带提权密码的表单应能构建参数");
+        assert_eq!(
+            SshElevationExpect {
+                auto_fill: Some(true),
+                password: "spaced-pass".to_string(),
+            },
+            built.account_expect.elevation
+        );
+        // 保存时去掉用户误输入的首尾空白。
+        assert_eq!("spaced-pass", built.account_expect.elevation.password);
+    }
+
+    #[gpui::test]
+    fn ssh_form_defaults_elevation_password_to_the_login_method(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let mut params = sample_params();
+        params.auth_method = SshAuthMethod::Password {
+            password: "login-pass".to_string(),
+        };
+        let initial_connection = StoredConnection::new_ssh("sudo".to_string(), params, None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    initial_workspace_id: None,
+                    editing_connection: None,
+                    initial_connection: Some(initial_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("表单应能构建参数");
+        // 用户没动过开关时保持 None，交给终端后端按登录方式取默认值。
+        assert_eq!(None, built.account_expect.elevation.auto_fill);
+        assert!(built.account_expect.elevation.password.is_empty());
+        // 密码登录默认自动填入提权密码；密钥 / Agent 登录则需要用户显式打开。
+        form.read_with(cx, |form, _| {
+            assert!(form.sudo_password_auto_fill_enabled());
+        });
+        form.update(cx, |form, cx| {
+            form.sudo_password_auto_fill = Some(false);
+            cx.notify();
+        });
+        form.read_with(cx, |form, _| {
+            assert!(!form.sudo_password_auto_fill_enabled());
         });
     }
 

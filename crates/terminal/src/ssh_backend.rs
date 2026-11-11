@@ -23,6 +23,7 @@ use crate::osc::extract_osc_events;
 use crate::osc::{OscEvent, OscStreamParser};
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
 use crate::recording::RecordingTap;
+use crate::session_password::SessionPasswordExpect;
 use crate::ssh_expect::SshLoginExpect;
 use crate::ssh_ingress::{SshActorInput, SshParserIngress, next_ssh_actor_input};
 use crate::ssh_shell_integration::{
@@ -837,6 +838,12 @@ impl SshBackend {
             expect_password.as_deref(),
         )
         .context("invalid SSH account expect configuration")?;
+        // 会话内的 su / sudo 提示会反复出现，和一次性的登录期望分开处理。
+        let mut session_password = SessionPasswordExpect::new(
+            &account_expect.elevation,
+            expect_password.as_deref(),
+            init_commands.as_deref(),
+        );
         let (client, mut channel, shell_integration_requested) = Self::establish_channel(
             &session_manager,
             &pty_config,
@@ -1325,6 +1332,20 @@ impl SshBackend {
                     {
                         disconnect_error = Some(error);
                         break 'actor;
+                    }
+                }
+                if session_password.is_enabled() {
+                    let observed = String::from_utf8_lossy(&data);
+                    if let Some(send) =
+                        session_password.observe(&observed, std::time::Instant::now())
+                    {
+                        if let Err(error) = send_terminal_data(&mut channel, &send)
+                            .await
+                            .context("failed to send SSH session password response")
+                        {
+                            disconnect_error = Some(error);
+                            break 'actor;
+                        }
                     }
                 }
                 let was_injecting = shell_integration.is_injecting();
