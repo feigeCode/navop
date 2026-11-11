@@ -801,6 +801,20 @@
 - **验证方式**：`cargo test -p public_mcp`（默认 target 注入、schema 无 target 不注入、ssh.exec 描述）、`cargo test -p terminal_view --lib`（`public_mcp_remote_ops` 的 cwd 继承/引号、`ai_live_context`、`sidebar::tests` 指令契约；本机 `git 1.8.3.1` 不支持 `for-each-ref %(HEAD)`，`composer_context::git_directory_reports_branches_and_main_checkout` 会环境性失败）、`cargo test -p navop_app --no-default-features --features wasm-components,windows-native-rdp,database,shell --lib public_mcp_runtime::resource_pool`（默认特性拉 `nsh-host`，本机 quickjs 的 C 代码因缺 C99 编译失败）。变异验证：把 `inherit_cwd` 改成只用显式参数，`omitted_cwd_inherits_the_visible_terminal_directory` 必须转红。
 - **适用范围**：`crates/public_mcp/src/{registry.rs,tools/agent_runtime_adapter.rs,tools/remote_ops.rs}`、`crates/terminal_view/src/{public_mcp.rs,public_mcp_remote_ops.rs,ai_live_context/mod.rs,sidebar/mod.rs}`、`crates/navop_app/src/public_mcp_runtime/resource_pool.rs`、`crates/agent_runtime/locales/agent_runtime.yml`，以及任何「资源作用域 → 工具默认参数」的贯通改造。
 
+- **标题**：目录读取失败的「回退 + 重试」必须限量，日志必须在运行期轮转
+- **触发信号**：某个面板/页签在会话断开后疯狂刷同一条错误，弹窗关不掉、日志几分钟涨几个 GB（issue #534：3 分钟 2000 万条、一晚 214 GB）；或异步错误回调里既打日志又推通知、还顺手 `refresh` 一次。
+- **根因 / 约束**：`FileManagerPanel::recover_from_navigation_error` 失败后无条件「回退到上级 + `refresh_dir`」，而会话断开时 `list_dir` 立刻失败，于是「失败 → 回退 → 刷新 → 失败」在异步任务里无限自我驱动（`cx.spawn` 里重入，不是栈溢出，纯 CPU/IO 空转）；每次还推一条通知、打一条 `error!`。日志侧只在**启动时**按 64 MB 轮转，单次运行写多少都不设限，所以磁盘占用没有上界。
+- **正确做法**：把「自动回退」建成显式状态机并限量：`NavigationRecovery { attempts, tried_paths }`，额度用尽或回退目标与失败路径相同/已在 `tried_paths` 中（A → B → A 环路）就停下，切 `ConnectionState::Error` 清列表等用户点重试；成功列出目录、用户主动导航、手动刷新、重连才 `reset()`。通知走 `one_core::notification_throttle::NotificationThrottle`（同文案 + 时间窗去重，被压制的调用不刷新时间戳）。日志用 `RotatingLogWriter`（`navop_app`）在**每次写入前**检查体积，超过上限改名 `.1` 并重开文件，磁盘稳定在 2 × 上限；写入器内部严禁再打日志（重入），轮转失败静默继续追加。
+- **验证方式**：`cargo test -p terminal_view --lib file_manager_panel`（`navigation_recovery_stops_after_the_attempt_budget`、`read_dir_failure_stops_auto_refresh_after_the_budget`、`read_dir_failure_still_recovers_once`）、`cargo test -p one-core --lib notification_throttle`、`cargo test -p navop_app --no-default-features --features wasm-components,windows-native-rdp,database,shell --lib log_`（`rotating_log_writer_*` 用可注入上限的 `open_with_limit`，含「单条日志超上限不得反复轮转」）。变异验证：把 `recover_from_navigation_error` 改回无条件刷新、去掉 `attempts` 上限，对应用例必须转红。
+- **适用范围**：`crates/terminal_view/src/sidebar/file_manager_panel.rs`、`crates/navop_app/src/navop_app.rs`（`RotatingLogWriter` / `log_file_appender`）、`crates/core/src/notification_throttle.rs`，以及任何「错误回调里自动重试 / 自动刷新 + 打日志 + 推通知」的异步闭环。
+
+- **标题**：「禁用 Shell 集成」不等于关掉所有自动 exec 通道——远端历史读取也是额外 channel
+- **触发信号**：经跳板机连交换机/防火墙（锐捷、部分华为/思科设备）后用户没敲任何键就连续出现 `% Invalid input`、`% Unknown command`、`File failed. No such file or directory` 然后掉线；同一台设备在跳板机上手动 `ssh -tt` 正常（issue #532）。
+- **根因 / 约束**：shell integration 的**探测**确实受 `disable_shell_integration` 门控（`plain_channel_only = disable_shell_integration`），但 `start_ssh_connection_attempt` 里的 `spawn_ssh_history_loader` 是**无条件**调用的：它会在同一个 SSH transport 上另开 exec channel 执行 `sh -lc 'tail -n 512 ~/.bash_history ...'`。受限设备只接受单个裸交互 shell，这条自动 exec 被设备当成非法命令回显并随即断连——与用户「不要注入任何东西」的期望直接冲突。
+- **正确做法**：门禁必须由用户开关算出且在 `config` 被移入连接任务之前求值：`let load_remote_history = remote_shell_history_allowed(config.disable_shell_integration);`，`spawn_ssh_connect` 之后再 `if load_remote_history { spawn_ssh_history_loader(..) }`。凡是在连接建立后自动发命令/开额外 channel 的副作用（探测、历史、能力查询、初始化脚本）都要逐一检查是否受同一开关约束。
+- **验证方式**：`cargo test -p terminal --lib history`（`remote_shell_history_is_skipped_when_shell_integration_is_disabled` + 源码契约 `ssh_history_loader_is_gated_by_the_shell_integration_setting`，后者断言生产代码里 `Self::spawn_ssh_history_loader(` 只有一处且在 `if load_remote_history` 块内）；变异验证：改回无条件调用必须转红。真机需在受限设备上确认登录后无自发命令回显。
+- **适用范围**：`crates/terminal/src/terminal.rs`（`start_ssh_connection_attempt` / `load_ssh_history`）、`crates/terminal/src/ssh_backend.rs`（探测与降级重连），以及所有「连接建立后自动执行远端命令」的链路。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

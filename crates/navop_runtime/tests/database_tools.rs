@@ -266,7 +266,7 @@ fn repo() -> Arc<ConnectionRepository> {
 }
 
 fn ssh_params() -> SshParams {
-    SshParams {
+    SshParams { otp: None,
         remote_file: None,
         sftp_default_directory: None,
         disabled_jump_server: None,

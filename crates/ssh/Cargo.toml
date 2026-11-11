@@ -17,6 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 tempfile = "3"
 hmac.workspace = true
+otp = { workspace = true }
 sha1 = "0.10"
 # SSH and SFTP
 russh.workspace = true

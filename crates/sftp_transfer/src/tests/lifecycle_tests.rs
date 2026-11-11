@@ -317,7 +317,7 @@ fn background_task(
 fn stored_connection() -> StoredConnection {
     StoredConnection::new_ssh(
         "test".to_string(),
-        SshParams {
+        SshParams { otp: None,
             remote_file: None,
             host: "localhost".to_string(),
             port: 22,

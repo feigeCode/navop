@@ -1,0 +1,18 @@
+[package]
+name = "otp"
+version = "0.15.2"
+edition = "2024"
+publish.workspace = true
+
+[dependencies]
+hmac = { workspace = true }
+serde = { workspace = true }
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+serde_json = { workspace = true }

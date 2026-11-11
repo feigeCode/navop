@@ -136,7 +136,7 @@ mod tests {
     fn ssh_connection() -> StoredConnection {
         StoredConnection::new_ssh(
             "SSH".to_string(),
-            SshParams {
+            SshParams { otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,

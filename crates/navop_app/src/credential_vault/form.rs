@@ -177,6 +177,7 @@ impl CredentialForm {
             private_key_content: self.private_key_content_input.read(cx).value().to_string(),
             passphrase: input_value(&self.passphrase_input, cx),
             ssh_expect: SshAccountExpect {
+                elevation: Default::default(),
                 username: TerminalExpectSend {
                     expect: input_value(&self.username_expect_input, cx),
                     send: input_value(&self.username_send_input, cx),
@@ -243,6 +244,7 @@ pub(super) fn build_entry(
 
 fn normalize_ssh_expect(value: SshAccountExpect) -> Result<SshAccountExpect, String> {
     Ok(SshAccountExpect {
+        elevation: Default::default(),
         username: normalize_expect_step(
             value.username,
             &t!("CredentialForm.username").to_string(),
@@ -305,6 +307,7 @@ mod tests {
             private_key_content: " key ".into(),
             passphrase: " phrase ".into(),
             ssh_expect: SshAccountExpect {
+                elevation: Default::default(),
                 username: TerminalExpectSend {
                     expect: " login: ".into(),
                     send: " root ".into(),

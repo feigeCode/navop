@@ -7,6 +7,7 @@ use gpui::Global;
 use gpui_component::Size::Large;
 use gpui_component::{Icon, Sizable};
 use one_assets::IconName;
+use otp::OtpSecret;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
@@ -443,11 +444,55 @@ pub struct SshAccountExpect {
     pub username: TerminalExpectSend,
     #[serde(default, skip_serializing_if = "TerminalExpectSend::is_empty")]
     pub password: TerminalExpectSend,
+    /// 会话内 `su` / `sudo` 密码提示的自动应答配置。
+    #[serde(default, skip_serializing_if = "SshElevationExpect::is_empty")]
+    pub elevation: SshElevationExpect,
 }
 
 impl SshAccountExpect {
     pub fn is_empty(&self) -> bool {
-        self.username.is_empty() && self.password.is_empty()
+        self.username.is_empty() && self.password.is_empty() && self.elevation.is_empty()
+    }
+}
+
+/// SSH 会话内提权（`su` / `sudo`）密码提示的自动应答配置。
+///
+/// 与 [`SshAccountExpect`] 的登录期望不同，提权提示会在会话中反复出现，
+/// 因此这里只保留「是否自动应答」和可选的提权密码，判定交给终端后端。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshElevationExpect {
+    /// 是否自动应答会话内的 `su` / `sudo` 密码提示。
+    ///
+    /// `None` 表示按登录方式取默认值：密码认证时服务器本来就知道该密码，
+    /// 默认开启；密钥 / Agent 认证默认关闭，避免把密码交给远端伪造的提示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_fill: Option<bool>,
+    /// 提权密码；为空时使用本次连接的登录密码。
+    ///
+    /// `su root` 要求输入 root 的密码，常与登录用户密码不同，因此单独保留一个字段。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub password: String,
+}
+
+impl SshElevationExpect {
+    pub fn is_empty(&self) -> bool {
+        self.auto_fill.is_none() && self.password.is_empty()
+    }
+
+    /// 解析本次连接的生效配置：返回「是否自动应答」与「实际使用的密码」。
+    ///
+    /// `login_password` 是本次连接实际使用的登录密码（含用户临时输入）；它同时
+    /// 决定密码认证的默认开关，因为服务器已经知道这个密码时自动填入不增加泄露面。
+    pub fn resolve(&self, login_password: Option<&str>) -> (bool, Option<String>) {
+        let password = if self.password.is_empty() {
+            login_password.map(str::to_string)
+        } else {
+            Some(self.password.clone())
+        };
+        let enabled = self
+            .auto_fill
+            .unwrap_or_else(|| login_password.is_some_and(|value| !value.is_empty()));
+        (enabled && password.is_some(), password)
     }
 }
 
@@ -487,6 +532,12 @@ pub struct SshParams {
     /// 旧连接没有该字段时保持历史行为：允许 keyboard-interactive。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keyboard_interactive: Option<bool>,
+    /// 主机的一次性验证码（TOTP）密钥。
+    ///
+    /// 配置后 keyboard-interactive 认证中 `Verification code:` 这类提示由客户端
+    /// 本地生成验证码自动应答，不再弹输入框；`None` 表示该主机不需要 OTP。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub otp: Option<OtpSecret>,
     /// SSH 终端文本编码；旧连接缺少此字段时保持 UTF-8。
     #[serde(default, skip_serializing_if = "StoredTerminalEncoding::is_utf8")]
     pub terminal_encoding: StoredTerminalEncoding,
@@ -2912,6 +2963,7 @@ mod tests {
         let mut connection = StoredConnection::new_ssh(
             "prod-bastion".to_string(),
             SshParams {
+                otp: None,
                 remote_file: None,
                 disabled_jump_server: None,
                 sftp_default_directory: None,
@@ -3110,6 +3162,7 @@ mod tests {
         );
 
         let ssh = SshParams {
+            otp: None,
             remote_file: None,
             disabled_jump_server: None,
             sftp_default_directory: None,
@@ -4171,6 +4224,7 @@ mod serial_tests {
     #[test]
     fn ssh_params_os_id_round_trips_through_json() {
         let mut params = SshParams {
+            otp: None,
             remote_file: None,
             disabled_jump_server: None,
             sftp_default_directory: None,
@@ -4454,6 +4508,7 @@ mod serial_tests {
         let mut connection = StoredConnection::new_ssh(
             "example".to_string(),
             SshParams {
+                otp: None,
                 remote_file: None,
                 disabled_jump_server: None,
                 sftp_default_directory: None,
@@ -4793,6 +4848,7 @@ mod serial_tests {
 
     fn ssh_params_for_remote_file_tests() -> SshParams {
         SshParams {
+            otp: None,
             remote_file: None,
             host: "ssh.example.com".to_string(),
             port: 22,
@@ -5031,6 +5087,7 @@ mod serial_tests {
         let ssh = StoredConnection::new_ssh(
             "ssh".to_string(),
             SshParams {
+                otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
@@ -5100,5 +5157,72 @@ mod serial_tests {
         assert!(value.get("preferred_open_mode").is_none());
         let restored: StoredConnection = serde_json::from_str(&legacy).expect("deserialize");
         assert_eq!(restored.effective_open_mode(), PreferredOpenMode::DualPane);
+    }
+
+    #[test]
+    fn elevation_expect_defaults_to_the_login_method() {
+        let default = SshElevationExpect::default();
+        assert!(default.is_empty(), "默认配置不携带任何信息");
+        assert_eq!(
+            default.resolve(Some("login-pass")),
+            (true, Some("login-pass".into()))
+        );
+        assert_eq!(default.resolve(None), (false, None));
+        assert_eq!(default.resolve(Some("")), (false, Some(String::new())));
+    }
+
+    #[test]
+    fn elevation_expect_prefers_its_own_password() {
+        let elevation = SshElevationExpect {
+            auto_fill: Some(true),
+            password: "root-pass".into(),
+        };
+        assert_eq!(
+            elevation.resolve(Some("login-pass")),
+            (true, Some("root-pass".into()))
+        );
+        assert_eq!(elevation.resolve(None), (true, Some("root-pass".into())));
+    }
+
+    #[test]
+    fn elevation_expect_respects_an_explicit_opt_out() {
+        let elevation = SshElevationExpect {
+            auto_fill: Some(false),
+            password: String::new(),
+        };
+        assert_eq!(
+            elevation.resolve(Some("login-pass")),
+            (false, Some("login-pass".into()))
+        );
+        assert!(
+            !SshAccountExpect {
+                elevation,
+                ..SshAccountExpect::default()
+            }
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn elevation_expect_keeps_the_stored_json_compact() {
+        let default = SshAccountExpect::default();
+        assert_eq!(
+            serde_json::to_value(&default).unwrap(),
+            serde_json::json!({})
+        );
+
+        let elevation = SshAccountExpect {
+            elevation: SshElevationExpect {
+                auto_fill: Some(true),
+                password: "root-pass".into(),
+            },
+            ..SshAccountExpect::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&elevation).unwrap(),
+            serde_json::json!({
+                "elevation": { "auto_fill": true, "password": "root-pass" }
+            })
+        );
     }
 }

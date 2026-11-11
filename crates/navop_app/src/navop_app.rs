@@ -750,8 +750,8 @@ fn close_active_window_default_shortcut() -> &'static str {
 
 const LOG_FILE_NAME: &str = "navop.log";
 
-/// 单个日志文件的大小上限。超过后会在下次打开时轮转到 `<文件名>.1`，
-/// 避免长期使用把日志撑到 GB 级（实测 48 天可到 1.2G）。
+/// 单个日志文件的大小上限。超过后轮转到 `<文件名>.1`，
+/// 避免长期使用或错误风暴把日志撑到 GB 级（issue #534 实测一晚 214G）。
 pub(crate) const LOG_FILE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 /// 轮转后保留的历史文件后缀，只保留最近一份，所以磁盘上限约为 2 × `LOG_FILE_MAX_BYTES`。
@@ -781,6 +781,76 @@ fn default_log_file_path() -> anyhow::Result<PathBuf> {
     Ok(get_config_dir()?.join("logs").join(LOG_FILE_NAME))
 }
 
+/// 只在启动时轮转不够：一次长时间运行里的错误风暴能把单个文件写到几十 GB。
+/// 这个写入器在**运行期**也检查体积，超过上限就改名成 `<文件名>.1`（覆盖上一份）
+/// 并重新创建文件，磁盘占用因此稳定在 2 × 上限。
+///
+/// 写入器内部**不能**再打日志：它本身就是日志落盘路径，重入会递归。
+/// 轮转失败一律静默降级为继续追加，与启动轮转的“体积不收敛也不能挡住日志”一致。
+pub(crate) struct RotatingLogWriter {
+    path: PathBuf,
+    file: Option<std::fs::File>,
+    written: u64,
+    max_bytes: u64,
+}
+
+impl RotatingLogWriter {
+    pub(crate) fn open(path: &Path) -> std::io::Result<Self> {
+        Self::open_with_limit(path, LOG_FILE_MAX_BYTES)
+    }
+
+    fn open_with_limit(path: &Path, max_bytes: u64) -> std::io::Result<Self> {
+        let file = log_file_appender(path)?;
+        let written = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        Ok(Self {
+            path: path.to_path_buf(),
+            file: Some(file),
+            written,
+            max_bytes,
+        })
+    }
+
+    /// 把当前文件挪到 `.1` 并重新打开同名文件。
+    fn rotate(&mut self) {
+        // 先关闭句柄：Windows 上被自己打开的文件能否改名取决于共享模式，关掉最稳。
+        self.file = None;
+
+        let mut rotated = self.path.as_os_str().to_os_string();
+        rotated.push(LOG_FILE_ROTATED_SUFFIX);
+        let rotated = PathBuf::from(rotated);
+        let _ = std::fs::remove_file(&rotated);
+        let _ = std::fs::rename(&self.path, &rotated);
+
+        if let Ok(file) = default_log_file_options().open(&self.path) {
+            self.written = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+            self.file = Some(file);
+        }
+    }
+}
+
+impl std::io::Write for RotatingLogWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // `written > 0`：单条日志本身就超上限时不要每次写都反复轮转。
+        if self.written > 0 && self.written.saturating_add(buf.len() as u64) > self.max_bytes {
+            self.rotate();
+        }
+
+        let Some(file) = self.file.as_mut() else {
+            return Err(std::io::Error::other("log file is not open"));
+        };
+        let written = file.write(buf)?;
+        self.written = self.written.saturating_add(written as u64);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self.file.as_mut() {
+            Some(file) => file.flush(),
+            None => Ok(()),
+        }
+    }
+}
+
 pub(crate) fn log_file_appender(path: &Path) -> std::io::Result<std::fs::File> {
     if let Some(parent) = path
         .parent()
@@ -792,11 +862,15 @@ pub(crate) fn log_file_appender(path: &Path) -> std::io::Result<std::fs::File> {
     // 在打开之前轮转：改名后重新创建同名文件，本次写入照常落到干净的日志里。
     rotate_oversized_log(path);
 
+    default_log_file_options().open(path)
+}
+
+fn default_log_file_options() -> std::fs::OpenOptions {
     let mut options = std::fs::OpenOptions::new();
     options.create(true).append(true);
     #[cfg(unix)]
     options.mode(0o600);
-    options.open(path)
+    options
 }
 
 /// 日志超过 [`LOG_FILE_MAX_BYTES`] 时把它改名为 `<文件名>.1`（覆盖上一份）。
@@ -1775,7 +1849,7 @@ impl NavopApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        LOG_FILE_MAX_BYTES, LOG_FILE_NAME, close_active_window_default_shortcut,
+        LOG_FILE_MAX_BYTES, LOG_FILE_NAME, RotatingLogWriter, close_active_window_default_shortcut,
         configured_log_file_path, default_log_file_path, initial_content_layout, log_file_appender,
     };
     use std::io::Write;
@@ -2626,6 +2700,87 @@ mod tests {
         assert!(
             !dir.join("app.log.1").exists(),
             "未达上限不得轮转，否则会丢日志"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotating_log_writer_rotates_when_the_running_file_grows_past_the_limit() {
+        let dir = std::env::temp_dir().join(format!(
+            "onetcli-log-runtime-rotate-test-{}",
+            std::process::id()
+        ));
+        let path = dir.join("app.log");
+        std::fs::create_dir_all(&dir).expect("应创建测试目录");
+
+        let mut writer = RotatingLogWriter::open_with_limit(&path, 16).expect("应创建日志写入器");
+        writer.write_all(b"first-chunk").expect("应写入第一块");
+        assert!(!dir.join("app.log.1").exists(), "未达上限不得在运行期轮转");
+
+        writer.write_all(b"-second").expect("应写入第二块");
+        writer.flush().expect("应落盘");
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("应读取当前日志"),
+            "-second",
+            "超过上限后旧内容应被轮转出当前文件"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("app.log.1")).expect("应读取轮转日志"),
+            "first-chunk"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotating_log_writer_keeps_one_oversized_record_without_looping() {
+        let dir = std::env::temp_dir().join(format!(
+            "onetcli-log-oversized-record-test-{}",
+            std::process::id()
+        ));
+        let path = dir.join("app.log");
+        std::fs::create_dir_all(&dir).expect("应创建测试目录");
+
+        let mut writer = RotatingLogWriter::open_with_limit(&path, 8).expect("应创建日志写入器");
+        let record = vec![b'x'; 64];
+        writer.write_all(&record).expect("应写入超长单条日志");
+        writer.flush().expect("应落盘");
+
+        assert_eq!(
+            std::fs::metadata(&path).expect("应读取日志元数据").len(),
+            record.len() as u64,
+            "单条日志本身超上限时不能反复轮转，只能让它落盘"
+        );
+        assert!(!dir.join("app.log.1").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotating_log_writer_keeps_bounded_disk_usage_across_rotations() {
+        let dir = std::env::temp_dir().join(format!(
+            "onetcli-log-bounded-disk-test-{}",
+            std::process::id()
+        ));
+        let path = dir.join("app.log");
+        std::fs::create_dir_all(&dir).expect("应创建测试目录");
+
+        let mut writer = RotatingLogWriter::open_with_limit(&path, 16).expect("应创建日志写入器");
+        for chunk in [b"aaaaaaaaaaaa".as_slice(), b"bbbbbbbbbbbb", b"cccccccccccc"] {
+            writer.write_all(chunk).expect("应写入日志块");
+        }
+        writer.flush().expect("应落盘");
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("应读取当前日志"),
+            "cccccccccccc"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("app.log.1")).expect("应读取轮转日志"),
+            "bbbbbbbbbbbb",
+            "只保留最近一份历史日志，磁盘占用才能稳定在 2 × 上限"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

@@ -4,6 +4,7 @@ mod connection_error;
 mod connection_key;
 mod dynamic_socks;
 mod host_key;
+mod mfa;
 mod remote_forwarding;
 mod session_manager;
 mod session_registry;
@@ -19,6 +20,9 @@ pub use dynamic_socks::{DynamicSocksConfig, DynamicSocksTunnel, start_dynamic_so
 pub use host_key::{
     HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyPolicy, HostKeyProxyType,
     HostKeyRejection, HostKeyRoute, HostKeyVerifier, KnownHost,
+};
+pub use mfa::{
+    auto_answer_keyboard_interactive, is_otp_prompt, is_password_prompt, needs_manual_input,
 };
 pub use remote_forwarding::{
     RemotePortForwardConfig, RemotePortForwardTunnel, start_remote_port_forward_with_config,

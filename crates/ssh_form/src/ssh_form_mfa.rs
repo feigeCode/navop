@@ -1,7 +1,9 @@
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use otp::OtpSecret;
 use rust_i18n::t;
 use ssh::{
     KeyboardInteractivePrompt, KeyboardInteractiveRequest, KeyboardInteractiveResponder,
@@ -79,6 +81,66 @@ impl KeyboardInteractiveResponder for JumpServerMfaResponder {
 
         self.captured.store(request);
         Err(anyhow!(JUMP_MFA_REQUIRED_MARKER))
+    }
+}
+
+/// 连接测试阶段的一次性验证码应答器。
+///
+/// 主机配置了 TOTP 密钥后，keyboard-interactive 里的验证码提示由本地生成应答；
+/// 跳板机的其它提示交给 `JumpServerMfaResponder`，继续走表单输入流程。
+pub struct OtpAutoAnswerResponder {
+    otp: OtpSecret,
+    jump_password: Option<String>,
+    target_password: Option<String>,
+    jump_fallback: Option<JumpServerMfaResponder>,
+    /// 同一次测试里多次索取验证码时递增，避免相邻 steps 生成同一个 6 位码。
+    step_offset: AtomicU32,
+}
+
+impl OtpAutoAnswerResponder {
+    pub fn new(
+        otp: OtpSecret,
+        jump_password: Option<String>,
+        target_password: Option<String>,
+        jump_fallback: Option<JumpServerMfaResponder>,
+    ) -> Self {
+        Self {
+            otp,
+            jump_password,
+            target_password,
+            jump_fallback,
+            step_offset: AtomicU32::new(0),
+        }
+    }
+
+    fn saved_password(&self, target: KeyboardInteractiveTarget) -> Option<&str> {
+        match target {
+            KeyboardInteractiveTarget::JumpServer => self.jump_password.as_deref(),
+            KeyboardInteractiveTarget::TargetServer => self.target_password.as_deref(),
+        }
+    }
+}
+
+#[async_trait]
+impl KeyboardInteractiveResponder for OtpAutoAnswerResponder {
+    async fn respond(&self, request: KeyboardInteractiveRequest) -> Result<Vec<String>> {
+        let step_offset = self.step_offset.fetch_add(1, Ordering::Relaxed);
+        if let Some(answers) = ssh::auto_answer_keyboard_interactive(
+            &request,
+            Some(&self.otp),
+            self.saved_password(request.target),
+            step_offset,
+            otp::current_unix_seconds(),
+        ) {
+            return Ok(answers);
+        }
+
+        match &self.jump_fallback {
+            Some(fallback) => fallback.respond(request).await,
+            None => Err(anyhow!(
+                t!("SSH.mfa_target_dynamic_not_supported").to_string()
+            )),
+        }
     }
 }
 
@@ -197,6 +259,59 @@ mod tests {
                 Some("secret")
             )
         );
+    }
+
+    fn otp_secret() -> otp::OtpSecret {
+        // RFC 6238 的 SHA1 测试种子（ASCII "12345678901234567890"）。
+        otp::OtpSecret::from_base32("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ").expect("测试密钥应有效")
+    }
+
+    #[tokio::test]
+    async fn otp_responder_answers_verification_code_automatically() {
+        let responder =
+            OtpAutoAnswerResponder::new(otp_secret(), None, Some("secret".into()), None);
+        let request = KeyboardInteractiveRequest {
+            target: KeyboardInteractiveTarget::TargetServer,
+            name: "Authentication".to_string(),
+            instructions: String::new(),
+            prompts: vec![prompt("Password:"), prompt("Verification code:")],
+        };
+
+        let answers = responder.respond(request).await.expect("应自动应答");
+
+        assert_eq!(2, answers.len());
+        assert_eq!("secret", answers[0]);
+        assert_eq!(6, answers[1].len());
+        assert!(answers[1].chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[tokio::test]
+    async fn otp_responder_falls_back_to_jump_mfa_without_otp_prompt() {
+        let captured = CapturedMfaRequest::default();
+        let responder = OtpAutoAnswerResponder::new(
+            otp_secret(),
+            Some("jump-secret".into()),
+            Some("secret".into()),
+            Some(JumpServerMfaResponder::new(
+                Vec::new(),
+                Some("jump-secret".into()),
+                captured.clone(),
+            )),
+        );
+        let request = KeyboardInteractiveRequest {
+            target: KeyboardInteractiveTarget::JumpServer,
+            name: "Jump".to_string(),
+            instructions: String::new(),
+            prompts: vec![prompt("Additional info:")],
+        };
+
+        let error = responder
+            .respond(request)
+            .await
+            .expect_err("缺少应答文本时应回到表单");
+
+        assert!(is_jump_mfa_required_error(error.as_ref()));
+        assert!(captured.take().is_some());
     }
 
     #[test]

@@ -216,6 +216,7 @@ mod tests {
 
     fn config(username: (&str, &str), password: (&str, &str)) -> SshAccountExpect {
         SshAccountExpect {
+            elevation: Default::default(),
             username: TerminalExpectSend {
                 expect: username.0.to_string(),
                 send: username.1.to_string(),

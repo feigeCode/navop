@@ -6,7 +6,8 @@ use crate::storage::{
     DbConnectionConfig, FtpParams, JumpServerConfig, MongoDBParams, MongoDriverVariant,
     ProxyConfig, ProxyType, RedisMode, RedisParams, RedisSentinelConfig,
     RemoteDesktopBackendPreference, RemoteDesktopParams, RemoteDesktopProtocol, RemoteFileParams,
-    RemoteFileProtocol, SshAccountExpect, SshAuthMethod, SshParams, StoredConnection,
+    RemoteFileProtocol, SshAccountExpect, SshAuthMethod, SshElevationExpect, SshParams,
+    StoredConnection,
     TelnetLoginStep, TelnetParams, TerminalExpectSend,
 };
 
@@ -25,6 +26,7 @@ fn password_reference(id: i64) -> CredentialReference {
 
 fn ssh_params(reference: Option<CredentialReference>) -> SshParams {
     SshParams {
+        otp: None,
         remote_file: None,
         sftp_default_directory: None,
         disabled_jump_server: None,
@@ -178,6 +180,7 @@ fn resolver_uses_only_credential_expect_and_ignores_connection_overrides() {
         credential.username = Some("vault-user".to_string());
         credential.password = Some("vault-password".to_string());
         credential.ssh_expect = SshAccountExpect {
+            elevation: Default::default(),
             username: TerminalExpectSend {
                 expect: "Vault username:".to_string(),
                 send: String::new(),
@@ -203,6 +206,41 @@ fn resolver_uses_only_credential_expect_and_ignores_connection_overrides() {
         assert!(resolved.account_expect.username.send.is_empty());
         assert_eq!(resolved.account_expect.password.expect, "Vault password:");
         assert!(resolved.account_expect.password.send.is_empty());
+    });
+}
+
+#[test]
+fn resolver_keeps_connection_elevation_expect() {
+    with_master_key(|| {
+        let (_temp, _connection, repository) = super::test_repository();
+        let mut connection = ssh_params(None);
+        connection.account_expect.elevation = SshElevationExpect {
+            auto_fill: Some(true),
+            password: "root-pass".to_string(),
+        };
+
+        let resolved = repository.resolve_ssh(connection).expect("resolve ssh");
+
+        assert_eq!(resolved.account_expect.elevation.auto_fill, Some(true));
+        assert_eq!(resolved.account_expect.elevation.password, "root-pass");
+    });
+}
+
+#[test]
+fn resolver_keeps_connection_elevation_over_the_keychain_default() {
+    with_master_key(|| {
+        let (_temp, _connection, repository) = super::test_repository();
+        let credential_id = insert_password_credential(&repository);
+        let mut connection = ssh_params(Some(password_reference(credential_id)));
+        connection.account_expect.elevation = SshElevationExpect {
+            auto_fill: Some(false),
+            password: String::new(),
+        };
+
+        let resolved = repository.resolve_ssh(connection).expect("resolve ssh");
+
+        assert_eq!(resolved.account_expect.elevation.auto_fill, Some(false));
+        assert!(resolved.account_expect.elevation.password.is_empty());
     });
 }
 
@@ -250,6 +288,7 @@ fn resolver_reuses_keychain_expect_for_telnet_without_connection_script() {
         credential.username = Some("telnet-user".to_string());
         credential.password = Some("telnet-password".to_string());
         credential.ssh_expect = SshAccountExpect {
+            elevation: Default::default(),
             username: TerminalExpectSend {
                 expect: r"(?i)login\s*:".to_string(),
                 send: String::new(),

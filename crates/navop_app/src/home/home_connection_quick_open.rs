@@ -124,7 +124,7 @@ pub(crate) fn temporary_ssh_connection(input: &str) -> Option<StoredConnection> 
             format!("{username}@")
         }
     );
-    let params = SshParams {
+    let params = SshParams { otp: None,
         remote_file: None,
         host,
         port,

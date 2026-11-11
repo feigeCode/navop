@@ -197,7 +197,7 @@ fn docker_exec<const N: usize>(args: [&str; N]) -> Result<Output> {
 fn ssh_connection(port: u16, username: String, password: String) -> StoredConnection {
     let mut connection = StoredConnection::new_ssh(
         "docker ssh".to_string(),
-        SshParams {
+        SshParams { otp: None,
             remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,

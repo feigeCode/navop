@@ -11,7 +11,7 @@ use crate::{
 fn ssh_connection(id: i64) -> StoredConnection {
     let mut connection = StoredConnection::new_ssh(
         "bastion".to_string(),
-        SshParams {
+        SshParams { otp: None,
             remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,

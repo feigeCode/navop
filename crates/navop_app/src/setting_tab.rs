@@ -385,7 +385,7 @@ fn init_tracing(log_file_path: &str) {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
     match crate::navop_app::configured_log_file_path(log_file_path) {
-        Ok(log_file_path) => match crate::navop_app::log_file_appender(&log_file_path) {
+        Ok(log_file_path) => match crate::navop_app::RotatingLogWriter::open(&log_file_path) {
             Ok(file_appender) => {
                 let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
                 Box::leak(Box::new(guard));
