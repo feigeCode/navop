@@ -69,6 +69,7 @@ impl NotesView {
             dialog
                 .title(t!("Notes.rename").to_string())
                 .w(px(380.0))
+                .confirm()
                 .on_ok(move |_, window, cx: &mut App| {
                     let name = input_for_ok.read(cx).value().trim().to_owned();
                     view_for_ok.update(cx, |view, cx| {
@@ -97,6 +98,7 @@ impl NotesView {
             dialog
                 .title(t!("Notes.delete").to_string())
                 .w(px(380.0))
+                .confirm()
                 .on_ok(move |_, window, cx: &mut App| {
                     view_for_ok.update(cx, |view, cx| view.apply_delete(&row_for_ok, window, cx));
                     true
@@ -268,6 +270,7 @@ fn open_name_dialog(
         dialog
             .title(title.clone())
             .w(px(380.0))
+            .confirm()
             .on_ok(move |_, window, cx: &mut App| {
                 let name = input_for_ok.read(cx).value().trim().to_owned();
                 view_for_ok.update(cx, |view, cx| view.apply_create(kind, &name, window, cx));
