@@ -1306,6 +1306,7 @@ mod tests {
                 prompt_username: None,
                 prompt_password: None,
                 keyboard_interactive: None,
+                otp: None,
                 terminal_encoding: Default::default(),
                 terminal_type: Default::default(),
                 connect_timeout: None,

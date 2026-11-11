@@ -6415,7 +6415,7 @@ mod tests {
     fn test_stored_connection() -> one_core::storage::models::StoredConnection {
         let mut connection = one_core::storage::models::StoredConnection::new_ssh(
             "Terminal file manager test".to_string(),
-            SshParams {
+            SshParams { otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
@@ -6456,7 +6456,7 @@ mod tests {
     fn test_ftp_stored_connection() -> one_core::storage::models::StoredConnection {
         let mut connection = one_core::storage::models::StoredConnection::new_ssh(
             "Terminal file manager ftp test".to_string(),
-            SshParams {
+            SshParams { otp: None,
                 remote_file: Some(one_core::storage::models::RemoteFileParams {
                     protocol: one_core::storage::models::RemoteFileProtocol::Ftp,
                     ftp: Some(one_core::storage::models::FtpParams {
@@ -6511,7 +6511,7 @@ mod tests {
     fn test_other_host_connection() -> one_core::storage::models::StoredConnection {
         let mut connection = one_core::storage::models::StoredConnection::new_ssh(
             "主机 B".to_string(),
-            SshParams {
+            SshParams { otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,

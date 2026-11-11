@@ -55,6 +55,7 @@ members = [
     "apps/navop-shell",
     "apps/navop-data",
     "crates/ssh",
+    "crates/otp",
     "crates/x11_forwarding",
     "crates/sftp",
     "crates/ftp",
@@ -266,6 +267,7 @@ dashmap = "5.5.3"
 moka = { version = "0.12", features = ["sync"] }
 thiserror="2.0.14"
 llm-connector = { path = "crates/llm-connector", features = ["streaming"] }
+otp = { path = "crates/otp" }
 # `use_tls` 会拼出 `rediss://` URL，必须启用 rustls 的异步 TLS 支持（tokio-rustls-comp
 # 隐含 tokio-comp 与 tls-rustls），否则 `Client::open` 直接返回
 # `InvalidClientConfig("can't connect with TLS, the feature is not enabled")`。
@@ -290,6 +292,7 @@ async_ftp = "6.0.0"
 aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"
+sha1 = "0.10"
 sha2 = "0.10"
 security-framework = "3.7.0"
 subtle = "2.6"

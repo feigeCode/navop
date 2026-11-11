@@ -61,7 +61,7 @@ fn build_database(input: &Value) -> Result<StoredConnection, ToolError> {
 fn build_ssh(input: &Value) -> Result<StoredConnection, ToolError> {
     let values = required_object(input, "values")?;
     let password = optional_value_str(values, "password").map(str::to_string);
-    let params = SshParams {
+    let params = SshParams { otp: None,
         remote_file: None,
         sftp_default_directory: None,
         disabled_jump_server: None,

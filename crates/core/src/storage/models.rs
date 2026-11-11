@@ -7,6 +7,7 @@ use gpui::Global;
 use gpui_component::Size::Large;
 use gpui_component::{Icon, Sizable};
 use one_assets::IconName;
+use otp::OtpSecret;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
@@ -487,6 +488,12 @@ pub struct SshParams {
     /// 旧连接没有该字段时保持历史行为：允许 keyboard-interactive。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keyboard_interactive: Option<bool>,
+    /// 主机的一次性验证码（TOTP）密钥。
+    ///
+    /// 配置后 keyboard-interactive 认证中 `Verification code:` 这类提示由客户端
+    /// 本地生成验证码自动应答，不再弹输入框；`None` 表示该主机不需要 OTP。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub otp: Option<OtpSecret>,
     /// SSH 终端文本编码；旧连接缺少此字段时保持 UTF-8。
     #[serde(default, skip_serializing_if = "StoredTerminalEncoding::is_utf8")]
     pub terminal_encoding: StoredTerminalEncoding,
@@ -2912,6 +2919,7 @@ mod tests {
         let mut connection = StoredConnection::new_ssh(
             "prod-bastion".to_string(),
             SshParams {
+                otp: None,
                 remote_file: None,
                 disabled_jump_server: None,
                 sftp_default_directory: None,
@@ -3110,6 +3118,7 @@ mod tests {
         );
 
         let ssh = SshParams {
+            otp: None,
             remote_file: None,
             disabled_jump_server: None,
             sftp_default_directory: None,
@@ -4171,6 +4180,7 @@ mod serial_tests {
     #[test]
     fn ssh_params_os_id_round_trips_through_json() {
         let mut params = SshParams {
+            otp: None,
             remote_file: None,
             disabled_jump_server: None,
             sftp_default_directory: None,
@@ -4454,6 +4464,7 @@ mod serial_tests {
         let mut connection = StoredConnection::new_ssh(
             "example".to_string(),
             SshParams {
+                otp: None,
                 remote_file: None,
                 disabled_jump_server: None,
                 sftp_default_directory: None,
@@ -4793,6 +4804,7 @@ mod serial_tests {
 
     fn ssh_params_for_remote_file_tests() -> SshParams {
         SshParams {
+            otp: None,
             remote_file: None,
             host: "ssh.example.com".to_string(),
             port: 22,
@@ -5031,6 +5043,7 @@ mod serial_tests {
         let ssh = StoredConnection::new_ssh(
             "ssh".to_string(),
             SshParams {
+                otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,

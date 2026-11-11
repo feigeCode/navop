@@ -10,8 +10,8 @@ use connection_form::team::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
+    App, AppContext, AsyncApp, ClipboardEntry, Context, Div, Entity, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, img, px, relative,
 };
 use gpui_component::{
@@ -20,7 +20,7 @@ use gpui_component::{
     checkbox::Checkbox,
     dialog::DialogFooter,
     h_flex,
-    input::{Input, InputState, Textarea, TextareaState},
+    input::{Input, InputEvent, InputState, Textarea, TextareaState},
     notification::Notification,
     radio::Radio,
     scroll::ScrollableElement,
@@ -40,6 +40,7 @@ use one_core::storage::{
     SshAccountExpect, SshAgentForwardKey, SshAuthMethod, SshParams, StoredConnection,
     StoredTerminalEncoding, StoredTerminalType, Workspace, ssh_os_icon,
 };
+use otp::OtpSecret;
 use rust_i18n::t;
 use ssh::{
     AgentIdentity, ChannelEvent, HostKeyDetails, HostKeyIdentity, HostKeyRejection,
@@ -55,9 +56,10 @@ use tool_runtime::AiAccessLevel;
 use crate::host_key_dialog::{
     host_key_dialog_presentation, render_host_key_details_card, verifier_with_confirmed_host_key,
 };
+use crate::otp_qr::{OtpQrError, decode_otp_secret};
 use crate::ssh_form_mfa::{
     CapturedMfaRequest, FormMfaPrompt, FormMfaRequest, JumpServerMfaResponder,
-    form_mfa_request_from_keyboard_interactive, is_jump_mfa_required_error,
+    OtpAutoAnswerResponder, form_mfa_request_from_keyboard_interactive, is_jump_mfa_required_error,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -235,6 +237,12 @@ pub struct SshFormWindow {
     save_username: bool,
     save_password: bool,
     keyboard_interactive: bool,
+    /// 一次性验证码（TOTP）密钥输入框：`otpauth://` 链接或裸 base32 密钥。
+    otp_input: Entity<InputState>,
+    /// 已解析的 TOTP 密钥；`None` 表示该主机不需要一次性验证码。
+    otp_secret: Option<OtpSecret>,
+    /// 密钥解析失败时的提示（输入框旁的红字）。
+    otp_error: Option<SharedString>,
     terminal_encoding_select: Entity<SelectState<Vec<TerminalEncodingSelectItem>>>,
     terminal_type_select: Entity<SelectState<Vec<TerminalTypeSelectItem>>>,
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
@@ -836,6 +844,8 @@ impl SshFormWindow {
                 .placeholder(t!("SSH.password_placeholder"))
                 .masked(true)
         });
+        let otp_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.otp_placeholder")));
         let key_path_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.key_path_placeholder")));
         let private_key_content_input = cx.new(|cx| {
@@ -1005,6 +1015,7 @@ impl SshFormWindow {
         let mut save_username = true;
         let mut save_password = true;
         let mut keyboard_interactive = true;
+        let mut otp_secret: Option<OtpSecret> = None;
         let mut jump_auth_method = AuthMethodSelection::Password;
         // 新建连接向导指定了目标分组时预选该分组（编辑 / 复制连接走下面的回填逻辑）。
         let mut workspace_id: Option<i64> = if is_editing || config.initial_connection.is_some() {
@@ -1046,6 +1057,12 @@ impl SshFormWindow {
                 save_username = !params.prompts_for_username();
                 save_password = !params.prompts_for_password();
                 keyboard_interactive = params.keyboard_interactive_enabled();
+                if let Some(secret) = params.otp.clone() {
+                    otp_input.update(cx, |s, cx| {
+                        s.set_value(&secret.otpauth_uri(), window, cx);
+                    });
+                    otp_secret = Some(secret);
+                }
                 detected_os_id = params.os_id.clone();
                 manual_icon = params.icon.clone();
                 custom_icon_file_path = params.icon_file_path.clone();
@@ -1299,7 +1316,33 @@ impl SshFormWindow {
                 &ftp_credential_picker,
                 |_, _, _: &CredentialPickerEvent, cx| cx.notify(),
             ),
+            cx.subscribe_in(
+                &otp_input,
+                window,
+                |this, input, event: &InputEvent, _, cx| {
+                    if let InputEvent::Change = event {
+                        let value = input.read(cx).text().to_string();
+                        this.apply_otp_input(&value, cx);
+                    }
+                },
+            ),
         ];
+        // 验证码按时间窗口滚动，配置了密钥时每秒刷新一次，让预览里的验证码与剩余秒数保持准确。
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let alive = this.update(cx, |this, cx| {
+                    if this.otp_secret.is_some() {
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
         let ai_access_level = cx.new(|_| ai_access_level);
 
         Self {
@@ -1323,6 +1366,9 @@ impl SshFormWindow {
             save_username,
             save_password,
             keyboard_interactive,
+            otp_input,
+            otp_secret,
+            otp_error: None,
             terminal_encoding_select,
             terminal_type_select,
             workspace_select,
@@ -1715,6 +1761,7 @@ impl SshFormWindow {
         };
 
         Some(SshParams {
+            otp: self.otp_secret.clone(),
             remote_file,
             sftp_account,
             host,
@@ -1928,16 +1975,34 @@ impl SshFormWindow {
         let x11_requested = config.x11_forwarding;
         let jump_mfa_capture = CapturedMfaRequest::default();
         let jump_mfa_responses = self.collect_jump_mfa_responses(cx, &signature);
-        if let Some(jump_server) = &config.jump_server {
-            let jump_password = match &jump_server.auth {
+        let jump_password = config
+            .jump_server
+            .as_ref()
+            .and_then(|jump_server| match &jump_server.auth {
                 SshAuth::Password(password) => Some(password.clone()),
                 _ => None,
-            };
-            config.keyboard_interactive_responder = Some(Arc::new(JumpServerMfaResponder::new(
+            });
+        let target_password = match &config.auth {
+            SshAuth::Password(password) => Some(password.clone()),
+            _ => None,
+        };
+        let jump_fallback = config.jump_server.as_ref().map(|_| {
+            JumpServerMfaResponder::new(
                 jump_mfa_responses,
-                jump_password,
+                jump_password.clone(),
                 jump_mfa_capture.clone(),
+            )
+        });
+        // 配置了 TOTP 密钥时用验证码应答器；跳板机其它二次认证提示仍回到表单输入。
+        if let Some(otp) = params.otp.clone() {
+            config.keyboard_interactive_responder = Some(Arc::new(OtpAutoAnswerResponder::new(
+                otp,
+                jump_password,
+                target_password,
+                jump_fallback,
             )));
+        } else if let Some(jump_fallback) = jump_fallback {
+            config.keyboard_interactive_responder = Some(Arc::new(jump_fallback));
         }
         let window_handle = window.window_handle();
 
@@ -2227,6 +2292,14 @@ impl SshFormWindow {
             return;
         }
 
+        // 密钥填了但解析失败时必须拦住，否则用户以为已配置、保存后却悄悄丢掉了。
+        if self.otp_error.is_some() {
+            self.last_tested_signature = None;
+            self.test_result = Some(Err(t!("SSH.otp_save_blocked").to_string()));
+            cx.notify();
+            return;
+        }
+
         let Some(params) = self.build_ssh_params(cx) else {
             self.last_tested_signature = None;
             self.test_result = Some(Err(t!("SSH.validation_error").to_string()));
@@ -2385,6 +2458,178 @@ impl SshFormWindow {
 
     fn render_form_textarea(&self, input: &Entity<TextareaState>) -> Textarea {
         Textarea::new(input).w_full()
+    }
+
+    /// 渲染「一次性验证码密钥」表单行。
+    ///
+    /// 输入框接受 `otpauth://` 链接或裸 base32 密钥，右侧提供二维码图片识别入口；
+    /// 配置成功后行下方展示位数/周期/算法与当前验证码，便于用户确认密钥正确。
+    fn render_otp_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut hints: Vec<Div> = Vec::new();
+        if let Some(error) = &self.otp_error {
+            hints.push(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().danger)
+                    .child(error.clone()),
+            );
+        } else if let Some(secret) = &self.otp_secret {
+            let now = otp::current_unix_seconds();
+            hints.push(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        t!(
+                            "SSH.otp_summary",
+                            digits = secret.digits,
+                            period = secret.period,
+                            algorithm = secret.algorithm.as_str()
+                        )
+                        .to_string()
+                            + " · "
+                            + &t!(
+                                "SSH.otp_current_code",
+                                code = secret.generate(now).unwrap_or_default(),
+                                remaining = secret.remaining_seconds(now)
+                            )
+                            .to_string(),
+                    ),
+            );
+            // 关掉双因素认证时验证码不会被自动应答，这里明确提示，避免用户以为密钥没生效。
+            if !self.keyboard_interactive {
+                hints.push(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().warning)
+                        .child(t!("SSH.otp_keyboard_interactive_required").to_string()),
+                );
+            }
+        }
+
+        v_flex()
+            .w_full()
+            .gap_1()
+            .child(
+                self.render_form_row(
+                    &t!("SSH.otp_secret"),
+                    v_flex()
+                        .w_full()
+                        .gap_1()
+                        .child(self.render_form_input(&self.otp_input))
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("otp-scan-image")
+                                        .icon(IconName::Search)
+                                        .small()
+                                        .label(t!("SSH.otp_scan_image").to_string())
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.pick_otp_image(window, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("otp-paste-image")
+                                        .icon(IconName::Paste)
+                                        .small()
+                                        .label(t!("SSH.otp_paste_image").to_string())
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.paste_otp_image(window, cx);
+                                        })),
+                                ),
+                        ),
+                ),
+            )
+            .children(hints)
+    }
+
+    /// 解析输入框内容：空输入表示不需要 OTP，解析失败时清空已解析密钥并保留错误提示。
+    fn apply_otp_input(&mut self, value: &str, cx: &mut Context<Self>) {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            self.otp_secret = None;
+            self.otp_error = None;
+            cx.notify();
+            return;
+        }
+
+        match OtpSecret::parse(trimmed) {
+            Ok(secret) => {
+                self.otp_secret = Some(secret);
+                self.otp_error = None;
+            }
+            Err(error) => {
+                self.otp_secret = None;
+                self.otp_error = Some(otp_error_message(&error).into());
+            }
+        }
+        cx.notify();
+    }
+
+    /// 二维码解码成功后，把归一化后的密钥回填到输入框。
+    ///
+    /// `InputState::set_value` 不会触发 `InputEvent::Change`，所以这里同时更新
+    /// `otp_secret`，避免回填后状态不一致。
+    fn apply_otp_image_bytes(&mut self, bytes: &[u8], window: &mut Window, cx: &mut Context<Self>) {
+        match decode_otp_secret(bytes) {
+            Ok(secret) => {
+                let uri = secret.otpauth_uri();
+                self.otp_input.update(cx, |input, cx| {
+                    input.set_value(uri, window, cx);
+                });
+                self.otp_secret = Some(secret);
+                self.otp_error = None;
+                cx.notify();
+            }
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(otp_qr_error_message(&error)).autohide(true),
+                    cx,
+                );
+            }
+        }
+    }
+
+    /// 从文件选择器读取二维码图片并识别密钥。
+    fn pick_otp_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t!("SSH.otp_image_select_file").to_string().into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = future.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            // 二维码图片体积很小，直接同步读取，避免为此引入额外的异步拷贝。
+            let bytes = match std::fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), %error, "读取二维码图片失败");
+                    return;
+                }
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.apply_otp_image_bytes(&bytes, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// 从剪贴板读取图片并识别密钥；剪贴板里是文件路径时读取文件内容。
+    fn paste_otp_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match clipboard_otp_image_bytes(cx) {
+            Some(bytes) => self.apply_otp_image_bytes(&bytes, window, cx),
+            None => window.push_notification(
+                Notification::warning(t!("SSH.otp_clipboard_no_image").to_string()).autohide(true),
+                cx,
+            ),
+        }
     }
 
     fn prompt_for_custom_icon(&mut self, cx: &mut Context<Self>) {
@@ -2903,6 +3148,7 @@ impl SshFormWindow {
                         ),
                 ),
             )
+            .child(self.render_otp_row(cx))
             .child(self.render_form_row(
                 &t!("SSH.terminal_encoding"),
                 Select::new(&self.terminal_encoding_select).w_full(),
@@ -3959,6 +4205,48 @@ impl Render for SshFormWindow {
     }
 }
 
+/// 把 OTP 密钥解析错误翻译成表单提示文案。
+fn otp_error_message(error: &otp::OtpError) -> String {
+    use otp::OtpError;
+    match error {
+        OtpError::EmptyInput => t!("SSH.otp_error_missing_secret").to_string(),
+        OtpError::UnsupportedScheme(scheme) => {
+            t!("SSH.otp_error_scheme", scheme = scheme).to_string()
+        }
+        OtpError::UnsupportedType(kind) => t!("SSH.otp_error_hotp", kind = kind).to_string(),
+        OtpError::MissingSecret => t!("SSH.otp_error_missing_secret").to_string(),
+        OtpError::InvalidBase32 => t!("SSH.otp_error_base32").to_string(),
+        OtpError::InvalidDigits => t!("SSH.otp_error_digits").to_string(),
+        OtpError::InvalidPeriod => t!("SSH.otp_error_period").to_string(),
+        OtpError::InvalidAlgorithm => t!("SSH.otp_error_algorithm").to_string(),
+        OtpError::MalformedUri => t!("SSH.otp_error_malformed").to_string(),
+    }
+}
+
+/// 把二维码识别错误翻译成提示文案。
+fn otp_qr_error_message(error: &OtpQrError) -> String {
+    match error {
+        OtpQrError::ImageDecode => t!("SSH.otp_qr_image_decode").to_string(),
+        OtpQrError::NoQrCodeFound => t!("SSH.otp_qr_no_qr_code").to_string(),
+        OtpQrError::NotOtpSecret(inner) => {
+            t!("SSH.otp_qr_not_otp").to_string() + ": " + &otp_error_message(inner)
+        }
+    }
+}
+
+/// 从剪贴板取出图片字节；剪贴板里是图片文件路径时读取文件内容。
+fn clipboard_otp_image_bytes(cx: &App) -> Option<Vec<u8>> {
+    let clipboard = cx.read_from_clipboard()?;
+    clipboard.entries().iter().find_map(|entry| match entry {
+        ClipboardEntry::Image(image) => Some(image.bytes.clone()),
+        ClipboardEntry::ExternalPaths(paths) => paths
+            .paths()
+            .iter()
+            .find_map(|path| std::fs::read(path).ok()),
+        ClipboardEntry::String(_) => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -3984,6 +4272,7 @@ mod tests {
 
     fn sample_params() -> SshParams {
         SshParams {
+            otp: None,
             remote_file: None,
             sftp_account: None,
             sftp_default_directory: None,
@@ -4265,6 +4554,96 @@ mod tests {
             .expect("预填 SSH 表单应能构建参数");
         assert_eq!(built.terminal_encoding, StoredTerminalEncoding::EucJp);
         assert_eq!(built.terminal_type, StoredTerminalType::Xterm);
+    }
+
+    fn otp_test_secret() -> otp::OtpSecret {
+        // RFC 6238 的 SHA1 测试种子（ASCII "12345678901234567890"）。
+        otp::OtpSecret::from_base32("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ").expect("测试密钥应有效")
+    }
+
+    #[gpui::test]
+    fn ssh_form_prefills_and_builds_otp_secret(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let mut params = sample_params();
+        let secret = otp_test_secret();
+        params.otp = Some(secret.clone());
+        let initial_connection = StoredConnection::new_ssh("totp".to_string(), params, None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    initial_workspace_id: None,
+                    editing_connection: None,
+                    initial_connection: Some(initial_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("带 OTP 的表单应能构建参数");
+        let built_secret = built.otp.expect("保存参数里应保留 OTP 密钥");
+        assert_eq!(secret, built_secret);
+
+        // 输入框回填的是可再次解析的 otpauth URI，便于用户核对/复制。
+        let expected_uri = secret.otpauth_uri();
+        form.read_with(cx, |form, cx| {
+            assert_eq!(expected_uri, form.otp_input.read(cx).text().to_string());
+            assert!(form.otp_error.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn ssh_form_rejects_invalid_otp_secret(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let initial_connection =
+            StoredConnection::new_ssh("totp".to_string(), sample_params(), None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    initial_workspace_id: None,
+                    editing_connection: None,
+                    initial_connection: Some(initial_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        form.update(cx, |form, cx| {
+            form.apply_otp_input("not*a*valid*secret", cx);
+            assert!(form.otp_error.is_some(), "非法 base32 应给出提示");
+            assert!(form.otp_secret.is_none(), "非法密钥不能进入保存参数");
+
+            form.apply_otp_input(
+                "otpauth://totp/Navop:root?secret=GEZDGNBVGY3TQOJQ&period=60&digits=8",
+                cx,
+            );
+            let secret = form
+                .otp_secret
+                .as_ref()
+                .expect("合法 otpauth URI 应解析成功");
+            assert_eq!(60, secret.period);
+            assert_eq!(8, secret.digits);
+            assert!(form.otp_error.is_none());
+
+            form.apply_otp_input("", cx);
+            assert!(form.otp_secret.is_none());
+            assert!(form.otp_error.is_none());
+        });
     }
 
     #[gpui::test]

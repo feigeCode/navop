@@ -289,6 +289,90 @@ SSH:
     en: Allow Keyboard-Interactive prompts such as OTP, hardware tokens, and challenge-response. Enable it when the server demands keyboard-interactive (MFA/OTP authentication); some switches deliver the normal password prompt this way, but most devices accept plain password authentication. If the server drops the connection during the keyboard-interactive exchange, navop retries once with password authentication.
     zh-CN: 允许服务器通过 Keyboard-Interactive 请求 OTP、硬件令牌或质询响应。服务器要求 keyboard-interactive（二次认证/OTP）时请开启；部分交换机用它下发普通密码提示，但多数设备也支持普通密码认证。若服务器在 keyboard-interactive 往返中直接断开连接，navop 会自动改用密码认证重试一次。
     zh-HK: 允許伺服器透過 Keyboard-Interactive 要求 OTP、硬體權杖或質詢回應。伺服器要求 keyboard-interactive（二次認證/OTP）時請開啟；部分交換器用它下發一般密碼提示，但多數設備也支援一般密碼認證。若伺服器在 keyboard-interactive 往返中直接中斷連線，navop 會自動改用密碼認證重試一次。
+  otp_secret:
+    en: One-time password secret
+    zh-CN: 一次性验证码密钥
+    zh-HK: 一次性驗證碼密鑰
+  otp_placeholder:
+    en: "Optional: otpauth:// URI or base32 secret"
+    zh-CN: "可选:otpauth:// 地址 或 base32 密钥"
+    zh-HK: "可選:otpauth:// 位址 或 base32 密鑰"
+  otp_scan_image:
+    en: Scan QR image
+    zh-CN: 扫描二维码图片
+    zh-HK: 掃描二維碼圖片
+  otp_paste_image:
+    en: Paste image
+    zh-CN: 粘贴图片
+    zh-HK: 貼上圖片
+  otp_image_select_file:
+    en: Select a QR code image
+    zh-CN: 选择二维码图片
+    zh-HK: 選擇二維碼圖片
+  otp_summary:
+    en: "%{digits} digits · %{period}s · %{algorithm}"
+    zh-CN: "%{digits} 位 · %{period} 秒 · %{algorithm}"
+    zh-HK: "%{digits} 位 · %{period} 秒 · %{algorithm}"
+  otp_current_code:
+    en: "current code %{code} (%{remaining}s left)"
+    zh-CN: "当前验证码 %{code}（剩余 %{remaining} 秒）"
+    zh-HK: "目前驗證碼 %{code}（剩餘 %{remaining} 秒）"
+  otp_clipboard_no_image:
+    en: No image found in the clipboard.
+    zh-CN: 剪贴板里没有找到图片。
+    zh-HK: 剪貼簿裡沒有找到圖片。
+  otp_keyboard_interactive_required:
+    en: Enable two-factor authentication above, otherwise the code is not submitted automatically.
+    zh-CN: 请在上方启用双因素认证，否则验证码不会被自动提交。
+    zh-HK: 請在上方啟用雙因素認證，否則驗證碼不會被自動提交。
+  otp_save_blocked:
+    en: Fix the one-time password secret before saving.
+    zh-CN: 一次性验证码密钥有误，请先修正再保存。
+    zh-HK: 一次性驗證碼密鑰有誤，請先修正再儲存。
+  otp_error_scheme:
+    en: "Unsupported link %{scheme}: only otpauth:// links are accepted."
+    zh-CN: "不支持的链接 %{scheme}：只接受 otpauth:// 链接。"
+    zh-HK: "不支援的連結 %{scheme}：只接受 otpauth:// 連結。"
+  otp_error_hotp:
+    en: "Unsupported type %{kind}: only time-based (TOTP) secrets are supported."
+    zh-CN: "不支持的类型 %{kind}：只支持基于时间的一次性验证码（TOTP）。"
+    zh-HK: "不支援的類型 %{kind}：只支援基於時間的一次性驗證碼（TOTP）。"
+  otp_error_missing_secret:
+    en: The secret is empty.
+    zh-CN: 密钥不能为空。
+    zh-HK: 密鑰不能為空。
+  otp_error_base32:
+    en: Invalid base32 secret.
+    zh-CN: base32 密钥格式不正确。
+    zh-HK: base32 密鑰格式不正確。
+  otp_error_digits:
+    en: The number of digits must be between 6 and 8.
+    zh-CN: 验证码位数必须在 6 到 8 之间。
+    zh-HK: 驗證碼位數必須在 6 到 8 之間。
+  otp_error_period:
+    en: The period must be between 1 and 3600 seconds.
+    zh-CN: 周期必须在 1 到 3600 秒之间。
+    zh-HK: 週期必須在 1 到 3600 秒之間。
+  otp_error_algorithm:
+    en: "Unsupported algorithm: use SHA1, SHA256 or SHA512."
+    zh-CN: "不支持的算法：请使用 SHA1、SHA256 或 SHA512。"
+    zh-HK: "不支援的演算法：請使用 SHA1、SHA256 或 SHA512。"
+  otp_error_malformed:
+    en: The otpauth link is malformed.
+    zh-CN: otpauth 链接格式不正确。
+    zh-HK: otpauth 連結格式不正確。
+  otp_qr_image_decode:
+    en: Failed to read the image.
+    zh-CN: 图片读取失败。
+    zh-HK: 圖片讀取失敗。
+  otp_qr_no_qr_code:
+    en: No QR code found in the image.
+    zh-CN: 图片里没有识别到二维码。
+    zh-HK: 圖片裡沒有識別到二維碼。
+  otp_qr_not_otp:
+    en: The QR code is not a TOTP secret
+    zh-CN: 二维码内容不是 TOTP 密钥
+    zh-HK: 二維碼內容不是 TOTP 密鑰
   terminal_encoding:
     en: Terminal Encoding
     zh-CN: 终端字符集

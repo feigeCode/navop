@@ -124,7 +124,7 @@ mod tests {
     fn ssh_connection(id: i64, auth_method: SshAuthMethod) -> StoredConnection {
         let mut connection = StoredConnection::new_ssh(
             "prod-bastion".to_string(),
-            SshParams {
+            SshParams { otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,

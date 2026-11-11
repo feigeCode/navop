@@ -25,6 +25,7 @@ fn password_reference(id: i64) -> CredentialReference {
 
 fn ssh_params(reference: Option<CredentialReference>) -> SshParams {
     SshParams {
+        otp: None,
         remote_file: None,
         sftp_default_directory: None,
         disabled_jump_server: None,

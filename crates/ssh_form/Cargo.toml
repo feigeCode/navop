@@ -10,8 +10,11 @@ async-trait = { workspace = true }
 connection-form = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
+image = { workspace = true }
 one-assets = { workspace = true }
 one-core = { workspace = true }
+otp = { workspace = true }
+rqrr = "0.9"
 rust-i18n = { workspace = true }
 ssh = { workspace = true }
 terminal = { workspace = true }
@@ -21,6 +24,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+qrcode = "0.14"
 tempfile = "3"
 
 [lints]

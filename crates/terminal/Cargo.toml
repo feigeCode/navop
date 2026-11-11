@@ -4,6 +4,7 @@ version = "0.15.2"
 edition = "2021"
 
 [dependencies]
+otp = { workspace = true }
 # Async runtime
 tokio = { workspace = true }
 tokio-util = { workspace = true }

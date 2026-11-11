@@ -1088,7 +1088,7 @@ mod tests {
     }
 
     fn ssh_params(host: &str) -> SshParams {
-        SshParams {
+        SshParams { otp: None,
             remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,

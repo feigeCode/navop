@@ -32,7 +32,7 @@ use one_core::storage::{
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -286,6 +286,9 @@ pub struct SshTerminalConfig {
     pub account_expect: SshAccountExpect,
     /// 关闭 shell integration 注入:走裸 request_shell,失去 OSC 集成。
     pub disable_shell_integration: bool,
+    /// 主机的一次性验证码（TOTP）密钥；配置后 keyboard-interactive 里的
+    /// 验证码提示由客户端本地生成并自动应答。
+    pub otp: Option<otp::OtpSecret>,
 }
 
 pub struct SshConnectionUpdate {
@@ -487,6 +490,10 @@ pub struct TerminalMfaResponder {
     event_tx: Option<UnboundedSender<TerminalEvent>>,
     jump_password: Option<String>,
     target_password: Option<String>,
+    /// 主机配置的一次性验证码（TOTP）密钥；有值时验证码提示自动应答。
+    otp: Option<otp::OtpSecret>,
+    /// 连续认证时用于错开时间窗口的步进计数。
+    otp_step_offset: Arc<AtomicU32>,
 }
 
 #[derive(Default)]
@@ -510,7 +517,32 @@ impl TerminalMfaResponder {
             event_tx: Some(event_tx.clone()),
             jump_password,
             target_password,
+            otp: None,
+            otp_step_offset: Arc::new(AtomicU32::new(0)),
         }
+    }
+
+    /// 设置主机的一次性验证码密钥，使验证码提示可以本地自动应答。
+    pub fn with_otp(mut self, otp: Option<otp::OtpSecret>) -> Self {
+        self.otp = otp;
+        self
+    }
+
+    /// 用已配置的 OTP 密钥自动应答整组提示；无法全自动应答时返回 `None`。
+    fn auto_answered_responses(&self, request: &KeyboardInteractiveRequest) -> Option<Vec<String>> {
+        let otp = self.otp.as_ref()?;
+        let password = match request.target {
+            KeyboardInteractiveTarget::JumpServer => self.jump_password.as_deref(),
+            KeyboardInteractiveTarget::TargetServer => self.target_password.as_deref(),
+        };
+        let step_offset = self.otp_step_offset.fetch_add(1, Ordering::Relaxed);
+        ssh::auto_answer_keyboard_interactive(
+            request,
+            Some(otp),
+            password,
+            step_offset,
+            otp::current_unix_seconds(),
+        )
     }
 
     pub fn pending_request(&self) -> Option<TerminalMfaRequest> {
@@ -572,6 +604,18 @@ impl KeyboardInteractiveResponder for TerminalMfaResponder {
                 echo: prompt.echo,
             })
             .collect::<Vec<_>>();
+
+        if !terminal_prompts.is_empty() {
+            if let Some(answers) = self.auto_answered_responses(&request) {
+                // 与全密码提示一样，静默应答必须在日志里留痕。
+                tracing::debug!(
+                    target = ?request.target,
+                    prompt_count = request.prompts.len(),
+                    "SSH keyboard-interactive prompts were answered locally with the configured OTP secret"
+                );
+                return Ok(answers);
+            }
+        }
 
         if terminal_prompts.is_empty() {
             // 提示全部是密码提示时直接用保存的凭据应答，界面上不会出现任何输入界面。
@@ -659,29 +703,7 @@ fn keyboard_interactive_answers_for_terminal(
 }
 
 fn is_ssh_password_prompt(prompt: &str) -> bool {
-    let prompt = prompt.trim().trim_end_matches(':').trim();
-    let prompt = prompt.to_ascii_lowercase();
-
-    if [
-        "one-time password",
-        "one time password",
-        "otp",
-        "verification code",
-        "security code",
-        "authentication code",
-        "passcode",
-        "token",
-    ]
-    .iter()
-    .any(|marker| prompt.contains(marker))
-    {
-        return false;
-    }
-
-    prompt == "password"
-        || prompt.ends_with("'s password")
-        || prompt.starts_with("password for ")
-        || prompt == "enter password"
+    ssh::is_password_prompt(prompt)
 }
 
 fn resolve_ssh_connection(
@@ -746,6 +768,7 @@ fn resolve_ssh_connection(
             account_expect,
             // 运行时注入不写远端文件，默认启用；仅显式存储的禁用值才关闭集成。
             disable_shell_integration: params.disable_shell_integration.unwrap_or(false),
+            otp: params.otp,
         },
         credential_prompt_policy,
         keyboard_interactive_enabled,
@@ -816,7 +839,8 @@ fn ssh_config_with_runtime_credentials(
         .as_ref()
         .and_then(|jump| password_from_ssh_auth(&jump.auth));
     let target_password = password_from_ssh_auth(&config.ssh_config.auth);
-    let responder = TerminalMfaResponder::new(event_tx, jump_password, target_password);
+    let responder = TerminalMfaResponder::new(event_tx, jump_password, target_password)
+        .with_otp(base_config.otp.clone());
     config.ssh_config.keyboard_interactive_responder = keyboard_interactive_enabled
         .then(|| Arc::new(responder.clone()) as Arc<dyn KeyboardInteractiveResponder>);
 
@@ -6271,6 +6295,7 @@ mod tests {
         let mut connection = StoredConnection::new_ssh(
             "Latest SSH".to_string(),
             SshParams {
+                otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
@@ -6342,6 +6367,7 @@ mod tests {
         let connection = StoredConnection::new_ssh(
             "Prompted SSH".to_string(),
             SshParams {
+                otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
@@ -6420,6 +6446,7 @@ mod tests {
         let connection = StoredConnection::new_ssh(
             "No keyboard-interactive".to_string(),
             SshParams {
+                otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
@@ -6484,6 +6511,7 @@ mod tests {
         let connection = StoredConnection::new_ssh(
             "Host-key retry".to_string(),
             SshParams {
+                otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
@@ -7345,6 +7373,75 @@ mod tests {
         .unwrap();
 
         assert_eq!(vec!["123456".to_string()], answers);
+    }
+
+    fn totp_secret() -> otp::OtpSecret {
+        // RFC 6238 SHA1 种子：ASCII "12345678901234567890"
+        otp::OtpSecret::parse("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ").expect("valid base32")
+    }
+
+    #[tokio::test]
+    async fn terminal_mfa_answers_verification_code_with_configured_otp_secret() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let responder = TerminalMfaResponder::new(event_tx, None, Some("login-secret".to_string()))
+            .with_otp(Some(totp_secret()));
+        let pending = responder.clone();
+        let task = tokio::spawn(async move {
+            pending
+                .respond(KeyboardInteractiveRequest {
+                    target: ssh::KeyboardInteractiveTarget::TargetServer,
+                    name: "MFA".to_string(),
+                    instructions: String::new(),
+                    prompts: vec![
+                        ssh::KeyboardInteractivePrompt {
+                            prompt: "Password:".to_string(),
+                            echo: false,
+                        },
+                        ssh::KeyboardInteractivePrompt {
+                            prompt: "Verification code:".to_string(),
+                            echo: false,
+                        },
+                    ],
+                })
+                .await
+        });
+
+        // 全自动应答不应产生待输入请求，也不会向界面发事件。
+        let answers = task.await.unwrap().unwrap();
+        assert_eq!(answers.len(), 2);
+        assert_eq!(answers[0], "login-secret");
+        assert_eq!(answers[1].len(), 6);
+        assert!(answers[1].chars().all(|c| c.is_ascii_digit()));
+        assert!(responder.pending_request().is_none());
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn terminal_mfa_falls_back_to_prompt_without_otp_secret() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let responder = TerminalMfaResponder::new(event_tx, None, Some("login-secret".to_string()));
+        let pending = responder.clone();
+        let task = tokio::spawn(async move {
+            pending
+                .respond(KeyboardInteractiveRequest {
+                    target: ssh::KeyboardInteractiveTarget::TargetServer,
+                    name: "MFA".to_string(),
+                    instructions: String::new(),
+                    prompts: vec![ssh::KeyboardInteractivePrompt {
+                        prompt: "Verification code:".to_string(),
+                        echo: false,
+                    }],
+                })
+                .await
+        });
+
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(TerminalEvent::SshMfaChanged)
+        ));
+        assert!(responder.pending_request().is_some());
+        assert!(responder.submit(vec!["654321".to_string()]));
+        assert_eq!(vec!["654321".to_string()], task.await.unwrap().unwrap());
     }
 
     #[test]
