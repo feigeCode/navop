@@ -1499,9 +1499,9 @@ QuickCommand:
     zh-CN: 命令
     zh-HK: 命令
   command_placeholder:
-    en: Enter command
-    zh-CN: 输入命令
-    zh-HK: 輸入命令
+    en: "Enter command, e.g. ssh {{host}} — use {{name}} for parameters"
+    zh-CN: "输入命令，如 ssh {{host}}；用 {{name}} 定义参数"
+    zh-HK: "輸入命令，如 ssh {{host}}；用 {{name}} 定義參數"
   parameters_title:
     en: Fill Command Parameters
     zh-CN: 填写命令参数

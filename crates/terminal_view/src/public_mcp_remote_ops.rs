@@ -35,17 +35,36 @@ fn merged_env(caller_env: &BTreeMap<String, String>) -> BTreeMap<String, String>
 }
 
 /// 把调用方 cwd/env 组装成 shell 前缀，拼到命令前面，确保 exec 在指定上下文执行。
-fn build_full_command(request: &RemoteExecRequest) -> String {
+fn build_full_command(command: &str, cwd: Option<&str>, env: &BTreeMap<String, String>) -> String {
     let mut prefix = String::new();
-    if let Some(cwd) = &request.cwd {
-        prefix.push_str(&format!("cd {cwd} && "));
+    if let Some(cwd) = cwd {
+        prefix.push_str(&cwd_prefix(cwd));
     }
-    for (key, value) in &request.env {
+    for (key, value) in env {
         // shell 安全引用 value；此处用单引号包裹并对内部单引号转义。
         let escaped = value.replace('\'', "'\"'\"'");
         prefix.push_str(&format!("{key}='{escaped}' "));
     }
-    format!("{prefix}{}", request.command)
+    format!("{prefix}{command}")
+}
+
+/// 生成 `cd <cwd> && ` 前缀。
+///
+/// cwd 常来自 shell 集成上报的真实路径，可能含空格（`/data/My Project`），
+/// 不加引号会被拆成多个参数；但 `~`、`$HOME` 这类显式要求 shell 展开的写法
+/// 必须保持原样，否则单引号会把展开禁用掉。
+fn cwd_prefix(cwd: &str) -> String {
+    if cwd.starts_with('~') || cwd.starts_with('$') {
+        return format!("cd {cwd} && ");
+    }
+    format!("cd {} && ", shell_quote(cwd))
+}
+
+/// 选择本次执行目录：显式参数优先，空白视为省略，省略时用终端上报的 cwd。
+fn inherit_cwd(requested: Option<&str>, reported: Option<&str>) -> Option<String> {
+    let requested = requested.map(str::trim).filter(|cwd| !cwd.is_empty());
+    let reported = reported.map(str::trim).filter(|cwd| !cwd.is_empty());
+    requested.or(reported).map(str::to_string)
 }
 
 /// 在当前 tokio runtime 上同步执行一个 async future。
@@ -104,6 +123,21 @@ impl SshRemoteOpsHandle {
 
     pub fn refresh(&self, snapshot: TerminalSessionSnapshot) {
         *self.state.lock().expect("remote ops state lock poisoned") = snapshot;
+    }
+
+    /// 本次执行实际使用的 cwd。
+    ///
+    /// 省略 `cwd` 时继承目标会话由 shell 集成上报的当前目录：用户说「写到当前目录」
+    /// 指的是他站的那个目录，而不是 SSH channel 的默认目录（通常是 `$HOME`）。
+    /// 调用方显式传了 `cwd`（包括 `~` / `$HOME`）就完全以它为准。
+    fn effective_cwd(&self, requested: Option<&str>) -> Option<String> {
+        let reported = self
+            .state
+            .lock()
+            .expect("remote ops state lock poisoned")
+            .cwd
+            .clone();
+        inherit_cwd(requested, reported.as_deref())
     }
 
     fn spawn_command(
@@ -202,7 +236,8 @@ impl RemoteOpsSessionHandle for SshRemoteOpsHandle {
 
     fn exec(&self, request: RemoteExecRequest) -> Result<RemoteExecResult> {
         let timeout_ms = request.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
-        let full_command = build_full_command(&request);
+        let cwd = self.effective_cwd(request.cwd.as_deref());
+        let full_command = build_full_command(&request.command, cwd.as_deref(), &request.env);
         let env = merged_env(&request.env);
 
         if matches!(request.mode, RemoteCommandMode::Background) {
@@ -261,7 +296,8 @@ impl RemoteOpsSessionHandle for SshRemoteOpsHandle {
             mode: public_mcp::remote_ops::RemoteCommandMode::Foreground,
         };
 
-        let full_command = build_full_command(&exec_request);
+        // 写入用绝对路径，不继承终端 cwd：避免把路径写进一个意外的工作目录。
+        let full_command = build_full_command(&exec_request.command, None, &exec_request.env);
         let env = merged_env(&exec_request.env);
         let spawned = self.spawn_command(full_command, env, Some(DEFAULT_TIMEOUT_MS))?;
         let completed = block_on_async(spawned.entry.wait_for_completion(Duration::from_millis(
@@ -547,18 +583,64 @@ mod tests {
     fn build_full_command_prepends_cwd_and_env() {
         let mut env = BTreeMap::new();
         env.insert("FOO".to_string(), "bar".to_string());
-        let request = RemoteExecRequest {
-            session_id: String::new(),
-            command: "echo hi".to_string(),
-            cwd: Some("/data".to_string()),
-            env,
-            timeout_ms: None,
-            mode: public_mcp::remote_ops::RemoteCommandMode::Foreground,
-        };
-        let full = build_full_command(&request);
-        assert!(full.starts_with("cd /data && "));
+        let full = build_full_command("echo hi", Some("/data"), &env);
+        assert!(full.starts_with("cd '/data' && "), "{full}");
         assert!(full.contains("FOO='bar'"));
         assert!(full.ends_with("echo hi"));
+    }
+
+    #[test]
+    fn build_full_command_quotes_cwd_with_spaces() {
+        let full = build_full_command("ls", Some("/data/My Project"), &BTreeMap::new());
+        assert_eq!("cd '/data/My Project' && ls", full);
+    }
+
+    #[test]
+    fn build_full_command_keeps_shell_expansion_in_cwd() {
+        let home = build_full_command("ls", Some("$HOME"), &BTreeMap::new());
+        assert_eq!("cd $HOME && ls", home);
+        let tilde = build_full_command("ls", Some("~/work"), &BTreeMap::new());
+        assert_eq!("cd ~/work && ls", tilde);
+    }
+
+    #[test]
+    fn build_full_command_without_cwd_has_no_prefix() {
+        assert_eq!(
+            "echo hi",
+            build_full_command("echo hi", None, &BTreeMap::new())
+        );
+    }
+
+    #[test]
+    fn omitted_cwd_inherits_the_visible_terminal_directory() {
+        assert_eq!(
+            Some("/data/v90_ai".to_string()),
+            inherit_cwd(None, Some("/data/v90_ai"))
+        );
+        assert_eq!(
+            Some("/data/v90_ai".to_string()),
+            inherit_cwd(Some("   "), Some("/data/v90_ai")),
+            "空白 cwd 视同省略"
+        );
+    }
+
+    #[test]
+    fn explicit_cwd_wins_over_the_visible_terminal_directory() {
+        assert_eq!(
+            Some("/tmp".to_string()),
+            inherit_cwd(Some("/tmp"), Some("/data/v90_ai"))
+        );
+        assert_eq!(
+            Some("$HOME".to_string()),
+            inherit_cwd(Some("$HOME"), Some("/data/v90_ai")),
+            "显式要求 shell 展开时不能被改写成绝对路径"
+        );
+    }
+
+    #[test]
+    fn missing_reported_cwd_leaves_the_default_directory_alone() {
+        assert_eq!(None, inherit_cwd(None, None));
+        assert_eq!(None, inherit_cwd(None, Some("  ")));
     }
 
     #[test]

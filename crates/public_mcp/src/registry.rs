@@ -18,6 +18,12 @@ use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 use tool_runtime::ResourceCapability;
 
+/// 资源作用域键：活动终端的当前工作目录（shell 集成 OSC 7 上报）。
+///
+/// `connections.list_sessions` 与侧栏 AI 的实时作用域共用这个键，模型据此把
+/// cwd 传给需要它的工具，而不是先 `pwd` 探一次或默认 `$HOME`。
+pub const SESSION_CWD_SCOPE: &str = "cwd";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalConnectionKind {

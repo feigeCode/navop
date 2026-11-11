@@ -30,6 +30,8 @@ mod theme_provider;
 mod tree_state;
 
 #[cfg(test)]
+mod dialog_contract_tests;
+#[cfg(test)]
 mod storage_tests;
 
 pub use model::{

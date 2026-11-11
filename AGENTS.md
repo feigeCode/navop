@@ -794,6 +794,13 @@
 - **验证方式**：`cargo test -p one-core --lib middle_click`（`middle_click_closes_a_tab_without_hitting_the_close_button` 覆盖只关光标下的标签且不抢激活；`middle_click_respects_uncloseable_tabs_and_leaves_left_click_alone` 覆盖不可关闭标签、固定标签与左键仍只切换）；变异验证：把 `close_tab(idx)` 改成 `close_tab(idx + 99)` 后第一条用例必须转红。回归面：`cargo test -p one-core --lib`、`cargo clippy -p one-core --all-targets`、`cargo check -p navop_app --all-targets`。
 - **适用范围**：`crates/core/src/tab_container.rs` 的标签栏手势，以及任何想给 gpui-component `TabBar` 页签加鼠标动作的站点。
 
+- **标题**：侧栏 AI 的「当前目录」必须同时贯通资源池、侧栏指令与 `ssh.exec` 默认值
+- **触发信号**：用户说「写到当前目录 / 在这个目录里跑」，AI 却写到了 `/root` 或 `$HOME`；或 AI 说「不知道你指的是哪个终端」，尽管侧栏明明已经注入了 cwd 作用域；也可能两者同时出现（工具视图里 4 个终端却都没有 cwd）。
+- **根因 / 约束**：cwd 只有 OSC 7 一条来源（`Terminal::current_working_dir`）。`PublicMcpSessionInfo.cwd` 一直是实时值，但 `agent_resource_from_session`（侧栏初始资源）与 `terminal_session_resource`（Public MCP / 工作台）都没把它写成作用域，`connections.list_sessions` 里只能靠终端标题碰巧带的 `root@host:/path` 猜；`ai_live_context` 的实时作用域只覆盖侧栏内置 AI 的当前轮；`ssh.exec` 省略 `cwd` 时完全不 `cd`（落 channel 默认目录）；ACP 后端不经资源池。任一个断点单独存在就会复现「看得见却写错」。
+- **正确做法**：`public_mcp::registry::SESSION_CWD_SCOPE` 作为唯一键，资源池与 `ai_live_context` 共用；`ssh.exec` 省略 `cwd` 时继承目标会话快照的 cwd，显式 `cwd`（含 `~` / `$HOME`）优先；cwd 前缀对普通路径加单引号（OSC 7 路径可能含空格），`~` / `$` 开头保持未引用以便 shell 展开；`terminal.exec` / `terminal.read` 允许省略 target，适配器只在 schema 真有 `target` 时才注入（按名匹配的假 provider 不能被凭空要求字段），多终端仍报错不猜；侧栏 `terminal_ai_system_instruction` 写明「作用域即现场」「没有 cwd 先确认」。多跳（堡垒机里再 `ssh`）上报的 cwd 属于内层机器，外层套用会 `cd` 失败——错误可见、可显式覆盖，与文件管理器直接采用 OSC 7 路径的取舍一致。
+- **验证方式**：`cargo test -p public_mcp`（默认 target 注入、schema 无 target 不注入、ssh.exec 描述）、`cargo test -p terminal_view --lib`（`public_mcp_remote_ops` 的 cwd 继承/引号、`ai_live_context`、`sidebar::tests` 指令契约；本机 `git 1.8.3.1` 不支持 `for-each-ref %(HEAD)`，`composer_context::git_directory_reports_branches_and_main_checkout` 会环境性失败）、`cargo test -p navop_app --no-default-features --features wasm-components,windows-native-rdp,database,shell --lib public_mcp_runtime::resource_pool`（默认特性拉 `nsh-host`，本机 quickjs 的 C 代码因缺 C99 编译失败）。变异验证：把 `inherit_cwd` 改成只用显式参数，`omitted_cwd_inherits_the_visible_terminal_directory` 必须转红。
+- **适用范围**：`crates/public_mcp/src/{registry.rs,tools/agent_runtime_adapter.rs,tools/remote_ops.rs}`、`crates/terminal_view/src/{public_mcp.rs,public_mcp_remote_ops.rs,ai_live_context/mod.rs,sidebar/mod.rs}`、`crates/navop_app/src/public_mcp_runtime/resource_pool.rs`、`crates/agent_runtime/locales/agent_runtime.yml`，以及任何「资源作用域 → 工具默认参数」的贯通改造。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。
