@@ -34,6 +34,7 @@ use gpui_component::{
 use one_assets::IconName;
 use one_core::background_tasks::{BackgroundTaskHandle, BackgroundTaskSpec};
 use one_core::gpui_tokio::Tokio;
+use one_core::notification_throttle::NotificationThrottle;
 use one_core::sidebar_contribution::SidebarPlacement;
 use one_core::storage::models::{ConnectionType, StoredConnection};
 use one_core::storage::{
@@ -457,6 +458,60 @@ struct RetryResetPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NavigationRecoveryPlan {
     fallback_path: String,
+}
+
+/// 读目录失败后允许自动回退的次数上限。
+///
+/// 会话断开时每次 `list_dir` 都会立刻失败；若失败后无条件「回退 + 刷新」，就会
+/// 形成「失败 → 回退 → 刷新 → 失败」的无限循环（issue #534：3 分钟 2000 万条
+/// 错误日志、一晚 214 GB）。额度用完后必须停下等用户点重试。
+const NAVIGATION_RECOVERY_MAX_ATTEMPTS: u32 = 2;
+
+/// 同一条「读目录失败」通知的最短间隔。
+const NAVIGATION_FAILURE_NOTICE_WINDOW: Duration = Duration::from_secs(8);
+
+/// 自动回退的额度与已尝试路径。
+///
+/// 两个维度都要记：只数次数挡不住 A → B → A 的历史回退环路，只记路径又挡不住
+/// 无限次数的来回刷新。任何一次成功列出目录或用户主动导航都会 `reset`。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct NavigationRecovery {
+    attempts: u32,
+    tried_paths: Vec<String>,
+}
+
+impl NavigationRecovery {
+    fn reset(&mut self) {
+        self.attempts = 0;
+        self.tried_paths.clear();
+    }
+
+    /// 规划一次自动回退；`None` 表示必须停下等用户（额度用尽或没有新路径）。
+    fn next_fallback(
+        &mut self,
+        failed_path: &str,
+        working_dir: Option<&str>,
+        history: &[String],
+        history_index: usize,
+    ) -> Option<String> {
+        if self.attempts >= NAVIGATION_RECOVERY_MAX_ATTEMPTS {
+            return None;
+        }
+
+        let plan = build_navigation_recovery_plan(failed_path, working_dir, history, history_index);
+        if plan.fallback_path == failed_path
+            || self
+                .tried_paths
+                .iter()
+                .any(|path| path == &plan.fallback_path)
+        {
+            return None;
+        }
+
+        self.attempts += 1;
+        self.tried_paths.push(plan.fallback_path.clone());
+        Some(plan.fallback_path)
+    }
 }
 
 fn build_retry_reset_plan(current_path: &str, working_dir: Option<String>) -> RetryResetPlan {
@@ -1410,6 +1465,10 @@ pub struct FileManagerPanel {
     focus_handle: FocusHandle,
     /// 是否正在加载目录
     loading: bool,
+    /// 读目录失败后的自动回退额度
+    navigation_recovery: NavigationRecovery,
+    /// 读目录失败通知的节流（同一条错误短时间内只弹一次）
+    navigation_failure_notice: NotificationThrottle,
     /// 文件复制/剪切缓冲区
     file_clipboard: Option<RemoteFileClipboard>,
     favorite_paths: Vec<String>,
@@ -1573,6 +1632,8 @@ impl FileManagerPanel {
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle,
             loading: false,
+            navigation_recovery: NavigationRecovery::default(),
+            navigation_failure_notice: NotificationThrottle::new(NAVIGATION_FAILURE_NOTICE_WINDOW),
             file_clipboard: None,
             favorite_paths,
             favorite_connection_id,
@@ -1688,6 +1749,7 @@ impl FileManagerPanel {
                     }
                     this.sftp_client = Some(Arc::new(Mutex::new(Box::new(client))));
                     this.connection_state = ConnectionState::Connected;
+                    this.navigation_recovery.reset();
                     let real_path = normalize_remote_path(&real_path);
                     this.current_path = real_path.clone();
                     this.working_dir_hint = Some(real_path.clone());
@@ -1734,6 +1796,7 @@ impl FileManagerPanel {
     }
 
     fn apply_retry_reset_plan(&mut self, plan: RetryResetPlan) {
+        self.navigation_recovery.reset();
         self.connection_state = plan.next_state;
         self.working_dir_hint = plan.initial_working_dir;
         self.sftp_client = None;
@@ -1779,28 +1842,56 @@ impl FileManagerPanel {
     }
 
     fn recover_from_navigation_error(&mut self, message: String, cx: &mut Context<Self>) {
-        if let Some(window) = cx.active_window() {
-            let notification =
-                Notification::error(t!("FileManager.read_dir_failed_recovered", error = message))
-                    .autohide(true);
-            let _ = window.update(cx, |_, window, cx| {
-                window.push_notification(notification, cx);
-            });
-        }
-
-        let plan = build_navigation_recovery_plan(
+        self.loading = false;
+        let fallback_path = self.navigation_recovery.next_fallback(
             &self.current_path,
             self.working_dir_hint.as_deref(),
             &self.history,
             self.history_index,
         );
-        let failed_path = self.current_path.clone();
 
+        let Some(fallback_path) = fallback_path else {
+            // 已经自动回退过：再刷新只会重新撞同一面墙。停下来把错误交给用户，
+            // 由面板上的重试按钮显式重连（issue #534 的无限弹窗正是缺了这一步）。
+            tracing::error!(
+                path = %self.current_path,
+                attempts = self.navigation_recovery.attempts,
+                error = %message,
+                "读目录失败，已停止自动回退"
+            );
+            self.connection_state = ConnectionState::Error(
+                t!("FileManager.read_dir_failed", error = message).to_string(),
+            );
+            clear_remote_listing_state(
+                &mut self.items,
+                &mut self.filtered_indices,
+                &mut self.selected_indices,
+            );
+            cx.notify();
+            return;
+        };
+
+        self.push_navigation_failure_notice(message, cx);
+        let failed_path = self.current_path.clone();
         self.connection_state = ConnectionState::Connected;
-        self.loading = false;
-        self.current_path = plan.fallback_path.clone();
-        self.repair_history_after_navigation_failure(&failed_path, &plan.fallback_path);
+        self.current_path = fallback_path.clone();
+        self.repair_history_after_navigation_failure(&failed_path, &fallback_path);
         self.refresh_dir(cx);
+    }
+
+    /// 推送「已返回上一级」提示，同一文案在时间窗内只弹一次。
+    fn push_navigation_failure_notice(&mut self, message: String, cx: &mut Context<Self>) {
+        let notice = t!("FileManager.read_dir_failed_recovered", error = message).to_string();
+        if !self.navigation_failure_notice.should_show(&notice) {
+            tracing::debug!("抑制重复的读目录失败通知");
+            return;
+        }
+        if let Some(window) = cx.active_window() {
+            let notification = Notification::error(notice).autohide(true);
+            let _ = window.update(cx, |_, window, cx| {
+                window.push_notification(notification, cx);
+            });
+        }
     }
 
     pub fn reconnect_with_working_dir(
@@ -2374,6 +2465,7 @@ impl FileManagerPanel {
 
                 match result {
                     Ok(Ok(entries)) => {
+                        this.navigation_recovery.reset();
                         this.items = entries
                             .into_iter()
                             .filter(|e| e.name != "." && e.name != "..")
@@ -2411,6 +2503,8 @@ impl FileManagerPanel {
 
     /// 导航到指定路径
     fn navigate_to(&mut self, path: String, cx: &mut Context<Self>) {
+        // 用户主动导航意味着「重新开始」：清掉上一次失败留下的回退额度。
+        self.navigation_recovery.reset();
         let path = resolve_remote_path(&self.current_path, &path);
         if path == self.current_path {
             self.refresh_dir(cx);
@@ -2433,6 +2527,7 @@ impl FileManagerPanel {
     /// 后退
     fn go_back(&mut self, cx: &mut Context<Self>) {
         if self.history_index > 0 {
+            self.navigation_recovery.reset();
             self.history_index -= 1;
             self.current_path = self.history[self.history_index].clone();
             self.scroll_handle = UniformListScrollHandle::new();
@@ -4670,6 +4765,8 @@ impl FileManagerPanel {
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _window, cx| {
+                                    // 手动刷新是用户显式重试，重新给予回退额度。
+                                    this.navigation_recovery.reset();
                                     this.refresh_dir(cx);
                                 }),
                             )
@@ -6239,15 +6336,15 @@ impl Render for FileManagerPanel {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionState, FileConflictChoice, NavigationRecoveryPlan, PendingUpload,
-        RemoteClipboardEntry, RemoteClipboardKind, RemoteFileClipboard, ReportedHostDecision,
-        ReportedHostTracker, ReportedWorkingDir, SharedProgress, TerminalColors,
-        TransferCancelTarget, TransferOperation, TransferQueue, TransferTask, TransferTaskState,
-        build_navigation_recovery_plan, build_retry_reset_plan, can_paste_remote_file_clipboard,
-        classify_reported_host, clear_remote_listing_state, frame_move_options,
-        global_transfer_action, is_file_browsable_connection, resolve_upload_conflict,
-        should_apply_directory_result, should_refresh_after_delete, should_refresh_after_upload,
-        toggle_icon_color, transfer_progress_display_label,
+        ConnectionState, FileConflictChoice, NAVIGATION_RECOVERY_MAX_ATTEMPTS, NavigationRecovery,
+        NavigationRecoveryPlan, PendingUpload, RemoteClipboardEntry, RemoteClipboardKind,
+        RemoteFileClipboard, ReportedHostDecision, ReportedHostTracker, ReportedWorkingDir,
+        SharedProgress, TerminalColors, TransferCancelTarget, TransferOperation, TransferQueue,
+        TransferTask, TransferTaskState, build_navigation_recovery_plan, build_retry_reset_plan,
+        can_paste_remote_file_clipboard, classify_reported_host, clear_remote_listing_state,
+        frame_move_options, global_transfer_action, is_file_browsable_connection,
+        resolve_upload_conflict, should_apply_directory_result, should_refresh_after_delete,
+        should_refresh_after_upload, toggle_icon_color, transfer_progress_display_label,
     };
     use crate::transfer_notice::TransferAction;
     use anyhow::{Result, anyhow};
@@ -7080,6 +7177,58 @@ mod tests {
     }
 
     #[gpui::test]
+    fn read_dir_failure_still_recovers_once(mut cx: &mut TestAppContext) {
+        let temp_dir = tempfile::TempDir::new().expect("create fixture temp dir");
+        let (_provider, _executor, panel, _window) = file_manager_fixture(&mut cx, &temp_dir);
+
+        let refresh_count = Arc::new(AtomicU64::new(0));
+        panel.update(cx, |this, cx| {
+            this.set_test_refresh_count(refresh_count.clone());
+            this.recover_from_navigation_error("session closed".to_string(), cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            refresh_count.load(Ordering::Relaxed),
+            1,
+            "第一次失败应回退到历史路径并只刷新一次"
+        );
+        panel.read_with(cx, |panel, _| {
+            assert_eq!(panel.current_path, "/");
+            assert!(!matches!(panel.connection_state, ConnectionState::Error(_)));
+        });
+    }
+
+    #[gpui::test]
+    fn read_dir_failure_stops_auto_refresh_after_the_budget(mut cx: &mut TestAppContext) {
+        let temp_dir = tempfile::TempDir::new().expect("create fixture temp dir");
+        let (_provider, _executor, panel, _window) = file_manager_fixture(&mut cx, &temp_dir);
+
+        let refresh_count = Arc::new(AtomicU64::new(0));
+        panel.update(cx, |this, cx| {
+            this.set_test_refresh_count(refresh_count.clone());
+            // 会话断开后的典型形态：回退额度已经耗尽，列表依然失败。
+            this.navigation_recovery.attempts = NAVIGATION_RECOVERY_MAX_ATTEMPTS;
+            this.navigation_recovery.tried_paths = vec!["/".to_string()];
+            this.recover_from_navigation_error("session closed".to_string(), cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            refresh_count.load(Ordering::Relaxed),
+            0,
+            "额度用尽后不得再自行刷新，否则就是 issue #534 的无限循环"
+        );
+        panel.read_with(cx, |panel, _| {
+            assert!(
+                matches!(panel.connection_state, ConnectionState::Error(_)),
+                "停下后必须显示错误态，让用户手动重试"
+            );
+            assert!(panel.items.is_empty());
+        });
+    }
+
+    #[gpui::test]
     fn delete_finish_refreshes_once_and_ignores_duplicate_finished(mut cx: &mut TestAppContext) {
         let temp_dir = tempfile::TempDir::new().expect("create fixture temp dir");
         let (provider, _executor, panel, _window) = file_manager_fixture(&mut cx, &temp_dir);
@@ -7632,6 +7781,64 @@ mod tests {
             NavigationRecoveryPlan {
                 fallback_path: "/srv/home".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn navigation_recovery_stops_after_the_attempt_budget() {
+        let mut recovery = NavigationRecovery::default();
+
+        assert_eq!(
+            recovery.next_fallback("/a", Some("/b"), &[], 0).as_deref(),
+            Some("/b")
+        );
+        assert_eq!(
+            recovery.next_fallback("/b", Some("/c"), &[], 0).as_deref(),
+            Some("/c")
+        );
+        assert_eq!(
+            recovery.next_fallback("/c", Some("/d"), &[], 0),
+            None,
+            "额度用尽后必须停下（issue #534：无限回退 + 无限刷新）"
+        );
+        assert_eq!(recovery.attempts, NAVIGATION_RECOVERY_MAX_ATTEMPTS);
+    }
+
+    #[test]
+    fn navigation_recovery_refuses_repeating_a_failed_path() {
+        let mut recovery = NavigationRecovery::default();
+        let history = vec!["/srv/home".to_string(), "/srv/invalid".to_string()];
+
+        assert_eq!(
+            recovery
+                .next_fallback("/srv/invalid", None, &history, 1)
+                .as_deref(),
+            Some("/srv/home")
+        );
+        // 回到已经试过的路径（A → B → A 环路）必须拒绝。
+        assert_eq!(
+            recovery.next_fallback("/srv/other", Some("/srv/home"), &history, 0),
+            None
+        );
+
+        // 根目录没有可回退的上级，回落目标就是它自己：再刷新只会重复失败。
+        let mut at_root = NavigationRecovery::default();
+        assert_eq!(at_root.next_fallback("/", None, &[], 0), None);
+    }
+
+    #[test]
+    fn navigation_recovery_reset_restores_the_budget() {
+        let mut recovery = NavigationRecovery::default();
+        assert!(recovery.next_fallback("/a", Some("/b"), &[], 0).is_some());
+        assert!(recovery.next_fallback("/b", Some("/c"), &[], 0).is_some());
+        assert!(recovery.next_fallback("/c", Some("/d"), &[], 0).is_none());
+
+        recovery.reset();
+
+        assert_eq!(
+            recovery.next_fallback("/c", Some("/d"), &[], 0).as_deref(),
+            Some("/d"),
+            "用户主动导航或成功列出目录后应重新获得回退额度"
         );
     }
 

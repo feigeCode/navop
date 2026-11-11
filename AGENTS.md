@@ -801,6 +801,13 @@
 - **验证方式**：`cargo test -p public_mcp`（默认 target 注入、schema 无 target 不注入、ssh.exec 描述）、`cargo test -p terminal_view --lib`（`public_mcp_remote_ops` 的 cwd 继承/引号、`ai_live_context`、`sidebar::tests` 指令契约；本机 `git 1.8.3.1` 不支持 `for-each-ref %(HEAD)`，`composer_context::git_directory_reports_branches_and_main_checkout` 会环境性失败）、`cargo test -p navop_app --no-default-features --features wasm-components,windows-native-rdp,database,shell --lib public_mcp_runtime::resource_pool`（默认特性拉 `nsh-host`，本机 quickjs 的 C 代码因缺 C99 编译失败）。变异验证：把 `inherit_cwd` 改成只用显式参数，`omitted_cwd_inherits_the_visible_terminal_directory` 必须转红。
 - **适用范围**：`crates/public_mcp/src/{registry.rs,tools/agent_runtime_adapter.rs,tools/remote_ops.rs}`、`crates/terminal_view/src/{public_mcp.rs,public_mcp_remote_ops.rs,ai_live_context/mod.rs,sidebar/mod.rs}`、`crates/navop_app/src/public_mcp_runtime/resource_pool.rs`、`crates/agent_runtime/locales/agent_runtime.yml`，以及任何「资源作用域 → 工具默认参数」的贯通改造。
 
+- **标题**：目录读取失败的「回退 + 重试」必须限量，日志必须在运行期轮转
+- **触发信号**：某个面板/页签在会话断开后疯狂刷同一条错误，弹窗关不掉、日志几分钟涨几个 GB（issue #534：3 分钟 2000 万条、一晚 214 GB）；或异步错误回调里既打日志又推通知、还顺手 `refresh` 一次。
+- **根因 / 约束**：`FileManagerPanel::recover_from_navigation_error` 失败后无条件「回退到上级 + `refresh_dir`」，而会话断开时 `list_dir` 立刻失败，于是「失败 → 回退 → 刷新 → 失败」在异步任务里无限自我驱动（`cx.spawn` 里重入，不是栈溢出，纯 CPU/IO 空转）；每次还推一条通知、打一条 `error!`。日志侧只在**启动时**按 64 MB 轮转，单次运行写多少都不设限，所以磁盘占用没有上界。
+- **正确做法**：把「自动回退」建成显式状态机并限量：`NavigationRecovery { attempts, tried_paths }`，额度用尽或回退目标与失败路径相同/已在 `tried_paths` 中（A → B → A 环路）就停下，切 `ConnectionState::Error` 清列表等用户点重试；成功列出目录、用户主动导航、手动刷新、重连才 `reset()`。通知走 `one_core::notification_throttle::NotificationThrottle`（同文案 + 时间窗去重，被压制的调用不刷新时间戳）。日志用 `RotatingLogWriter`（`navop_app`）在**每次写入前**检查体积，超过上限改名 `.1` 并重开文件，磁盘稳定在 2 × 上限；写入器内部严禁再打日志（重入），轮转失败静默继续追加。
+- **验证方式**：`cargo test -p terminal_view --lib file_manager_panel`（`navigation_recovery_stops_after_the_attempt_budget`、`read_dir_failure_stops_auto_refresh_after_the_budget`、`read_dir_failure_still_recovers_once`）、`cargo test -p one-core --lib notification_throttle`、`cargo test -p navop_app --no-default-features --features wasm-components,windows-native-rdp,database,shell --lib log_`（`rotating_log_writer_*` 用可注入上限的 `open_with_limit`，含「单条日志超上限不得反复轮转」）。变异验证：把 `recover_from_navigation_error` 改回无条件刷新、去掉 `attempts` 上限，对应用例必须转红。
+- **适用范围**：`crates/terminal_view/src/sidebar/file_manager_panel.rs`、`crates/navop_app/src/navop_app.rs`（`RotatingLogWriter` / `log_file_appender`）、`crates/core/src/notification_throttle.rs`，以及任何「错误回调里自动重试 / 自动刷新 + 打日志 + 推通知」的异步闭环。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。
