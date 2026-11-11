@@ -16,8 +16,9 @@ use terminal::terminal::Terminal;
 
 pub(crate) use context::{LiveContextInputs, build_live_resource_context};
 
-/// 作用域键：当前工作目录。
-const SCOPE_WORKING_DIR: &str = "cwd";
+/// 作用域键：当前工作目录。与 `connections.list_sessions` 共用同一个键，
+/// 模型不必区分「资源池里的 cwd」和「侧栏里的 cwd」。
+const SCOPE_WORKING_DIR: &str = public_mcp::registry::SESSION_CWD_SCOPE;
 /// 作用域键：屏幕形态（普通 shell / 全屏交互程序）。
 const SCOPE_SCREEN: &str = "screen";
 /// 作用域键：终端选中内容摘要。

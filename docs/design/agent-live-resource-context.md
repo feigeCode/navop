@@ -119,6 +119,33 @@ shell 输出继续分析。
   模型知道正文就在消息里，不用再调工具。
 - **只作用于本地内置会话**：ACP 会话有自己的输入通道，不经过这里。
 
+### 2.7 cwd 进入资源池，并成为 `ssh.exec` 的默认目录
+
+§2.2 的作用域只对「侧栏内置 AI 的当前轮」有效，另有两处缺口，现已补齐：
+
+- **资源池**：`PublicMcpSessionInfo.cwd` 本来就随终端事件刷新，但
+  `terminal_session_resource`（Public MCP / 工作台）与 `agent_resource_from_session`
+  （侧栏初始资源）都没把它写成作用域，`connections.list_sessions` 返回的终端于是只剩
+  标题里的 `root@host:/path`。现在两处都写成 `cwd` 作用域，键统一为
+  `public_mcp::registry::SESSION_CWD_SCOPE`，与 `ai_live_context` 共用，避免两套视图漂移。
+- **执行**：`ssh.exec` 省略 `cwd` 时使用目标终端上报的当前目录
+  （`SshRemoteOpsHandle::effective_cwd`），显式 `cwd`（含 `~` / `$HOME`）仍然优先。
+  这样即使模型忽略作用域，相对路径也落在用户眼前那个目录，而不是 channel 默认的
+  `$HOME`。cwd 前缀统一走 `cwd_prefix`：普通路径加单引号（OSC 7 路径可能含空格），
+  `~` / `$` 开头保持未引用以便 shell 展开。
+- **可省略 target 的执行入口**：`terminal.exec` 与 `terminal.read` 一样允许省略 `target`，
+  由会话的默认终端兜底；多个终端而又没有当前终端时仍然报错，不猜。
+  `terminal.control` / `terminal.write_keys` 继续保持必须显式 target。
+- **侧栏系统指令**：`terminal_ai_system_instruction` 增加「作用域即现场」「路径工作走
+  `terminal_exec`」「`ssh_exec` 显式覆盖 cwd」「没有 cwd 先确认」四条规则，让模型不依赖
+  用户每轮重复贴自定义指令。
+
+多跳会话（堡垒机里再 `ssh`）上报的 cwd 属于内层机器，`ssh.exec` 默认套用会在外层
+`cd` 失败——错误是可见的（`cd: No such file`），模型可按提示显式覆盖；这与文件管理器
+同样直接采用 OSC 7 路径的既有取舍一致。
+
+ACP 会话仍然拿不到这些状态（见 §4）。
+
 ## 3. 不做什么
 
 - **不把整屏塞进 prompt**：40 行约 600–800 token/轮，还会随对话历史反复发送。
@@ -143,6 +170,11 @@ shell 输出继续分析。
   全屏状态；`terminal.read` 不传 target 时是否读到当前终端。
 
 ## 5. 已知取舍
+
+- **ACP 不经过资源池与侧栏系统指令**：ACP agent 只有 `session/new` 的本地 workspace root，
+  看不到远端 cwd；要让它知道现场，需另做 prompt 前言或依赖它主动 `connections.list_sessions`。
+- **多跳会话的 cwd 归属**：`ssh.exec` 默认继承 cwd 不校验上报主机，与外层机器不一致时
+  表现为 `cd` 失败（可见错误），而不是静默落到错误目录。
 
 - **前缀缓存**：资源池位于 system prompt，作用域变化会让前缀失效。但 `{{current_time}}`
   精确到秒、每个 step 都在变，前缀缓存当前并未生效；若要修复缓存，应把时间与资源池一起

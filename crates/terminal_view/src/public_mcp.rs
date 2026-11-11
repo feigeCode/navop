@@ -85,6 +85,20 @@ fn agent_resource_from_session(
         label,
     )
     .with_alias(session.session_id);
+    // cwd 在快照里一直有（OSC 7）却只给每轮刷新的实时作用域用，初始资源池与
+    // 其它消费者看不到；这里补上，保证「感知」不依赖刷新时机。
+    if let Some(cwd) = session
+        .cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|cwd| !cwd.is_empty())
+    {
+        resource = resource.with_scope(agent_runtime::ResourceScope::new(
+            public_mcp::registry::SESSION_CWD_SCOPE,
+            "Working directory",
+            cwd,
+        ));
+    }
     if let Some(connection_id) = session.connection_id {
         resource = resource.with_alias(connection_id.to_string());
     }
@@ -684,6 +698,12 @@ mod tests {
                 .capabilities
                 .contains(&agent_runtime::ResourceCapability::TerminalExec)
         );
+        let cwd = resource
+            .scopes
+            .iter()
+            .find(|scope| scope.key == public_mcp::registry::SESSION_CWD_SCOPE)
+            .expect("终端资源应带 cwd 作用域");
+        assert_eq!("/tmp/project", cwd.value);
     }
 
     fn snapshot(state: McpConnectionState) -> TerminalSessionSnapshot {

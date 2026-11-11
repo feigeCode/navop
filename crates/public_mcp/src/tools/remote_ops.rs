@@ -255,7 +255,7 @@ fn remote_exec_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
         id: "ssh.exec",
         title: "Execute remote command",
-        description: "The default choice for Agent-owned remote automation, diagnostics, builds, and non-interactive checks. Runs on an isolated SSH channel with structured stdout, stderr, and exit_code, so it can execute without occupying the user's visible terminal. It has no interactive stdin: stdin is closed after launch. Supply a complete, self-contained command that does not wait for confirmation, passwords, pagers, editors, REPL input, or other TTY input. Use foreground for bounded commands expected to exit, and background only for intentionally long-running non-interactive work. It does not inherit the current visible terminal's cwd, activated virtual environment, shell aliases/functions, or temporary environment variables unless cwd/env/command setup is supplied explicitly. Use terminal.exec instead only when the command must run in the current visible terminal or inherit that live shell state. Output is incremental; a foreground wait timeout returns command_id for ssh.command.poll/output/cancel and does not prove completion. Use sftp.read/write for file contents.",
+        description: "The default choice for Agent-owned remote automation, diagnostics, builds, and non-interactive checks. Runs on an isolated SSH channel with structured stdout, stderr, and exit_code, so it can execute without occupying the user's visible terminal. It has no interactive stdin: stdin is closed after launch. Supply a complete, self-contained command that does not wait for confirmation, passwords, pagers, editors, REPL input, or other TTY input. Use foreground for bounded commands expected to exit, and background only for intentionally long-running non-interactive work. When `cwd` is omitted it starts in the target terminal's current working directory as reported by shell integration, so relative paths match what the user sees; pass `cwd` explicitly to override (for example a clean absolute path, or `$HOME`). It still does not inherit the terminal's activated virtual environment, shell aliases/functions, or temporary environment variables. Use terminal.exec instead only when the command must run in the current visible terminal or inherit that live shell state. Output is incremental; a foreground wait timeout returns command_id for ssh.command.poll/output/cancel and does not prove completion. Use sftp.read/write for file contents.",
         schema: exec_schema_value,
         read_only: false,
         open_world: true,
@@ -328,7 +328,13 @@ fn exec_schema() -> Arc<JsonObject> {
     props.insert("connection".to_string(), string_schema());
     props.insert("connection_id".to_string(), string_schema());
     props.insert("session_id".to_string(), string_schema());
-    props.insert("cwd".to_string(), json!({ "type": ["string", "null"] }));
+    props.insert(
+        "cwd".to_string(),
+        json!({
+            "type": ["string", "null"],
+            "description": "Directory to run in. Omit it to inherit the target terminal's current directory (reported by shell integration), so relative paths match the user's visible prompt. Pass an absolute path to override, or `$HOME`/`~` to ask the remote shell to expand them."
+        }),
+    );
     props.insert(
         "env".to_string(),
         json!({ "type": "object", "additionalProperties": { "type": "string" } }),

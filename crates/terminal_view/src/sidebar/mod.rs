@@ -142,7 +142,11 @@ fn terminal_ai_system_instruction(connection_kind: TerminalConnectionKind) -> St
 4. 如果任务需要多步骤，请拆成多个独立代码块，每个代码块只对应一步的一条命令。
 5. 解释、注意事项、风险提示、步骤标题必须写在代码块外面，保持简洁。
 6. 如果命令依赖 sudo、包管理器或发行版差异，请先简短说明再给命令。
-7. 如果用户明确要求其他平台、非命令答案或更详细的解释，再按用户要求调整。"#
+7. 如果用户明确要求其他平台、非命令答案或更详细的解释，再按用户要求调整。
+8. 资源作用域里的 cwd / screen / selection 是这台终端此刻的现场：涉及路径或「当前目录」时直接使用，不要猜测，也不要默认 $HOME 或 /root。
+9. 需要继承当前目录、已激活虚拟环境、alias/函数或临时环境变量时，用 terminal_exec（即 terminal.exec）；省略 target 时会落到当前终端，正在前台输入时可能返回 Busy，此时不要改用 ssh_exec 去猜目录。
+10. 用 ssh_exec（即 ssh.exec）做后台远程执行时，省略 cwd 会继承目标终端的当前目录；若作用域里的 cwd 与目标机器不一致（例如终端里又 ssh 到了另一台机器），必须显式传 cwd；需要干净目录时显式传 cwd（绝对路径或 $HOME）。
+11. 作用域里没有 cwd 时不要假设任何目录：先用 terminal_read 确认现场，或直接询问用户。"#
     )
 }
 
@@ -2302,6 +2306,25 @@ mod tests {
 
         assert!(instruction.contains(std::env::consts::OS));
         assert!(instruction.contains("不要默认假定为 Linux"));
+    }
+
+    #[test]
+    fn terminal_ai_instruction_points_path_work_at_the_live_scope() {
+        for kind in [TerminalConnectionKind::Local, TerminalConnectionKind::Ssh] {
+            let instruction = terminal_ai_system_instruction(kind);
+
+            assert!(instruction.contains("cwd"), "{kind:?}: {instruction}");
+            assert!(instruction.contains("terminal_exec"));
+            assert!(instruction.contains("ssh_exec"));
+            assert!(
+                instruction.contains("不要猜测"),
+                "{kind:?} 应明确禁止猜当前目录"
+            );
+            assert!(
+                instruction.contains("没有 cwd"),
+                "{kind:?} 应说明 cwd 缺失时先确认"
+            );
+        }
     }
 
     #[test]

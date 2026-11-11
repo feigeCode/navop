@@ -17,15 +17,20 @@ use std::sync::Arc;
 /// 允许模型省略 `target` 的工具，及其需要的资源类型。
 ///
 /// 省略时由本适配器补上会话的默认资源；显式传 `target` 的行为不变。
-const DEFAULT_TARGET_TOOLS: [(&str, ResourceKind); 1] = [("terminal.read", ResourceKind::Terminal)];
+/// 只收可省略且不增加风险的读/执行入口：`terminal.control` 与
+/// `terminal.write_keys` 要求显式 target，因为它们是可控到单个前台程序的危险动作。
+const DEFAULT_TARGET_TOOLS: [(&str, ResourceKind); 2] = [
+    ("terminal.read", ResourceKind::Terminal),
+    ("terminal.exec", ResourceKind::Terminal),
+];
 const TARGET_FIELD: &str = "target";
 const PROPERTIES_FIELD: &str = "properties";
 const REQUIRED_FIELD: &str = "required";
 const DESCRIPTION_FIELD: &str = "description";
-const DEFAULT_TARGET_DESCRIPTION: &str = "Exact `id` of the terminal to read. Omit it to read the default terminal of this session \
+const DEFAULT_TARGET_DESCRIPTION: &str = "Exact `id` of the terminal to use. Omit it to use the default terminal of this session \
      (the resource marked [current], or the only terminal available). Pass an explicit id from \
-     `connections.list_sessions` with kind=\"terminal\" to read another terminal.";
-const DEFAULT_TARGET_TOOL_HINT: &str = "The `target` field may be omitted to read the default \
+     `connections.list_sessions` with kind=\"terminal\" to target another terminal.";
+const DEFAULT_TARGET_TOOL_HINT: &str = "The `target` field may be omitted to use the default \
      terminal of this session.";
 
 pub fn agent_runtime_tool_registry(
@@ -81,7 +86,12 @@ impl AgentTool for PublicMcpAgentTool {
 
     async fn execute(&self, invocation: ToolInvocation) -> Result<ToolObservation, ToolError> {
         let arguments = invocation_arguments(invocation.arguments.clone())?;
-        let arguments = with_default_target(&self.original_name, arguments, &invocation.resources)?;
+        let arguments = with_default_target(
+            &self.original_name,
+            arguments,
+            &invocation.resources,
+            declares_target_field(&self.parameters),
+        )?;
         let result = self
             .registry
             .call_tool_with_cancellation(
@@ -177,18 +187,34 @@ fn agent_description(tool_name: &str, tool: &Tool) -> String {
     format!("{description} {DEFAULT_TARGET_TOOL_HINT}")
 }
 
+/// 转接层的工具是否真的声明了 `target` 字段。
+///
+/// `DEFAULT_TARGET_TOOLS` 按工具名匹配，但同名的外部 provider 未必提供 `target`
+/// （例如只接 `command` 的简单工具）：此时不能凭空要求一个 schema 里不存在的字段。
+fn declares_target_field(parameters: &Value) -> bool {
+    parameters
+        .get(PROPERTIES_FIELD)
+        .and_then(Value::as_object)
+        .is_some_and(|properties| properties.contains_key(TARGET_FIELD))
+}
+
 /// 模型省略 `target` 时补上会话的默认资源。
 ///
-/// 只有泛型上允许省略的工具才会被替换；显式 target（含空串）保持原样，
-/// 由工具自己报参数错误。找不到可用默认资源时给出可执行的下一步。
+/// 只有泛型上允许省略、且 schema 确实声明了 `target` 的工具才会被替换；
+/// 显式 target（含空串）保持原样，由工具自己报参数错误。找不到可用默认资源时
+/// 给出可执行的下一步。
 fn with_default_target(
     tool_name: &str,
     mut arguments: JsonObject,
     resources: &ResourceContext,
+    declares_target: bool,
 ) -> Result<JsonObject, ToolError> {
     let Some(kind) = default_target_kind(tool_name) else {
         return Ok(arguments);
     };
+    if !declares_target {
+        return Ok(arguments);
+    }
     let explicit = arguments
         .get(TARGET_FIELD)
         .and_then(Value::as_str)
@@ -620,6 +646,101 @@ mod tests {
         agent_runtime::ResourceRef::new(id, ResourceKind::Terminal, "本地终端")
     }
 
+    #[tokio::test]
+    async fn terminal_exec_spec_allows_omitting_target_and_injects_it() {
+        let provider = Arc::new(TerminalExecProvider::default());
+        let registry = agent_runtime_tool_registry(
+            crate::tools::PublicMcpToolRegistry::new(vec![provider.clone()]),
+            PermissionMode::Deny,
+            PublicMcpApprovalManager::default(),
+        );
+
+        let spec = registry
+            .specs(&ResourceContext::new())
+            .into_iter()
+            .find(|spec| spec.name.as_str() == "terminal_exec")
+            .expect("terminal.exec spec should be registered");
+        assert!(
+            spec.parameters[REQUIRED_FIELD]
+                .as_array()
+                .is_none_or(|required| {
+                    !required
+                        .iter()
+                        .any(|field| field.as_str() == Some("target"))
+                }),
+            "terminal.exec 的 target 应可省略: {}",
+            spec.parameters
+        );
+
+        registry
+            .get(&ToolName::new("terminal_exec"))
+            .expect("tool should be registered")
+            .execute(invocation_with_resources(
+                "terminal_exec",
+                json!({ "command": "pwd" }),
+                ResourceContext::new().with_resource(terminal_resource("term-1")),
+            ))
+            .await
+            .expect("call should succeed");
+
+        assert_eq!(
+            Some(json!({ "command": "pwd", "target": "term-1" })),
+            provider.last_arguments()
+        );
+    }
+
+    #[test]
+    fn default_target_injection_needs_the_tool_to_declare_target() {
+        let arguments = json!({ "command": "pwd" })
+            .as_object()
+            .cloned()
+            .expect("object arguments");
+
+        let injected =
+            super::with_default_target("terminal.exec", arguments, &ResourceContext::new(), false)
+                .expect("schema 里没有 target 时不应报错");
+
+        assert_eq!(
+            json!({ "command": "pwd" }),
+            serde_json::Value::Object(injected)
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_exec_with_several_terminals_asks_for_explicit_target() {
+        let provider = Arc::new(TerminalExecProvider::default());
+        let registry = agent_runtime_tool_registry(
+            crate::tools::PublicMcpToolRegistry::new(vec![provider]),
+            PermissionMode::Deny,
+            PublicMcpApprovalManager::default(),
+        );
+        // SSH 侧栏的当前资源是连接，终端只是候选：多于一个时必须报错而不是猜一个。
+        let resources = ResourceContext {
+            current: Some(agent_runtime::ResourceId::new("74")),
+            resources: vec![
+                agent_runtime::ResourceRef::new("74", ResourceKind::Ssh, "86服务器"),
+                terminal_resource("term-1"),
+                terminal_resource("term-2"),
+            ],
+        };
+
+        let error = registry
+            .get(&ToolName::new("terminal_exec"))
+            .expect("tool should be registered")
+            .execute(invocation_with_resources(
+                "terminal_exec",
+                json!({ "command": "pwd" }),
+                resources,
+            ))
+            .await
+            .expect_err("多个终端时不应猜目标");
+
+        assert!(
+            error.to_string().contains("connections.list_sessions"),
+            "错误信息应给出下一步: {error}"
+        );
+    }
+
     fn invocation_with_resources(
         tool_name: &str,
         arguments: serde_json::Value,
@@ -628,6 +749,61 @@ mod tests {
         let mut invocation = invocation_for(tool_name, arguments);
         invocation.resources = resources;
         invocation
+    }
+
+    #[derive(Default)]
+    struct TerminalExecProvider {
+        last_arguments: Mutex<Option<serde_json::Value>>,
+    }
+
+    impl TerminalExecProvider {
+        fn last_arguments(&self) -> Option<serde_json::Value> {
+            self.last_arguments
+                .lock()
+                .expect("arguments lock should not be poisoned")
+                .clone()
+        }
+    }
+
+    impl PublicMcpToolProvider for TerminalExecProvider {
+        fn tools(&self) -> Vec<Tool> {
+            let schema = json!({
+                "type": "object",
+                "properties": {
+                    "target": { "type": "string", "description": "Exact terminal id" },
+                    "command": { "type": "string" }
+                },
+                "required": ["target", "command"]
+            });
+            let schema = match schema {
+                serde_json::Value::Object(object) => object,
+                _ => unreachable!("schema should be an object"),
+            };
+            vec![Tool::new(
+                "terminal.exec",
+                "Run a command in the visible terminal",
+                schema,
+            )]
+        }
+
+        fn call_tool(
+            &self,
+            name: &str,
+            arguments: Option<JsonObject>,
+            _context: PublicMcpToolContext,
+        ) -> Option<PublicMcpToolFuture> {
+            if name != "terminal.exec" {
+                return None;
+            }
+            let value = serde_json::Value::Object(arguments.unwrap_or_default());
+            *self
+                .last_arguments
+                .lock()
+                .expect("arguments lock should not be poisoned") = Some(value);
+            Some(Box::pin(async {
+                Ok(CallToolResult::success(vec![Content::text("ok")]))
+            }))
+        }
     }
 
     #[derive(Default)]

@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tool_runtime::{
     AiAccessLevel, ResourceCapability, ResourceKind, ResourceOrigin, ResourcePool, ResourceRef,
+    ResourceScope,
 };
 
 pub(super) fn app_resource_pool_provider(cx: &App) -> Option<ResourcePoolProvider> {
@@ -177,6 +178,20 @@ fn terminal_session_resource(
     let mut resource = ResourceRef::new(session.session_id.clone(), ResourceKind::Terminal, label)
         .with_alias(session.session_id);
     resource.origin = ResourceOrigin::ActiveSession;
+    // 查询侧（`connections.list_sessions`）也要看得到 cwd：只靠标题里的
+    // `root@host:/path` 属于巧合，模型最终还是要一条确定的路径。
+    if let Some(cwd) = session
+        .cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|cwd| !cwd.is_empty())
+    {
+        resource = resource.with_scope(ResourceScope::new(
+            public_mcp::registry::SESSION_CWD_SCOPE,
+            "Working directory",
+            cwd,
+        ));
+    }
     for capability in ai_access_level.narrow_capabilities(&session.capabilities) {
         resource = resource.with_capability(capability);
     }
@@ -628,6 +643,42 @@ mod tests {
             resource
                 .capabilities
                 .contains(&ResourceCapability::TerminalExec)
+        );
+    }
+
+    #[test]
+    fn terminal_session_resource_exposes_current_directory_scope() {
+        let levels = no_levels();
+
+        let resource = terminal_session_resource(
+            session_info(Some(21), vec![ResourceCapability::TerminalExec]),
+            &levels,
+        )
+        .expect("会话应进入资源池");
+
+        let cwd = resource
+            .scopes
+            .iter()
+            .find(|scope| scope.key == public_mcp::registry::SESSION_CWD_SCOPE)
+            .expect("终端会话应带 cwd 作用域");
+        assert_eq!("/root", cwd.value);
+    }
+
+    #[test]
+    fn terminal_session_without_reported_cwd_adds_no_empty_scope() {
+        let levels = no_levels();
+        let mut session = session_info(Some(21), vec![ResourceCapability::TerminalExec]);
+        session.cwd = Some("  ".to_string());
+
+        let resource = terminal_session_resource(session, &levels).expect("会话应进入资源池");
+
+        assert!(
+            resource
+                .scopes
+                .iter()
+                .all(|scope| scope.key != public_mcp::registry::SESSION_CWD_SCOPE),
+            "空 cwd 不应写成作用域: {:?}",
+            resource.scopes
         );
     }
 
