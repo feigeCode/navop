@@ -1323,6 +1323,17 @@ fn parse_remote_history_output(output: &str) -> Vec<String> {
     commands
 }
 
+/// 连接建立后是否允许读取远端 shell 历史。
+///
+/// 历史读取会在同一个 SSH transport 上额外开一个 exec channel 执行
+/// `sh -lc 'tail -n 512 ...'`。这条副作用独立于 shell integration 探测，所以
+/// 必须自己看用户的「禁用 Shell 集成」开关：受限设备（交换机、防火墙）只接受
+/// 单个裸交互 shell，额外 exec 会被当成非法命令回显并断开连接
+/// （issue #532：锐捷 S6250 经跳板机连接后未输入就连续报 `% Unknown command`）。
+fn remote_shell_history_allowed(disable_shell_integration: bool) -> bool {
+    !disable_shell_integration
+}
+
 async fn load_ssh_history(manager: Arc<SshSessionManager>) -> anyhow::Result<Vec<String>> {
     let mut channel = manager.open_channel().await?;
     let command = build_remote_history_load_command();
@@ -3192,6 +3203,9 @@ impl Terminal {
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<Option<String>>();
         Self::spawn_ssh_disconnect_handler(disconnect_rx, generation, cx);
 
+        // `spawn_ssh_connect` 会拿走 `config`，门禁必须在移动之前先算好。
+        let load_remote_history = remote_shell_history_allowed(config.disable_shell_integration);
+
         self.ssh_config = Some(config.clone());
         self.ssh_session_manager = Some(session_manager.clone());
         self.ssh_mfa_responder = Some(responder);
@@ -3213,7 +3227,9 @@ impl Terminal {
             },
             cx,
         );
-        Self::spawn_ssh_history_loader(session_manager, cx);
+        if load_remote_history {
+            Self::spawn_ssh_history_loader(session_manager, cx);
+        }
 
         if credential_request_cleared {
             cx.emit(TerminalModelEvent::SshCredentialChanged);
@@ -5131,7 +5147,7 @@ mod tests {
         flush_pending_terminal_events, format_connection_error, host_key_verification_request,
         is_reconnect_generation, is_ssh_password_prompt, keyboard_interactive_answers_for_terminal,
         merge_history_matches, normalize_history_matches, parse_stored_telnet_params,
-        receive_terminal_event_for_gpui, recent_text_from_term,
+        receive_terminal_event_for_gpui, recent_text_from_term, remote_shell_history_allowed,
         resolve_default_windows_shell_from_env, resolve_local_working_dir,
         resolve_local_workspace_root, resolve_ssh_connection, send_coalesced_wakeup,
         shell_escape_arg, should_install_connected_backend,
@@ -6785,6 +6801,52 @@ mod tests {
         assert!(
             worker.contains("LocalPtyBackend::new_with_recording("),
             "唯一的创建调用点应当在 spawn_local_pty_start 的工作线程闭包里"
+        );
+    }
+
+    #[test]
+    fn remote_shell_history_is_skipped_when_shell_integration_is_disabled() {
+        assert!(remote_shell_history_allowed(false));
+        assert!(
+            !remote_shell_history_allowed(true),
+            "禁用 Shell 集成就是在声明目标只承受得起裸 shell，额外 exec 必须一起关掉"
+        );
+    }
+
+    /// 回归守卫（issue #532）：禁用 Shell 集成时不得再读远端历史。
+    ///
+    /// 历史读取在同一个 SSH transport 上额外开 exec channel 执行 `sh -lc ...`；
+    /// 锐捷 S6250 这类设备会把它当成非法命令回显并断开连接，现场表现为登录后
+    /// 未输入任何内容就刷 `% Unknown command` / `File failed`。
+    #[test]
+    fn ssh_history_loader_is_gated_by_the_shell_integration_setting() {
+        let source = include_str!("terminal.rs");
+        let production = source.split("mod tests").next().unwrap_or_default();
+        assert_eq!(
+            1,
+            production
+                .matches("Self::spawn_ssh_history_loader(")
+                .count(),
+            "远端历史读取应当只有一个触发点，便于统一受门禁约束"
+        );
+
+        let attempt = production
+            .split("fn start_ssh_connection_attempt")
+            .nth(1)
+            .expect("start_ssh_connection_attempt 必须存在");
+        assert!(
+            attempt.contains(
+                "let load_remote_history = remote_shell_history_allowed(config.disable_shell_integration);"
+            ),
+            "门禁必须在 config 被移入连接任务之前由禁用开关算出"
+        );
+        let gated = attempt
+            .split("if load_remote_history")
+            .nth(1)
+            .unwrap_or_default();
+        assert!(
+            gated.contains("Self::spawn_ssh_history_loader("),
+            "历史读取必须包在 load_remote_history 门禁里，不能无条件调用"
         );
     }
 

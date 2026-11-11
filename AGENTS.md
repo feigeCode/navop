@@ -808,6 +808,13 @@
 - **验证方式**：`cargo test -p terminal_view --lib file_manager_panel`（`navigation_recovery_stops_after_the_attempt_budget`、`read_dir_failure_stops_auto_refresh_after_the_budget`、`read_dir_failure_still_recovers_once`）、`cargo test -p one-core --lib notification_throttle`、`cargo test -p navop_app --no-default-features --features wasm-components,windows-native-rdp,database,shell --lib log_`（`rotating_log_writer_*` 用可注入上限的 `open_with_limit`，含「单条日志超上限不得反复轮转」）。变异验证：把 `recover_from_navigation_error` 改回无条件刷新、去掉 `attempts` 上限，对应用例必须转红。
 - **适用范围**：`crates/terminal_view/src/sidebar/file_manager_panel.rs`、`crates/navop_app/src/navop_app.rs`（`RotatingLogWriter` / `log_file_appender`）、`crates/core/src/notification_throttle.rs`，以及任何「错误回调里自动重试 / 自动刷新 + 打日志 + 推通知」的异步闭环。
 
+- **标题**：「禁用 Shell 集成」不等于关掉所有自动 exec 通道——远端历史读取也是额外 channel
+- **触发信号**：经跳板机连交换机/防火墙（锐捷、部分华为/思科设备）后用户没敲任何键就连续出现 `% Invalid input`、`% Unknown command`、`File failed. No such file or directory` 然后掉线；同一台设备在跳板机上手动 `ssh -tt` 正常（issue #532）。
+- **根因 / 约束**：shell integration 的**探测**确实受 `disable_shell_integration` 门控（`plain_channel_only = disable_shell_integration`），但 `start_ssh_connection_attempt` 里的 `spawn_ssh_history_loader` 是**无条件**调用的：它会在同一个 SSH transport 上另开 exec channel 执行 `sh -lc 'tail -n 512 ~/.bash_history ...'`。受限设备只接受单个裸交互 shell，这条自动 exec 被设备当成非法命令回显并随即断连——与用户「不要注入任何东西」的期望直接冲突。
+- **正确做法**：门禁必须由用户开关算出且在 `config` 被移入连接任务之前求值：`let load_remote_history = remote_shell_history_allowed(config.disable_shell_integration);`，`spawn_ssh_connect` 之后再 `if load_remote_history { spawn_ssh_history_loader(..) }`。凡是在连接建立后自动发命令/开额外 channel 的副作用（探测、历史、能力查询、初始化脚本）都要逐一检查是否受同一开关约束。
+- **验证方式**：`cargo test -p terminal --lib history`（`remote_shell_history_is_skipped_when_shell_integration_is_disabled` + 源码契约 `ssh_history_loader_is_gated_by_the_shell_integration_setting`，后者断言生产代码里 `Self::spawn_ssh_history_loader(` 只有一处且在 `if load_remote_history` 块内）；变异验证：改回无条件调用必须转红。真机需在受限设备上确认登录后无自发命令回显。
+- **适用范围**：`crates/terminal/src/terminal.rs`（`start_ssh_connection_attempt` / `load_ssh_history`）、`crates/terminal/src/ssh_backend.rs`（探测与降级重连），以及所有「连接建立后自动执行远端命令」的链路。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。
