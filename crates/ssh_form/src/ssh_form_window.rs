@@ -3205,33 +3205,6 @@ impl SshFormWindow {
                     )
                 },
             )
-            .child(
-                self.render_form_row(
-                    &t!("SSH.keyboard_interactive"),
-                    h_flex()
-                        .w_full()
-                        .gap_1()
-                        .items_center()
-                        .child(
-                            Checkbox::new("keyboard-interactive")
-                                .label(t!("SSH.enable").to_string())
-                                .checked(self.keyboard_interactive)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.keyboard_interactive = !this.keyboard_interactive;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Button::new("keyboard-interactive-help")
-                                .icon(IconName::Info)
-                                .ghost()
-                                .xsmall()
-                                .tooltip(t!("SSH.keyboard_interactive_desc").to_string()),
-                        ),
-                ),
-            )
-            .child(self.render_otp_row(cx))
-            .child(self.render_sudo_password_row(cx))
             .child(self.render_form_row(
                 &t!("SSH.terminal_encoding"),
                 Select::new(&self.terminal_encoding_select).w_full(),
@@ -3883,6 +3856,35 @@ impl SshFormWindow {
         v_flex()
             .w_full()
             .gap_2()
+            // 认证相关的进阶设置（双因素认证、一次性验证码、提权密码）统一放在这里，
+            // 避免基本页被二次认证的细节挤满。
+            .child(
+                self.render_form_row(
+                    &t!("SSH.keyboard_interactive"),
+                    h_flex()
+                        .w_full()
+                        .gap_1()
+                        .items_center()
+                        .child(
+                            Checkbox::new("keyboard-interactive")
+                                .label(t!("SSH.enable").to_string())
+                                .checked(self.keyboard_interactive)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.keyboard_interactive = !this.keyboard_interactive;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("keyboard-interactive-help")
+                                .icon(IconName::Info)
+                                .ghost()
+                                .xsmall()
+                                .tooltip(t!("SSH.keyboard_interactive_desc").to_string()),
+                        ),
+                ),
+            )
+            .child(self.render_otp_row(cx))
+            .child(self.render_sudo_password_row(cx))
             .child(self.render_form_row(
                 &t!("SSH.terminal_type"),
                 Select::new(&self.terminal_type_select).w_full(),
@@ -4528,6 +4530,44 @@ mod tests {
             basic_tab.contains(
                 "credential_is_manual && auth_method == AuthMethodSelection::AutoPublicKey"
             )
+        );
+    }
+
+    #[test]
+    fn ssh_second_factor_controls_live_in_the_advanced_tab() {
+        let source = include_str!("ssh_form_window.rs");
+        let basic_tab = source
+            .split_once("fn render_basic_tab")
+            .expect("SSH basic tab renderer should exist")
+            .1
+            .split_once("fn render_init_tab")
+            .expect("SSH basic tab renderer should end before the init tab")
+            .0;
+        let advanced_tab = source
+            .split_once("fn render_advanced_tab")
+            .expect("SSH advanced tab renderer should exist")
+            .1
+            .split_once("fn render_other_tab")
+            .expect("SSH advanced tab renderer should end before the other tab")
+            .0;
+
+        // 二次认证相关的行不应再出现在基本页，否则用户会被两处开关绕晕。
+        assert!(!basic_tab.contains("Checkbox::new(\"keyboard-interactive\")"));
+        assert!(!basic_tab.contains("self.render_otp_row(cx)"));
+        assert!(!basic_tab.contains("self.render_sudo_password_row(cx)"));
+
+        let keyboard_interactive = advanced_tab
+            .find("Checkbox::new(\"keyboard-interactive\")")
+            .expect("advanced tab should render the two-factor authentication switch");
+        let otp_row = advanced_tab
+            .find("self.render_otp_row(cx)")
+            .expect("advanced tab should render the one-time password row");
+        let sudo_row = advanced_tab
+            .find("self.render_sudo_password_row(cx)")
+            .expect("advanced tab should render the su/sudo password row");
+        assert!(
+            keyboard_interactive < otp_row && otp_row < sudo_row,
+            "two-factor, OTP and su/sudo rows should keep their logical order"
         );
     }
 
