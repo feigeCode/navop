@@ -4210,7 +4210,9 @@ impl TabContainer {
                             })
                             .flex()
                             .flex_shrink_0()
-                            .overflow_hidden()
+                            // 不要把页签内容放进 GPUI Fast 的圆角 overflow 裁剪组：
+                            // 部分 Windows Direct3D 驱动会丢掉该离屏 pass 的全部后代。
+                            // 固定尺寸的子项和省略号标题本身都留在页签内。
                             .items_center()
                             .gap_2()
                             .h(tab_item_height)
@@ -4339,7 +4341,7 @@ impl TabContainer {
                             .relative()
                             .when(keep_full_width, |el| el.flex_shrink_0())
                             .when(!keep_full_width, |el| el.flex_shrink_1())
-                            .overflow_hidden()
+                            // 同上：圆角 overflow 裁剪在这类 Windows 驱动上是渲染风险点。
                             .items_center()
                             .gap_2()
                             .h(tab_item_height)
@@ -5602,6 +5604,29 @@ mod tests {
         let source = include_str!("tab_container.rs");
         let tooltip_builder = ["Tool", "tip::new(tool", "tip_title.clone())"].concat();
         assert!(source.matches(&tooltip_builder).count() >= 2);
+    }
+
+    #[test]
+    fn rounded_tabs_do_not_clip_their_contents_through_gpui_fast() {
+        let source = include_str!("tab_container.rs");
+
+        let pinned = source
+            .split("let is_pinned_active =")
+            .nth(1)
+            .expect("pinned tab render block exists")
+            .split(".child(render_tab_display_number")
+            .next()
+            .expect("pinned tab render block has an end marker");
+        assert!(!pinned.contains(".overflow_hidden()"));
+
+        let regular = source
+            .split(".id(idx)")
+            .nth(1)
+            .expect("regular tab render block exists")
+            .split(".child(render_tab_display_number")
+            .next()
+            .expect("regular tab render block has an end marker");
+        assert!(!regular.contains(".overflow_hidden()"));
     }
 
     #[test]

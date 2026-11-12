@@ -654,7 +654,9 @@ impl ConnectionFormDialog {
             .when(selected, |card| card.shadow_lg().border_l_3())
             .hover(|card| card.shadow_lg().border_color(theme.list_active_border))
             .cursor_pointer()
-            .overflow_hidden()
+            // 不要把这个卡片放进「圆角 + overflow hidden」裁剪组：GPUI Fast
+            // 会用单独的 Direct3D pass 绘制该组，部分 Windows 驱动会丢掉整组内容。
+            // 下面的标题/描述各自裁剪，固定卡片高度也能保证图标不溢出。
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.select_entry(click_entry.key(), cx);
                 // 与旧版一致：「更多连接」点击即跳转，安装入口等「下一步 / 回车」。
@@ -1263,5 +1265,21 @@ mod tests {
             .with_label("KingbaseES")
             .with_description("人大金仓数据库连接");
         assert_eq!("人大金仓数据库连接", kind_description(&kind).as_ref());
+    }
+
+    #[test]
+    fn kind_cards_do_not_put_their_content_in_a_rounded_overflow_clip() {
+        let source = include_str!("new_connection.rs");
+        let card = source
+            .split("fn render_kind_card(")
+            .nth(1)
+            .expect("render_kind_card exists")
+            .split("fn render_selection_footer(")
+            .next()
+            .expect("render_kind_card has an end marker");
+
+        // 标题和描述仍各自裁剪；卡片根节点不能成为 GPUI Fast 的圆角裁剪组，
+        // 否则部分 Windows 驱动会在独立 Direct3D pass 里丢掉全部卡片内容。
+        assert_eq!(card.matches(".overflow_hidden()").count(), 2);
     }
 }
