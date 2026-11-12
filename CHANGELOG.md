@@ -13,6 +13,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - 「编辑主机」表单调整：认证方式由一排单选按钮改为下拉框、默认「密码」；双因素认证、一次性验证码密钥、su/sudo 自动填入与提权密码统一收进「高级选项」页，基本页只留常用项。
 - 连接导入新增 Telnet 记录支持，迁移导入时可以批量指定高级设置的默认值，导完不用逐条再改。
 - 新增独立的笔记 MCP 工具组，AI 与外部 MCP 客户端可以直接读写连接笔记。
+- 「设置 → 通用 → 日志」新增「日志级别」（错误 / 警告 / 信息 / 调试 / 追踪），切换后即时生效、不用重启；排查问题时可临时开到调试，平时保持默认的信息级。环境变量 `RUST_LOG` 仍然优先，需要按模块精细过滤时照旧用它。
 
 #### 修复与优化
 
@@ -36,6 +37,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Edit Host cleanup: the authentication method is now a dropdown that defaults to "Password", and two-factor authentication, the TOTP secret, su/sudo auto-fill and the elevation password moved into the Advanced tab, leaving only the common fields on the basic page.
 - Connection import accepts Telnet records, and migration imports can set advanced defaults in bulk so imported connections do not need to be fixed one by one.
 - A standalone Notes MCP tool group lets the built-in agent and external MCP clients read and write connection notes.
+- Settings → General → Log now has a log level dropdown (Error, Warning, Info, Debug, Trace) that applies immediately without a restart, so troubleshooting can switch to Debug temporarily and stay at Info otherwise. The `RUST_LOG` environment variable still takes precedence for per-module filters.
 
 #### Fixes and Improvements
 
