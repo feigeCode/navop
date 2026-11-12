@@ -832,6 +832,22 @@ impl SshBackend {
             expect_password.as_deref(),
             init_commands.as_deref(),
         );
+        // 一行 info 记录提权自动填入在本会话里的实际状态：用户反馈「没触发」时，
+        // 从日志就能看出是配置没开还是拿不到密码，不用再猜。
+        if session_password.is_enabled() {
+            tracing::info!(
+                target: "terminal.ssh.setup",
+                "本次会话已启用提权（su/sudo）密码自动填入"
+            );
+        } else {
+            tracing::info!(
+                target: "terminal.ssh.setup",
+                auto_fill = ?account_expect.elevation.auto_fill,
+                has_elevation_password = !account_expect.elevation.password.is_empty(),
+                has_login_password = expect_password.is_some(),
+                "本次会话未启用提权密码自动填入（未开启或没有可用密码）"
+            );
+        }
         let setup_started_at = Instant::now();
         let (client, mut channel, shell_integration_requested) = Self::establish_channel(
             &session_manager,
