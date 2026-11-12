@@ -168,6 +168,11 @@ impl ImportCenterState {
                     .as_ref()
                     .and_then(|ssh| ssh.group_path.as_deref())
                     .and_then(normalized_ssh_group_path),
+                ImportRecordKind::Telnet => record
+                    .telnet
+                    .as_ref()
+                    .and_then(|telnet| telnet.group_path.as_deref())
+                    .and_then(normalized_ssh_group_path),
                 ImportRecordKind::Workspace => record
                     .workspace
                     .as_ref()

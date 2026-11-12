@@ -90,6 +90,7 @@ fn database_record(name: &str) -> ImportRecord {
             extra_params: BTreeMap::new(),
         }),
         ssh: None,
+        telnet: None,
         port_forwarding: None,
         quick_command: None,
         workspace: None,

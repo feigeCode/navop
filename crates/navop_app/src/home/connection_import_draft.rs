@@ -14,6 +14,7 @@ use super::connection_import_draft_conversion::{
 pub(crate) enum ImportDraftKind {
     Database,
     Ssh,
+    Telnet,
     QuickCommand,
     Workspace,
     Unsupported,
@@ -87,6 +88,7 @@ impl EditableImportDraft {
         match record.kind {
             ImportRecordKind::Database => Self::database(record),
             ImportRecordKind::Ssh => Self::ssh(record),
+            ImportRecordKind::Telnet => Self::telnet(record),
             ImportRecordKind::QuickCommand => Self::quick_command(record),
             ImportRecordKind::Workspace => Self::workspace(record),
             ImportRecordKind::PortForwarding => Self::unsupported(record),
@@ -154,6 +156,41 @@ impl EditableImportDraft {
             password,
             database: String::new(),
             private_key_path,
+            quick_command_group_name: String::new(),
+            quick_command_command: String::new(),
+            quick_command_shortcut: String::new(),
+            quick_command_description: String::new(),
+            payload: ImportDraftPayload::Record(record),
+        }
+    }
+
+    fn telnet(record: ImportRecord) -> Self {
+        let imported = record.telnet.as_ref();
+        Self {
+            selected: true,
+            name: imported
+                .map(|record| record.name.clone())
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| record.display_name.clone()),
+            host: imported
+                .map(|record| record.host.clone())
+                .unwrap_or_default(),
+            port: imported
+                .and_then(|record| record.port)
+                .map(|port| port.to_string())
+                .unwrap_or_default(),
+            username: imported
+                .and_then(|record| record.username.clone())
+                .unwrap_or_default(),
+            ssh_group_path: imported
+                .and_then(|record| record.group_path.clone())
+                .unwrap_or_default(),
+            workspace_path: String::new(),
+            password: imported
+                .and_then(|record| record.password.clone())
+                .unwrap_or_default(),
+            database: String::new(),
+            private_key_path: String::new(),
             quick_command_group_name: String::new(),
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
@@ -249,6 +286,7 @@ impl EditableImportDraft {
             ImportDraftPayload::Record(record) => match record.kind {
                 ImportRecordKind::Database => ImportDraftKind::Database,
                 ImportRecordKind::Ssh => ImportDraftKind::Ssh,
+                ImportRecordKind::Telnet => ImportDraftKind::Telnet,
                 ImportRecordKind::QuickCommand => ImportDraftKind::QuickCommand,
                 ImportRecordKind::Workspace => ImportDraftKind::Workspace,
                 ImportRecordKind::PortForwarding => ImportDraftKind::Unsupported,
@@ -261,6 +299,7 @@ impl EditableImportDraft {
             ImportDraftPayload::Record(record) => match record.kind {
                 ImportRecordKind::Database => ConnectionType::Database,
                 ImportRecordKind::Ssh => ConnectionType::SshSftp,
+                ImportRecordKind::Telnet => ConnectionType::Telnet,
                 ImportRecordKind::QuickCommand => ConnectionType::SshSftp,
                 ImportRecordKind::Workspace => ConnectionType::SshSftp,
                 ImportRecordKind::PortForwarding => ConnectionType::PortForwarding,

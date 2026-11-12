@@ -186,6 +186,7 @@ fn kind_text(kind: ImportDraftKind) -> String {
     match kind {
         ImportDraftKind::Database => t!("Home.ConnectionImport.kind_database").to_string(),
         ImportDraftKind::Ssh => "SSH".to_string(),
+        ImportDraftKind::Telnet => "Telnet".to_string(),
         ImportDraftKind::QuickCommand => t!("Home.ConnectionImport.kind_quick_command").to_string(),
         ImportDraftKind::Workspace => t!("Home.ConnectionImport.kind_workspace").to_string(),
         ImportDraftKind::Unsupported => t!("Home.ConnectionImport.kind_unsupported").to_string(),

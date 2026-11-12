@@ -374,6 +374,7 @@ fn database_record(name: &str) -> ImportRecord {
             extra_params: BTreeMap::new(),
         }),
         ssh: None,
+        telnet: None,
         port_forwarding: None,
         quick_command: None,
         workspace: None,
@@ -402,6 +403,7 @@ fn ssh_record(name: &str, group_path: Option<&str>) -> ImportRecord {
             jump_server: None,
             proxy: None,
         }),
+        telnet: None,
         port_forwarding: None,
         quick_command: None,
         workspace: None,
@@ -424,6 +426,7 @@ fn workspace_record_for(importer_id: &str, id: &str, path: &str) -> ImportRecord
         display_name: path.rsplit('/').next().unwrap_or(path).to_string(),
         database: None,
         ssh: None,
+        telnet: None,
         port_forwarding: None,
         quick_command: None,
         workspace: Some(WorkspaceImportRecord {

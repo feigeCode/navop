@@ -169,7 +169,7 @@ pub(crate) fn save_import_draft(
         .ok_or_else(|| t!("Home.ConnectionImport.repository_unavailable").to_string())?;
     let existing = repo.list().map_err(|error| error.to_string())?;
     if let Some(existing_connection) = duplicate_connection(draft, &existing)? {
-        if draft.kind() == ImportDraftKind::Ssh
+        if matches!(draft.kind(), ImportDraftKind::Ssh | ImportDraftKind::Telnet)
             && existing_connection.workspace_id.is_none()
             && normalized_ssh_group_path(&draft.ssh_group_path).is_some()
         {
