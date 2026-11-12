@@ -6,6 +6,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, Size,
     button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
     h_flex,
     scroll::ScrollableElement,
     v_flex,
@@ -127,6 +128,54 @@ impl ConnectionImportWindow {
         )
     }
 
+    /// 导入默认项：统一套用到这次迁移出来的 SSH 连接上，避免逐条改高级设置。
+    fn render_migration_defaults(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let defaults = self.model.defaults();
+        v_flex()
+            .gap_1()
+            .p_2()
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded(px(6.0))
+            .child(
+                h_flex()
+                    .gap_4()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t!("Home.ConnectionImport.migration_defaults").to_string()),
+                    )
+                    .child(
+                        Checkbox::new("import-allow-legacy-algorithms")
+                            .checked(defaults.allow_legacy_algorithms)
+                            .label(t!("Home.ConnectionImport.allow_legacy_algorithms").to_string())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.model.toggle_allow_legacy_algorithms();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Checkbox::new("import-disable-shell-integration")
+                            .checked(defaults.disable_shell_integration)
+                            .label(
+                                t!("Home.ConnectionImport.disable_shell_integration").to_string(),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.model.toggle_disable_shell_integration();
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("Home.ConnectionImport.migration_defaults_hint").to_string()),
+            )
+    }
+
     fn render_sources(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .flex_none()
@@ -168,6 +217,7 @@ impl ConnectionImportWindow {
             .p_4()
             .gap_3()
             .child(self.render_preview_toolbar(cx))
+            .child(self.render_migration_defaults(cx))
             .child(
                 div().flex_1().min_h_0().overflow_hidden().child(
                     v_flex()

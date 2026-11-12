@@ -406,6 +406,7 @@ fn parse_output_kind(value: &str) -> Option<ImportRecordKind> {
     match value {
         "database" => Some(ImportRecordKind::Database),
         "ssh" => Some(ImportRecordKind::Ssh),
+        "telnet" => Some(ImportRecordKind::Telnet),
         "port-forwarding" | "port_forwarding" => Some(ImportRecordKind::PortForwarding),
         "quick-command" | "quick_command" => Some(ImportRecordKind::QuickCommand),
         "workspace" => Some(ImportRecordKind::Workspace),

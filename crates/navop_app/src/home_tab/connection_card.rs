@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Instant;
 
 impl HomePage {
     pub(super) fn render_connection_card(
@@ -69,10 +70,25 @@ impl HomePage {
             })
             .cursor_pointer()
             .on_double_click(cx.listener(move |this, _, window, cx| {
-                this.open_connection_from_quick(&open_connection, window, cx);
-                cx.notify()
+                // 平台只按时间与坐标判定双击：第一次点击若落在刚关闭的快捷打开
+                // 对话框上，第二次点击穿透到这里时 click_count 仍是 2。只有本项
+                // 确实收到过第一次点击才打开，避免一次双击开出两个连接。
+                if this
+                    .connection_double_click
+                    .is_double_click(conn_id, Instant::now())
+                {
+                    this.open_connection_from_quick(&open_connection, window, cx);
+                    cx.notify()
+                } else {
+                    tracing::debug!(
+                        connection_id = conn_id.unwrap_or(0),
+                        "忽略穿透到连接卡片的第二次点击：本次双击的第一次点击不在这里"
+                    );
+                }
             }))
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                this.connection_double_click
+                    .record_click(conn_id, Instant::now());
                 if batch_mode && can_manage {
                     if let Some(id) = conn_id {
                         let mode = if event.modifiers().shift {

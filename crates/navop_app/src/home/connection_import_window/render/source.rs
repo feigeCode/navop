@@ -173,6 +173,12 @@ fn source_connection_type(source: &ImportSourceState) -> ConnectionType {
     } else if source
         .descriptor
         .output_kinds
+        .contains(&ImportRecordKind::Telnet)
+    {
+        ConnectionType::Telnet
+    } else if source
+        .descriptor
+        .output_kinds
         .contains(&ImportRecordKind::PortForwarding)
     {
         ConnectionType::PortForwarding

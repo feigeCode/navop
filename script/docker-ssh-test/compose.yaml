@@ -1,0 +1,14 @@
+# Navop 端到端测试用 SSH 服务器（密码 + TOTP + sudo/su 提权）。
+#
+#   docker compose up -d --build      # 启动，监听 127.0.0.1:2222
+#   docker compose logs -f            # 查看 sshd 认证日志
+#   docker compose down               # 停止并删除
+#
+# 登录：tester / tester-pass，TOTP 密钥 JBSWY3DPEHPK3PXP，root 密码同为 tester-pass。
+services:
+  ssh:
+    build: .
+    image: navop-ssh-test:latest
+    container_name: navop-ssh-test
+    ports:
+      - "127.0.0.1:2222:2222"

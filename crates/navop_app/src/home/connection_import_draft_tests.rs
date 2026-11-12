@@ -1,7 +1,7 @@
 use connection_import_protocol::{
     DatabaseImportRecord, ImportDatabaseType, ImportRecord, ImportRecordKind, PasswordImportStatus,
     SshImportAuthMethod, SshImportRecord, SshJumpServerImportRecord, SshProxyImportKind,
-    SshProxyImportRecord, WorkspaceImportRecord,
+    SshProxyImportRecord, TelnetImportRecord, WorkspaceImportRecord,
 };
 use one_core::storage::connection::SqliteConnection;
 use one_core::storage::migration::run_migrations;
@@ -13,6 +13,7 @@ use one_core::storage::{
 use std::collections::BTreeMap;
 
 use super::connection_import_actions::save_import_draft;
+use super::connection_import_defaults::ImportConnectionDefaults;
 use super::connection_import_draft::{
     EditableImportDraft, ImportDraftEdit, ImportDraftField, ImportDraftKind, selected_import_count,
     selected_import_drafts_to_connections,
@@ -206,6 +207,93 @@ fn saving_ssh_import_creates_and_reuses_nested_workspaces(cx: &mut gpui::TestApp
         .expect("list workspaces after second save");
     assert_eq!(2, final_workspaces.len());
     assert_eq!(staging.id, second.workspace_id);
+}
+
+#[gpui::test]
+fn saving_telnet_import_creates_telnet_connection_and_skips_duplicates(
+    cx: &mut gpui::TestAppContext,
+) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let conn = SqliteConnection::open(temp.path().join("import.db")).expect("sqlite");
+    conn.with_connection(|conn| run_migrations(conn))
+        .expect("migrations");
+    let storage = StorageManager::new_with_connection(conn);
+    storage.register(ConnectionRepository::new(storage.connection()));
+    storage.register(WorkspaceRepository::new(storage.connection()));
+    cx.update(|cx| cx.set_global(GlobalStorageState { storage }));
+
+    let mut record = telnet_import("core-switch", Some("admin"), Some("secret"));
+    record.telnet.as_mut().unwrap().group_path = Some("Core / Switches".to_string());
+    let draft = EditableImportDraft::new(record);
+    let connection_id = match cx
+        .update(|cx| save_import_draft(&draft, cx))
+        .expect("save Telnet import")
+    {
+        super::connection_import_actions::ImportSaveResult::Saved { connection_id } => {
+            connection_id.expect("saved Telnet connection id")
+        }
+        super::connection_import_actions::ImportSaveResult::SkippedDuplicate { .. } => {
+            panic!("first Telnet import should be saved")
+        }
+    };
+
+    let connection = cx
+        .update(|cx| {
+            cx.global::<GlobalStorageState>()
+                .storage
+                .get::<ConnectionRepository>()
+                .unwrap()
+                .list()
+                .expect("list connections after save")
+        })
+        .into_iter()
+        .find(|connection| connection.id == Some(connection_id))
+        .expect("saved Telnet connection");
+
+    assert_eq!(ConnectionType::Telnet, connection.connection_type);
+    let params = connection.to_telnet_params().expect("telnet params");
+    assert_eq!("telnet.example.test", params.host);
+    assert_eq!(2001, params.port);
+    assert_eq!("admin", params.login_script[0].send);
+    assert_eq!("secret", params.login_script[1].send);
+
+    let workspaces = cx
+        .update(|cx| {
+            cx.global::<GlobalStorageState>()
+                .storage
+                .get::<WorkspaceRepository>()
+                .unwrap()
+                .list()
+        })
+        .expect("list workspaces after save");
+    let core = workspaces
+        .iter()
+        .find(|workspace| workspace.name == "Core")
+        .expect("Core workspace");
+    let switches = workspaces
+        .iter()
+        .find(|workspace| workspace.name == "Switches")
+        .expect("Switches workspace");
+    assert_eq!(None, core.parent_id);
+    assert_eq!(core.id, switches.parent_id);
+    assert_eq!(switches.id, connection.workspace_id);
+
+    let duplicate = EditableImportDraft::new(telnet_import(
+        "core-switch-copy",
+        Some("admin"),
+        Some("secret"),
+    ));
+    match cx
+        .update(|cx| save_import_draft(&duplicate, cx))
+        .expect("save duplicate Telnet import")
+    {
+        super::connection_import_actions::ImportSaveResult::SkippedDuplicate { existing_name } => {
+            assert_eq!("core-switch", existing_name)
+        }
+        super::connection_import_actions::ImportSaveResult::Saved { .. } => {
+            panic!("duplicate Telnet import should be skipped")
+        }
+    }
 }
 
 #[gpui::test]
@@ -587,6 +675,74 @@ fn imported_jump_server_private_key_uses_its_own_key_path() {
 }
 
 #[test]
+fn telnet_import_draft_maps_session_fields() {
+    let mut record = telnet_import("core-switch", Some("admin"), Some("secret"));
+    record.telnet.as_mut().unwrap().port = Some(2001);
+    record.telnet.as_mut().unwrap().group_path = Some("Core / Switches".to_string());
+    let draft = EditableImportDraft::new(record);
+
+    assert_eq!(ImportDraftKind::Telnet, draft.kind());
+    assert_eq!(ConnectionType::Telnet, draft.visual_connection_type());
+    assert_eq!("core-switch", draft.name);
+    assert_eq!("telnet.example.test", draft.host);
+    assert_eq!("2001", draft.port);
+    assert_eq!("admin", draft.username);
+    assert_eq!("secret", draft.password);
+    assert_eq!("Core / Switches", draft.ssh_group_path);
+}
+
+#[test]
+fn telnet_import_converts_to_telnet_connection_with_login_script() {
+    let draft =
+        EditableImportDraft::new(telnet_import("core-switch", Some("admin"), Some("secret")));
+
+    let connection = draft.to_stored_connection().expect("convert telnet import");
+    assert_eq!(ConnectionType::Telnet, connection.connection_type);
+
+    let params = connection.to_telnet_params().expect("telnet params");
+    assert_eq!("telnet.example.test", params.host);
+    assert_eq!(2001, params.port);
+    assert_eq!(2, params.login_script.len());
+    assert!(params.login_script[0].expect.contains("login"));
+    assert_eq!("admin", params.login_script[0].send);
+    assert!(params.login_script[1].expect.contains("password"));
+    assert_eq!("secret", params.login_script[1].send);
+    assert_eq!(None, params.prompt_username);
+    assert_eq!(None, params.prompt_password);
+    assert_eq!((false, false), params.login_credential_prompt_fields());
+}
+
+#[test]
+fn telnet_import_without_password_prompts_for_password_and_defaults_port() {
+    let mut record = telnet_import("console", Some("admin"), None);
+    record.telnet.as_mut().unwrap().port = None;
+    let draft = EditableImportDraft::new(record);
+
+    let params = draft
+        .to_stored_connection()
+        .expect("convert telnet import")
+        .to_telnet_params()
+        .expect("telnet params");
+
+    assert_eq!(23, params.port, "未指定端口时应回落到 Telnet 默认端口");
+    assert_eq!(2, params.login_script.len());
+    assert_eq!("", params.login_script[1].send);
+    assert_eq!(Some(true), params.prompt_password);
+    assert_eq!((false, true), params.login_credential_prompt_fields());
+}
+
+#[test]
+fn telnet_duplicate_identity_uses_host_and_port() {
+    let draft =
+        EditableImportDraft::new(telnet_import("core-switch", Some("Admin"), Some("secret")));
+
+    assert_eq!(
+        "telnet:telnet.example.test:2001",
+        draft.duplicate_identity().unwrap()
+    );
+}
+
+#[test]
 fn database_duplicate_identity_uses_type_host_port_username_and_database() {
     let draft = EditableImportDraft::new(database_import("prod"));
 
@@ -625,6 +781,7 @@ fn database_import(name: &str) -> ImportRecord {
             extra_params: BTreeMap::new(),
         }),
         ssh: None,
+        telnet: None,
         port_forwarding: None,
         quick_command: None,
         workspace: None,
@@ -652,6 +809,7 @@ fn sqlite_import(name: &str, path: Option<&str>) -> ImportRecord {
             extra_params: BTreeMap::new(),
         }),
         ssh: None,
+        telnet: None,
         port_forwarding: None,
         quick_command: None,
         workspace: None,
@@ -681,6 +839,7 @@ fn external_database_import(name: &str, driver_id: &str, port: u16) -> ImportRec
             extra_params: BTreeMap::new(),
         }),
         ssh: None,
+        telnet: None,
         port_forwarding: None,
         quick_command: None,
         workspace: None,
@@ -712,6 +871,7 @@ fn ssh_import(name: &str) -> ImportRecord {
             jump_server: None,
             proxy: None,
         }),
+        telnet: None,
         port_forwarding: None,
         quick_command: None,
         workspace: None,
@@ -730,6 +890,7 @@ fn workspace_import(path: &str) -> ImportRecord {
         display_name: path.rsplit(['/', '\\']).next().unwrap_or(path).to_string(),
         database: None,
         ssh: None,
+        telnet: None,
         port_forwarding: None,
         quick_command: None,
         workspace: Some(WorkspaceImportRecord {
@@ -738,4 +899,86 @@ fn workspace_import(path: &str) -> ImportRecord {
         password_status: PasswordImportStatus::Missing,
         warnings: Vec::new(),
     }
+}
+
+fn telnet_import(name: &str, username: Option<&str>, password: Option<&str>) -> ImportRecord {
+    ImportRecord {
+        id: format!("securecrt:{name}"),
+        importer_id: "com.onetcli.importer.securecrt/securecrt".to_string(),
+        source_label: "SecureCRT".to_string(),
+        source_id: Some(format!("Sessions/{name}.ini")),
+        kind: ImportRecordKind::Telnet,
+        display_name: name.to_string(),
+        database: None,
+        ssh: None,
+        telnet: Some(TelnetImportRecord {
+            name: name.to_string(),
+            host: "telnet.example.test".to_string(),
+            port: Some(2001),
+            username: username.map(str::to_string),
+            password: password.map(str::to_string),
+            group_path: None,
+        }),
+        port_forwarding: None,
+        quick_command: None,
+        workspace: None,
+        password_status: if password.is_some() {
+            PasswordImportStatus::Included
+        } else {
+            PasswordImportStatus::Missing
+        },
+        warnings: Vec::new(),
+    }
+}
+
+#[test]
+fn imported_ssh_connection_applies_migration_defaults() {
+    // 迁移场景下老设备（防火墙/交换机/工控机）大多只支持旧版算法，
+    // 批量导入时必须能一次性把高级设置勾好，否则几百条连接要逐条手改。
+    let draft = EditableImportDraft::new(ssh_import("legacy-algorithms")).with_defaults(
+        ImportConnectionDefaults {
+            allow_legacy_algorithms: true,
+            disable_shell_integration: true,
+        },
+    );
+
+    let params = draft
+        .to_stored_connection()
+        .expect("convert ssh import")
+        .to_ssh_params()
+        .expect("ssh params");
+
+    assert_eq!(Some(true), params.allow_legacy_algorithms);
+    assert_eq!(Some(true), params.disable_shell_integration);
+}
+
+#[test]
+fn default_migration_settings_enable_legacy_algorithms_only() {
+    let params = EditableImportDraft::new(ssh_import("plain"))
+        .to_stored_connection()
+        .expect("convert ssh import")
+        .to_ssh_params()
+        .expect("ssh params");
+
+    assert_eq!(Some(true), params.allow_legacy_algorithms);
+    assert_eq!(None, params.disable_shell_integration);
+}
+
+#[test]
+fn cleared_migration_defaults_leave_advanced_options_unset() {
+    let draft = EditableImportDraft::new(ssh_import("modern")).with_defaults(
+        ImportConnectionDefaults {
+            allow_legacy_algorithms: false,
+            disable_shell_integration: false,
+        },
+    );
+
+    let params = draft
+        .to_stored_connection()
+        .expect("convert ssh import")
+        .to_ssh_params()
+        .expect("ssh params");
+
+    assert_eq!(None, params.allow_legacy_algorithms);
+    assert_eq!(None, params.disable_shell_integration);
 }

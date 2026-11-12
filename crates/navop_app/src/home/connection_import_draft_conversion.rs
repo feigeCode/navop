@@ -3,7 +3,7 @@ use connection_import_protocol::{
 };
 use one_core::storage::{
     ConnectionType, JumpServerConfig, ProxyConfig, ProxyType, QuickCommand, SshAuthMethod,
-    SshParams, StoredConnection,
+    SshParams, StoredConnection, TelnetLoginStep, TelnetParams,
 };
 use rust_i18n::t;
 
@@ -68,6 +68,7 @@ fn import_draft_to_connection(
     match record.kind {
         ImportRecordKind::Database => to_database_connection(draft, record, mode),
         ImportRecordKind::Ssh => to_ssh_connection(draft, record),
+        ImportRecordKind::Telnet => to_telnet_connection(draft, record),
         ImportRecordKind::QuickCommand => {
             Err(t!("Home.ConnectionImport.quick_command_editor_unsupported").to_string())
         }
@@ -87,6 +88,7 @@ pub(crate) fn import_draft_duplicate_identity(
     match record.kind {
         ImportRecordKind::Database => database_duplicate_identity(draft, record),
         ImportRecordKind::Ssh => ssh_duplicate_identity(draft),
+        ImportRecordKind::Telnet => telnet_duplicate_identity(draft),
         ImportRecordKind::QuickCommand => quick_command_duplicate_identity(draft),
         ImportRecordKind::PortForwarding => {
             Err(t!("Home.ConnectionImport.port_forwarding_duplicate_unsupported").to_string())
@@ -127,6 +129,10 @@ pub(crate) fn stored_connection_duplicate_identity(
         ConnectionType::Database => connection
             .to_db_connection()
             .map(|config| Some(database_config_duplicate_identity(&config)))
+            .map_err(|error| error.to_string()),
+        ConnectionType::Telnet => connection
+            .to_telnet_params()
+            .map(|params| Some(telnet_identity(&params.host, params.port)))
             .map_err(|error| error.to_string()),
         ConnectionType::Redis => connection
             .to_redis_params()
@@ -203,9 +209,9 @@ fn to_ssh_connection(
         keepalive_max: None,
         default_directory: None,
         init_script: imported.init_script.clone(),
-        disable_shell_integration: None,
+        disable_shell_integration: draft.defaults.disable_shell_integration_param(),
         x11_forwarding: None,
-        allow_legacy_algorithms: None,
+        allow_legacy_algorithms: draft.defaults.allow_legacy_algorithms_param(),
         forward_agent: None,
         agent_forward_key: None,
         jump_server: imported
@@ -238,6 +244,63 @@ fn to_ssh_connection(
         account_expect: Default::default(),
     };
     Ok(StoredConnection::new_ssh(name, params, None))
+}
+
+/// Telnet 默认端口。
+const DEFAULT_TELNET_PORT: u16 = 23;
+
+/// 与产品内置的 Telnet 登录提示保持一致：账号与口令两步 expect 都来自
+/// `home_tab::connection_open` 里临时凭据流程使用的规范正则。
+const TELNET_USERNAME_PROMPT: &str = r"(?i)(?:login|username|user\s*name|account)\s*[:>]\s*$";
+const TELNET_PASSWORD_PROMPT: &str = r"(?i)(?:password|passwd|passcode)\s*[:>]\s*$";
+
+fn to_telnet_connection(
+    draft: &EditableImportDraft,
+    record: &ImportRecord,
+) -> Result<StoredConnection, String> {
+    if record.telnet.is_none() {
+        return Err(t!("Home.ConnectionImport.telnet_config_missing").to_string());
+    }
+    let name = required_text(
+        &draft.name,
+        t!("Home.ConnectionImport.field_connection_name").as_ref(),
+    )?;
+    let mut params = TelnetParams {
+        host: required_text(&draft.host, t!("Home.ConnectionImport.field_host").as_ref())?,
+        port: optional_port(&draft.port)?.unwrap_or(DEFAULT_TELNET_PORT),
+        credential_reference: None,
+        prompt_username: None,
+        prompt_password: None,
+        backspace_code: Default::default(),
+        // 登录脚本直接带上迁移来的账号与口令：`login_script.send` 和密码一样按敏感字段
+        // 落盘加密。send 为空时运行时会弹出临时凭据输入，不会把空值发到设备上。
+        login_script: telnet_login_script(
+            optional_text(&draft.username).as_deref(),
+            optional_text(&draft.password).as_deref(),
+        ),
+    };
+    let (prompt_username, prompt_password) = params.login_credential_prompt_fields();
+    params.prompt_username = prompt_username.then_some(true);
+    params.prompt_password = prompt_password.then_some(true);
+    Ok(StoredConnection::new_telnet(name, params, None))
+}
+
+fn telnet_login_script(username: Option<&str>, password: Option<&str>) -> Vec<TelnetLoginStep> {
+    vec![
+        TelnetLoginStep {
+            expect: TELNET_USERNAME_PROMPT.to_string(),
+            send: username.unwrap_or_default().to_string(),
+        },
+        TelnetLoginStep {
+            expect: TELNET_PASSWORD_PROMPT.to_string(),
+            send: password.unwrap_or_default().to_string(),
+        },
+    ]
+}
+
+fn telnet_duplicate_identity(draft: &EditableImportDraft) -> Result<String, String> {
+    let port = optional_port(&draft.port)?.unwrap_or(DEFAULT_TELNET_PORT);
+    Ok(telnet_identity(&draft.host, port))
 }
 
 fn ssh_duplicate_identity(draft: &EditableImportDraft) -> Result<String, String> {
@@ -307,6 +370,12 @@ fn imported_ssh_auth_method(auth_method: &SshImportAuthMethod) -> Result<SshAuth
         SshImportAuthMethod::Agent => Ok(SshAuthMethod::Agent),
         SshImportAuthMethod::AutoPublicKey => Ok(SshAuthMethod::AutoPublicKey),
     }
+}
+
+/// Telnet 连接参数没有独立用户名字段（登录名在 `login_script.send` 里，口令缺失时还会为空），
+/// 因此去重标识只按主机与端口计算，避免导入结果与已存连接永远对不上。
+pub(super) fn telnet_identity(host: &str, port: u16) -> String {
+    format!("telnet:{}:{}", normalize_identity_part(host), port)
 }
 
 fn ssh_identity(host: &str, port: u16, username: &str) -> String {

@@ -815,6 +815,20 @@
 - **验证方式**：`cargo test -p terminal --lib history`（`remote_shell_history_is_skipped_when_shell_integration_is_disabled` + 源码契约 `ssh_history_loader_is_gated_by_the_shell_integration_setting`，后者断言生产代码里 `Self::spawn_ssh_history_loader(` 只有一处且在 `if load_remote_history` 块内）；变异验证：改回无条件调用必须转红。真机需在受限设备上确认登录后无自发命令回显。
 - **适用范围**：`crates/terminal/src/terminal.rs`（`start_ssh_connection_attempt` / `load_ssh_history`）、`crates/terminal/src/ssh_backend.rs`（探测与降级重连），以及所有「连接建立后自动执行远端命令」的链路。
 
+- **标题**：SSH Shell Integration 的 ready marker 才是输入就绪条件，不能继续等未必出现的 `OSC 133;B`
+- **触发信号**：启用 Shell Integration 后 SSH 已显示登录 banner，但还要等约 3 秒才能输入或出现提示符；关闭 Shell Integration 后立即正常（issue #537）。真机上注入脚本已回 `OSC 1337;ShellIntegrationReady=1`，但提示符框架始终不补 `OSC 133;B`。
+- **根因 / 约束**：运行时注入收到私有 ready marker 后只进入 `AwaitingPrompt`，还要等第一个 `OSC 133;B` 才放行输入；为防提示符框架冲掉标记又加了固定 3 秒 grace。ready marker 是集成脚本执行到末尾时主动发出的，已经证明 hook 安装完成；`OSC 133;B` 只表示 prompt 渲染完成，oh-my-posh / starship / p10k 等框架可以合法地不补它，因此不能作为输入就绪门禁。
+- **正确做法**：`RuntimeShellIntegration` 找到 ready marker 后直接进入 `Integrated` 并返回 `ShellIntegrationReady::Integrated`，actor 立即置 `shell_ready`、撤销握手看门狗；`OSC 133;B` 只继续驱动 `InputStart` 等命令生命周期事件，legacy rc 注入仍可通过首个 `133;B` 进入集成态。保留 5 秒注入超时处理脚本压根没有 ready marker 的异常路径。
+- **验证方式**：`cargo test -p terminal --lib ssh_shell_integration`（`ready_marker_releases_input_without_waiting_for_prompt_marker` 必须断言收到 marker 后立即 `accepts_terminal_input()`）；真机 `cargo test -p terminal --test ssh_runtime_integration_live -- --ignored --nocapture` 同时验证无 `133;B` 时 ready marker、命令记录与零远端写入。真机实测通道建立约 252ms、运行时注入就绪约 91ms；改前测试 15 秒都等不到 `133;B`。
+- **适用范围**：`crates/terminal/src/ssh_backend.rs`、`crates/terminal/src/ssh_shell_integration.rs`、SSH 运行时注入真机测试，以及任何把 prompt 生命周期标记误当成“可以开始输入”前置条件的终端集成。
+
+- **标题**：长 SSH Shell Integration 脚本必须等 Bootstrap marker 后再注入，不能把登录 banner 当 shell-ready
+- **触发信号**：同一条注入命令在 `bash -c` / `bash -i -c` 测试通过，但真实 SSH PTY 偶发停在续行提示符 `>`，5 秒后超时降级；打开日志可见 PTY 已回显半条 6KB 命令，却没有 ready/failure marker（issue #537 后续排查）。
+- **根因 / 约束**：登录 expect 完成后收到的首段输出可能只是 PAM/login banner，此时交互 shell 尚未进入 readline/行编辑状态。直接把数 KB 的单行集成脚本写入 PTY，命令可能被拆行或当成未闭合语句，shell 进入 `>` 续行；普通 `-c` 测试没有这段时序，因此会假绿。
+- **正确做法**：首段输出后先发送几十字节的 Bootstrap 命令并等待私有 `ShellIntegrationBootstrap=1` marker，证明交互 shell 已实际执行输入；再发送完整集成脚本。完整脚本用 `if eval ...; then Ready; else Failed; fi` 包裹，失败 marker 要立即降级 Plain；Bootstrap/注入超时也直接进入 Plain 并放行 deferred 输入，不再等下一段输出。
+- **验证方式**：`cargo test -p terminal --lib ssh_shell_integration` 覆盖 Bootstrap marker 分段、失败 marker、超时立即放行和真实 bash/zsh；`cargo test -p terminal --test ssh_runtime_integration_live -- --ignored --nocapture` 连续跑 5 次，真机 ready 约 130–160ms 且命令记录、零远端写入均正常。只跑 `bash -i -c` 不能替代真实 PTY。
+- **适用范围**：`crates/terminal/src/ssh_backend.rs`、`crates/terminal/src/ssh_shell_integration.rs`、所有通过 PTY stdin 注入多行/长脚本的终端初始化链路。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

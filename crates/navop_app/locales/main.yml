@@ -712,6 +712,26 @@ Home:
       en: Imported SSH record is missing its SSH configuration
       zh-CN: SSH 导入记录缺少 SSH 配置
       zh-HK: SSH 匯入記錄缺少 SSH 設定
+    migration_defaults:
+      en: Migration defaults
+      zh-CN: 迁移默认项
+      zh-HK: 遷移預設
+    allow_legacy_algorithms:
+      en: Allow legacy SSH algorithms
+      zh-CN: 允许旧版 SSH 算法
+      zh-HK: 允許舊版 SSH 演算法
+    disable_shell_integration:
+      en: Disable shell integration
+      zh-CN: 禁用 Shell 集成
+      zh-HK: 停用 Shell 整合
+    migration_defaults_hint:
+      en: Applied to every imported SSH connection. Turn on legacy algorithms for old network devices; disable shell integration for devices that only allow one SSH session.
+      zh-CN: 套用到这次迁移出的每个 SSH 连接。老设备请放开旧版算法；只允许单个 SSH 会话的设备可禁用 Shell 集成。
+      zh-HK: 套用到這次遷移出的每個 SSH 連線。舊裝置請放開舊版演算法；只允許單一 SSH 工作階段的裝置可停用 Shell 整合。
+    telnet_config_missing:
+      en: Imported Telnet record is missing its Telnet configuration
+      zh-CN: Telnet 导入记录缺少 Telnet 配置
+      zh-HK: Telnet 匯入記錄缺少 Telnet 設定
     database_config_missing:
       en: Imported database record is missing its database configuration
       zh-CN: 数据库导入记录缺少数据库配置

@@ -19,6 +19,9 @@ pub(crate) struct ConnectionQuickOpenDelegate {
     filtered_items: Vec<StoredConnection>,
     selected_index: Option<IndexPath>,
     search_query: String,
+    /// 是否已经用这个委托打开过连接。双击的第二下如果赶在对话框关闭动画
+    /// 渲染出遮罩之前到达，`confirm` 会被再调用一次；这里保证一次委托只开一次。
+    opened: bool,
 }
 
 impl ConnectionQuickOpenDelegate {
@@ -29,6 +32,7 @@ impl ConnectionQuickOpenDelegate {
             filtered_items: Vec::new(),
             selected_index: None,
             search_query: String::new(),
+            opened: false,
         }
     }
 
@@ -124,7 +128,8 @@ pub(crate) fn temporary_ssh_connection(input: &str) -> Option<StoredConnection> 
             format!("{username}@")
         }
     );
-    let params = SshParams { otp: None,
+    let params = SshParams {
+        otp: None,
         remote_file: None,
         host,
         port,
@@ -329,8 +334,12 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
         window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) {
+        if self.opened {
+            return;
+        }
         if let Some(ix) = self.selected_index {
             if let Some(connection) = self.filtered_items.get(ix.row).cloned() {
+                self.opened = true;
                 let parent = self.parent.clone();
                 parent.update(cx, |this, cx| {
                     this.open_connection_from_quick(&connection, window, cx);
@@ -557,6 +566,29 @@ mod tests {
         assert!(
             confirm.contains("open_connection_from_quick"),
             "点击与回车都应通过 confirm 打开连接"
+        );
+    }
+
+    /// 回归保护：双击的第二下若在关闭遮罩渲染前再次触发 confirm，
+    /// 同一个委托也只能打开一次连接。
+    #[test]
+    fn quick_open_confirm_opens_only_once_per_dialog() {
+        let source = include_str!("home_connection_quick_open.rs");
+        let confirm = source
+            .split("fn confirm(")
+            .nth(1)
+            .expect("quick open delegate confirms the selected item")
+            .split("fn cancel(")
+            .next()
+            .expect("confirm has an end marker");
+
+        assert!(
+            confirm.contains("if self.opened {"),
+            "confirm 必须先检查这次委托是否已经打开过连接"
+        );
+        assert!(
+            confirm.contains("self.opened = true"),
+            "打开连接前要标记，后续 confirm 直接返回"
         );
     }
 }

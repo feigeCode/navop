@@ -7,6 +7,7 @@ use connection_import_protocol::{
 };
 use extension_runtime::connection_import_provider::ImportPreviewError;
 
+use super::connection_import_defaults::ImportConnectionDefaults;
 use super::connection_import_model::{
     ImportCenterState, ImportRowSaveStatus, previewable_source_ids_after_scan,
 };
@@ -374,6 +375,7 @@ fn database_record(name: &str) -> ImportRecord {
             extra_params: BTreeMap::new(),
         }),
         ssh: None,
+        telnet: None,
         port_forwarding: None,
         quick_command: None,
         workspace: None,
@@ -402,6 +404,7 @@ fn ssh_record(name: &str, group_path: Option<&str>) -> ImportRecord {
             jump_server: None,
             proxy: None,
         }),
+        telnet: None,
         port_forwarding: None,
         quick_command: None,
         workspace: None,
@@ -424,6 +427,7 @@ fn workspace_record_for(importer_id: &str, id: &str, path: &str) -> ImportRecord
         display_name: path.rsplit('/').next().unwrap_or(path).to_string(),
         database: None,
         ssh: None,
+        telnet: None,
         port_forwarding: None,
         quick_command: None,
         workspace: Some(WorkspaceImportRecord {
@@ -431,5 +435,32 @@ fn workspace_record_for(importer_id: &str, id: &str, path: &str) -> ImportRecord
         }),
         password_status: PasswordImportStatus::Missing,
         warnings: Vec::new(),
+    }
+}
+
+#[test]
+fn migration_defaults_apply_to_rows_created_before_and_after_the_toggle() {
+    let mut state = ImportCenterState::empty_for_tests();
+    state.apply_preview_records(vec![ssh_record("early", Some("Prod"))]);
+    state.set_defaults(ImportConnectionDefaults {
+        allow_legacy_algorithms: false,
+        disable_shell_integration: true,
+    });
+    state.apply_preview_records(vec![ssh_record("late", Some("Prod"))]);
+
+    for row in state.rows() {
+        let params = row
+            .draft
+            .to_stored_connection()
+            .expect("convert ssh import")
+            .to_ssh_params()
+            .expect("ssh params");
+        assert_eq!(None, params.allow_legacy_algorithms, "{}", row.record_id());
+        assert_eq!(
+            Some(true),
+            params.disable_shell_integration,
+            "{}",
+            row.record_id()
+        );
     }
 }

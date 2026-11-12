@@ -1,7 +1,7 @@
 //! 真机 SSH 运行时 Shell Integration 集成测试。
 //!
 //! 验证 meatshell 式运行时注入的完整生命周期：
-//! 只读探测 → 首屏输出注入 → 回显抑制 → OSC 133;B 就绪 → 命令记录 → 远端零文件写入。
+//! 只读探测 → 首屏输出注入 → 回显抑制 → ready marker 就绪 → 命令记录 → 远端零文件写入。
 //!
 //! 通过环境变量 `NAVOP_LIVE_SSH` 提供目标（缺省时使用内网默认值），格式：
 //! `NAVOP_LIVE_SSH=user:password@host:port`
@@ -117,23 +117,29 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
     }
 
     // 2. 建立交互通道（走新的探测 + 裸 PTY 路径）。
+    let connect_started = std::time::Instant::now();
     let (_client, mut channel, shell_integration_requested) =
         SshBackend::establish_channel_for_test(&manager, &PtyConfig::default(), Some(1), false)
             .await
             .context("建立交互通道失败")?;
+    println!("交互通道建立耗时: {:?}", connect_started.elapsed());
     assert!(
         shell_integration_requested,
         "Ubuntu 默认 shell 应探测为支持注入"
     );
 
-    // 3. 模拟 actor：读首屏 → 注入 → 抑制回显直到完成标记 → 等首个 133;B。
+    // 3. 模拟 actor：读首屏 → 注入 → 抑制回显直到 ready marker。
+    // ready marker 已证明 hook 安装完成；部分提示符框架不会补出 133;B，
+    // 因此连接就绪不能再依赖它。
     use terminal::test_support::{
         FilteredShellOutput, RuntimeShellIntegration, ShellIntegrationReady,
     };
 
     let mut integration = RuntimeShellIntegration::new(shell_integration_requested);
-    let mut saw_input_start = false;
+    let mut saw_ready_marker = false;
+    let mut bootstrap_sent = false;
     let mut injected = false;
+    let setup_started = std::time::Instant::now();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
 
     while tokio::time::Instant::now() < deadline {
@@ -144,38 +150,65 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
         let Some(ssh::ChannelEvent::Data(data)) = event else {
             continue;
         };
-        if !injected && integration.should_inject(&data, true, false) {
+        if !bootstrap_sent && integration.should_inject(&data, true, false) {
             use ssh::SshChannel as _;
             channel
-                .send_data(integration.injection_command())
+                .send_data(integration.bootstrap_command())
                 .await
-                .context("注入命令发送失败")?;
-            integration.begin_injection();
-            injected = true;
+                .context("Bootstrap 命令发送失败")?;
+            integration.begin_bootstrap();
+            bootstrap_sent = true;
             continue;
         }
         match integration.filter_output(data) {
             FilteredShellOutput::Suppressed => continue,
+            FilteredShellOutput::BootstrapReady => {
+                use ssh::SshChannel as _;
+                channel
+                    .send_data(integration.injection_command())
+                    .await
+                    .context("注入命令发送失败")?;
+                integration.begin_injection();
+                injected = true;
+                continue;
+            }
             FilteredShellOutput::Forward { data, ready } => {
-                assert_ne!(ready, ShellIntegrationReady::Plain, "真机注入不应超时降级");
+                assert!(
+                    matches!(
+                        ready,
+                        ShellIntegrationReady::None | ShellIntegrationReady::Integrated
+                    ),
+                    "真机注入不应失败或超时降级"
+                );
                 let text = String::from_utf8_lossy(&data);
                 assert!(
                     !text.contains("__ONETCLI_RUNTIME_SETUP_1"),
                     "注入命令回显不得泄漏到转发输出: {text:?}"
                 );
-                if text.contains("\x1b]133;B\x07") {
-                    saw_input_start = true;
-                    integration.on_input_start();
+                if ready == ShellIntegrationReady::Integrated {
+                    saw_ready_marker = true;
                     break;
                 }
             }
         }
     }
+    assert!(bootstrap_sent, "应完成 Bootstrap 探测");
     assert!(injected, "应完成注入");
+    if !saw_ready_marker {
+        let suppressed = integration.suppressed_output();
+        let tail_start = suppressed.len().saturating_sub(4096);
+        let tail = String::from_utf8_lossy(&suppressed[tail_start..]);
+        eprintln!(
+            "未收到 ready/failure marker；suppressed_len={} tail={:?}",
+            suppressed.len(),
+            tail.as_ref()
+        );
+    }
     assert!(
-        saw_input_start,
-        "应在超时前收到首个 OSC 133;B（prompt 就绪）"
+        saw_ready_marker,
+        "应在超时前收到 ready marker（集成脚本执行完成）"
     );
+    println!("运行时注入就绪耗时: {:?}", setup_started.elapsed());
     assert!(integration.accepts_terminal_input());
 
     // 4. 命令记录：执行 echo，等待 OSC 1337;Command=<base64>。
@@ -191,21 +224,24 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
             continue;
         };
         // 集成完成后 filter_output 直接转发，可安全解析 OSC。
-        if let FilteredShellOutput::Forward { data, .. } = integration.filter_output(data) {
-            let text = String::from_utf8_lossy(&data).to_string();
-            for payload in text
-                .split("\x1b]")
-                .filter(|p| p.starts_with("1337;Command="))
-            {
-                let encoded = payload
-                    .trim_start_matches("1337;Command=")
-                    .trim_end_matches('\x07')
-                    .trim_end_matches('\x1b');
-                use base64::Engine;
-                if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
-                    recorded_command = Some(String::from_utf8_lossy(&decoded).to_string());
+        match integration.filter_output(data) {
+            FilteredShellOutput::Forward { data, .. } => {
+                let text = String::from_utf8_lossy(&data).to_string();
+                for payload in text
+                    .split("\x1b]")
+                    .filter(|p| p.starts_with("1337;Command="))
+                {
+                    let encoded = payload
+                        .trim_start_matches("1337;Command=")
+                        .trim_end_matches('\x07')
+                        .trim_end_matches('\x1b');
+                    use base64::Engine;
+                    if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
+                        recorded_command = Some(String::from_utf8_lossy(&decoded).to_string());
+                    }
                 }
             }
+            FilteredShellOutput::Suppressed | FilteredShellOutput::BootstrapReady => {}
         }
     }
     assert_eq!(

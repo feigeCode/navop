@@ -6,6 +6,7 @@ use connection_import_protocol::{
 };
 use extension_runtime::connection_import_provider::ImportPreviewError;
 
+use super::connection_import_defaults::ImportConnectionDefaults;
 use super::connection_import_draft::{
     EditableImportDraft, ImportDraftKind, normalized_ssh_group_path, normalized_workspace_path,
 };
@@ -13,6 +14,7 @@ use super::connection_import_draft::{
 pub(crate) struct ImportCenterState {
     sources: Vec<ImportSourceState>,
     rows: Vec<ImportPreviewRow>,
+    defaults: ImportConnectionDefaults,
 }
 
 pub(crate) struct ImportSourceState {
@@ -49,6 +51,7 @@ impl ImportCenterState {
         Self {
             sources,
             rows: Vec::new(),
+            defaults: ImportConnectionDefaults::default(),
         }
     }
 
@@ -57,6 +60,7 @@ impl ImportCenterState {
         Self {
             sources: Vec::new(),
             rows: Vec::new(),
+            defaults: ImportConnectionDefaults::default(),
         }
     }
 
@@ -81,6 +85,18 @@ impl ImportCenterState {
 
     pub(crate) fn rows(&self) -> &[ImportPreviewRow] {
         &self.rows
+    }
+
+    pub(crate) fn defaults(&self) -> ImportConnectionDefaults {
+        self.defaults
+    }
+
+    /// 更新导入默认项，并同步到已经解析出来的草稿上（用户可能在预览之后才改勾选）。
+    pub(crate) fn set_defaults(&mut self, defaults: ImportConnectionDefaults) {
+        self.defaults = defaults;
+        for row in &mut self.rows {
+            row.draft.set_defaults(defaults);
+        }
     }
 
     pub(crate) fn workspace_group_paths(&self) -> Vec<String> {
@@ -168,6 +184,11 @@ impl ImportCenterState {
                     .as_ref()
                     .and_then(|ssh| ssh.group_path.as_deref())
                     .and_then(normalized_ssh_group_path),
+                ImportRecordKind::Telnet => record
+                    .telnet
+                    .as_ref()
+                    .and_then(|telnet| telnet.group_path.as_deref())
+                    .and_then(normalized_ssh_group_path),
                 ImportRecordKind::Workspace => record
                     .workspace
                     .as_ref()
@@ -192,7 +213,7 @@ impl ImportCenterState {
         self.rows = records
             .into_iter()
             .map(|record| ImportPreviewRow {
-                draft: EditableImportDraft::new(record),
+                draft: EditableImportDraft::new(record).with_defaults(self.defaults),
                 selected: true,
                 save_status: ImportRowSaveStatus::Pending,
             })

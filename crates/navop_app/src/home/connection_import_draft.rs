@@ -5,6 +5,7 @@ use one_core::storage::{ConnectionType, QuickCommand, StoredConnection};
 use one_ui::IconSize;
 use rust_i18n::t;
 
+use super::connection_import_defaults::ImportConnectionDefaults;
 use super::connection_import_draft_conversion::{
     import_draft_duplicate_identity, import_draft_to_editor_connection,
     import_draft_to_quick_command, import_draft_to_stored_connection, ssh_auth_edit_values,
@@ -14,6 +15,7 @@ use super::connection_import_draft_conversion::{
 pub(crate) enum ImportDraftKind {
     Database,
     Ssh,
+    Telnet,
     QuickCommand,
     Workspace,
     Unsupported,
@@ -57,6 +59,8 @@ pub(crate) struct EditableImportDraft {
     pub(crate) quick_command_command: String,
     pub(crate) quick_command_shortcut: String,
     pub(crate) quick_command_description: String,
+    /// 导入窗口里统一指定的高级设置默认项，转换时套用到连接参数上。
+    pub(crate) defaults: ImportConnectionDefaults,
     payload: ImportDraftPayload,
 }
 
@@ -87,10 +91,21 @@ impl EditableImportDraft {
         match record.kind {
             ImportRecordKind::Database => Self::database(record),
             ImportRecordKind::Ssh => Self::ssh(record),
+            ImportRecordKind::Telnet => Self::telnet(record),
             ImportRecordKind::QuickCommand => Self::quick_command(record),
             ImportRecordKind::Workspace => Self::workspace(record),
             ImportRecordKind::PortForwarding => Self::unsupported(record),
         }
+    }
+
+    /// 覆盖导入窗口里统一指定的高级设置默认项。
+    pub(crate) fn with_defaults(mut self, defaults: ImportConnectionDefaults) -> Self {
+        self.defaults = defaults;
+        self
+    }
+
+    pub(crate) fn set_defaults(&mut self, defaults: ImportConnectionDefaults) {
+        self.defaults = defaults;
     }
 
     fn database(record: ImportRecord) -> Self {
@@ -123,6 +138,7 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
     }
@@ -158,6 +174,43 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            defaults: ImportConnectionDefaults::default(),
+            payload: ImportDraftPayload::Record(record),
+        }
+    }
+
+    fn telnet(record: ImportRecord) -> Self {
+        let imported = record.telnet.as_ref();
+        Self {
+            selected: true,
+            name: imported
+                .map(|record| record.name.clone())
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| record.display_name.clone()),
+            host: imported
+                .map(|record| record.host.clone())
+                .unwrap_or_default(),
+            port: imported
+                .and_then(|record| record.port)
+                .map(|port| port.to_string())
+                .unwrap_or_default(),
+            username: imported
+                .and_then(|record| record.username.clone())
+                .unwrap_or_default(),
+            ssh_group_path: imported
+                .and_then(|record| record.group_path.clone())
+                .unwrap_or_default(),
+            workspace_path: String::new(),
+            password: imported
+                .and_then(|record| record.password.clone())
+                .unwrap_or_default(),
+            database: String::new(),
+            private_key_path: String::new(),
+            quick_command_group_name: String::new(),
+            quick_command_command: String::new(),
+            quick_command_shortcut: String::new(),
+            quick_command_description: String::new(),
+            defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
     }
@@ -189,6 +242,7 @@ impl EditableImportDraft {
             quick_command_description: imported
                 .and_then(|record| record.description.clone())
                 .unwrap_or_default(),
+            defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
     }
@@ -220,6 +274,7 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
     }
@@ -240,6 +295,7 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
     }
@@ -249,6 +305,7 @@ impl EditableImportDraft {
             ImportDraftPayload::Record(record) => match record.kind {
                 ImportRecordKind::Database => ImportDraftKind::Database,
                 ImportRecordKind::Ssh => ImportDraftKind::Ssh,
+                ImportRecordKind::Telnet => ImportDraftKind::Telnet,
                 ImportRecordKind::QuickCommand => ImportDraftKind::QuickCommand,
                 ImportRecordKind::Workspace => ImportDraftKind::Workspace,
                 ImportRecordKind::PortForwarding => ImportDraftKind::Unsupported,
@@ -261,6 +318,7 @@ impl EditableImportDraft {
             ImportDraftPayload::Record(record) => match record.kind {
                 ImportRecordKind::Database => ConnectionType::Database,
                 ImportRecordKind::Ssh => ConnectionType::SshSftp,
+                ImportRecordKind::Telnet => ConnectionType::Telnet,
                 ImportRecordKind::QuickCommand => ConnectionType::SshSftp,
                 ImportRecordKind::Workspace => ConnectionType::SshSftp,
                 ImportRecordKind::PortForwarding => ConnectionType::PortForwarding,

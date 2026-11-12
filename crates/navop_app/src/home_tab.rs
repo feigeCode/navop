@@ -222,6 +222,9 @@ pub struct HomePage {
     master_key_unlock_prompt_pending: bool,
     /// 防止主密钥对话框被启动提示和用户点击重复打开。
     master_key_dialog_open: bool,
+    /// 卡片 / 连接行的双击判定：只认同一元素上紧邻的两次点击，
+    /// 避免快捷打开对话框关闭后第二次点击穿透到卡片时重复打开连接。
+    connection_double_click: connection_double_click::ConnectionDoubleClickTracker,
     team_permissions: TeamPermissionSnapshot,
 }
 
@@ -254,6 +257,7 @@ mod connection_card;
 mod connection_card_actions;
 mod connection_card_content;
 mod connection_details;
+mod connection_double_click;
 pub(crate) mod connection_filter;
 pub(crate) use connection_filter::ConnectionFilter;
 mod account_menu;

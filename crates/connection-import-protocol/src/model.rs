@@ -27,6 +27,7 @@ pub enum Platform {
 pub enum ImportRecordKind {
     Database,
     Ssh,
+    Telnet,
     PortForwarding,
     QuickCommand,
     Workspace,
@@ -91,6 +92,9 @@ pub struct ImportRecord {
     pub display_name: String,
     pub database: Option<DatabaseImportRecord>,
     pub ssh: Option<SshImportRecord>,
+    /// Telnet 会话载荷；旧记录缺省为 `None`。
+    #[serde(default)]
+    pub telnet: Option<TelnetImportRecord>,
     #[serde(default)]
     pub port_forwarding: Option<PortForwardingImportRecord>,
     #[serde(default)]
@@ -103,43 +107,25 @@ pub struct ImportRecord {
 
 impl ImportRecord {
     pub fn validate_shape(&self) -> Result<(), ImportProtocolError> {
-        let matches_payload = matches!(
-            (
-                self.kind,
-                self.database.is_some(),
-                self.ssh.is_some(),
-                self.port_forwarding.is_some(),
-                self.quick_command.is_some(),
-                self.workspace.is_some()
-            ),
-            (ImportRecordKind::Database, true, false, false, false, false)
-                | (ImportRecordKind::Ssh, false, true, false, false, false)
-                | (
-                    ImportRecordKind::PortForwarding,
-                    false,
-                    false,
-                    true,
-                    false,
-                    false
-                )
-                | (
-                    ImportRecordKind::QuickCommand,
-                    false,
-                    false,
-                    false,
-                    true,
-                    false
-                )
-                | (
-                    ImportRecordKind::Workspace,
-                    false,
-                    false,
-                    false,
-                    false,
-                    true
-                )
-        );
-        if matches_payload {
+        // 每种 kind 恰好对应一个载荷槽位；载荷数量不为一或槽位不匹配都视为协议错误。
+        let payloads = [
+            self.database.is_some(),
+            self.ssh.is_some(),
+            self.telnet.is_some(),
+            self.port_forwarding.is_some(),
+            self.quick_command.is_some(),
+            self.workspace.is_some(),
+        ];
+        let expected_slot = match self.kind {
+            ImportRecordKind::Database => 0,
+            ImportRecordKind::Ssh => 1,
+            ImportRecordKind::Telnet => 2,
+            ImportRecordKind::PortForwarding => 3,
+            ImportRecordKind::QuickCommand => 4,
+            ImportRecordKind::Workspace => 5,
+        };
+        let payload_count = payloads.iter().filter(|present| **present).count();
+        if payload_count == 1 && payloads[expected_slot] {
             Ok(())
         } else {
             Err(ImportProtocolError::MismatchedRecordPayload {
@@ -194,6 +180,23 @@ pub struct SshImportRecord {
     pub jump_server: Option<SshJumpServerImportRecord>,
     #[serde(default)]
     pub proxy: Option<SshProxyImportRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelnetImportRecord {
+    pub name: String,
+    pub host: String,
+    /// 为空时按 Telnet 默认端口 23 处理。
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// 部分设备没有登录名（只有口令），因此保持可选。
+    #[serde(default)]
+    pub username: Option<String>,
+    /// 迁移源保存的登录口令；缺失时由连接时的凭据输入补齐。
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub group_path: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +366,7 @@ mod tests {
             display_name: "record".to_string(),
             database: None,
             ssh: None,
+            telnet: None,
             port_forwarding: None,
             quick_command: None,
             workspace: None,
@@ -473,6 +477,70 @@ mod tests {
             sort_order: 0,
             connection_source_id: None,
         });
+        record.ssh = Some(SshImportRecord {
+            name: "unexpected".to_string(),
+            host: "example.test".to_string(),
+            port: Some(22),
+            username: "deploy".to_string(),
+            group_path: None,
+            auth_method: SshImportAuthMethod::Agent,
+            init_script: None,
+            jump_server: None,
+            proxy: None,
+        });
+
+        assert!(matches!(
+            record.validate_shape(),
+            Err(ImportProtocolError::MismatchedRecordPayload { .. })
+        ));
+    }
+
+    #[test]
+    fn validates_telnet_payload_shape_and_json_round_trip() {
+        let mut record = base_record(ImportRecordKind::Telnet);
+        record.telnet = Some(TelnetImportRecord {
+            name: "core-switch".to_string(),
+            host: "10.0.0.8".to_string(),
+            port: Some(2001),
+            username: Some("admin".to_string()),
+            password: Some("secret".to_string()),
+            group_path: Some("Core".to_string()),
+        });
+
+        assert_eq!(Ok(()), record.validate_shape());
+        let json = serde_json::to_string(&record).unwrap();
+        let decoded: ImportRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(record, decoded);
+    }
+
+    #[test]
+    fn telnet_record_accepts_host_only_session() {
+        let mut record = base_record(ImportRecordKind::Telnet);
+        record.telnet = Some(TelnetImportRecord {
+            name: "console".to_string(),
+            host: "console.example.test".to_string(),
+            port: None,
+            username: None,
+            password: None,
+            group_path: None,
+        });
+
+        assert_eq!(Ok(()), record.validate_shape());
+    }
+
+    #[test]
+    fn rejects_telnet_without_telnet_payload() {
+        let record = base_record(ImportRecordKind::Telnet);
+
+        assert!(matches!(
+            record.validate_shape(),
+            Err(ImportProtocolError::MismatchedRecordPayload { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_telnet_with_another_payload() {
+        let mut record = base_record(ImportRecordKind::Telnet);
         record.ssh = Some(SshImportRecord {
             name: "unexpected".to_string(),
             host: "example.test".to_string(),

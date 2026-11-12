@@ -247,6 +247,12 @@ fn skip_escape_sequence(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    use ssh::{
+        ChannelEvent, HostKeyVerifier, KeyboardInteractiveResponder, PtyConfig, RusshClient,
+        SshAuth, SshChannel, SshClient, SshConnectConfig,
+    };
 
     fn elevation(auto_fill: Option<bool>, password: &str) -> SshElevationExpect {
         SshElevationExpect {
@@ -466,5 +472,197 @@ mod tests {
             now += Duration::from_secs(1);
         }
         assert_eq!(answered, MAX_FILLS as usize);
+    }
+
+    // ---------------------------------------------------------------------
+    // 端到端验证：真实 OpenSSH + PAM TOTP 服务器（见 script/docker-ssh-test/README.md）。
+    // 这套用例覆盖两条真实链路：
+    //   1. 一次性验证码在 keyboard-interactive 阶段自动应答（不弹输入框）；
+    //   2. 会话内 `sudo -i` / `su root` 的密码提示自动填入。
+    // 默认 #[ignore]：需要先 `docker compose up -d` 起测试服务器。
+    // 运行：NAVOP_SSH_E2E=1 cargo test -p terminal --lib docker_ssh -- --ignored --nocapture
+    // ---------------------------------------------------------------------
+
+    fn e2e_env(name: &str, default: &str) -> String {
+        std::env::var(name).unwrap_or_else(|_| default.to_string())
+    }
+
+    fn e2e_target() -> Option<String> {
+        (std::env::var("NAVOP_SSH_E2E").as_deref() == Ok("1"))
+            .then(|| e2e_env("NAVOP_SSH_E2E_ADDR", "127.0.0.1:2222"))
+    }
+
+    async fn read_some<C: SshChannel>(channel: &mut C, timeout: Duration) -> String {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "等待服务器输出超时（可能卡在交互提示上）"
+            );
+            let event = tokio::time::timeout(remaining, channel.recv())
+                .await
+                .expect("读取 SSH 通道输出超时");
+            match event {
+                Some(ChannelEvent::Data(data)) => {
+                    return String::from_utf8_lossy(&data).into_owned();
+                }
+                Some(ChannelEvent::ExtendedData { data, .. }) => {
+                    return String::from_utf8_lossy(&data).into_owned();
+                }
+                Some(ChannelEvent::Eof | ChannelEvent::Close) | None => return String::new(),
+                Some(_) => continue,
+            }
+        }
+    }
+
+    /// 持续读取输出，直到 `expect.observe` 给出要回填的密码。
+    async fn next_elevation_answer<C: SshChannel>(
+        channel: &mut C,
+        expect: &mut SessionPasswordExpect,
+        timeout: Duration,
+    ) -> Vec<u8> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut seen = String::new();
+        loop {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "服务器没有在限定时间内给出提权密码提示，已收到的输出：{seen}"
+            );
+            let chunk = read_some(
+                channel,
+                deadline.saturating_duration_since(tokio::time::Instant::now()),
+            )
+            .await;
+            seen.push_str(&chunk);
+            if let Some(send) = expect.observe(&chunk, std::time::Instant::now()) {
+                return send;
+            }
+        }
+    }
+
+    async fn wait_for<C: SshChannel>(channel: &mut C, needle: &str, timeout: Duration) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut seen = String::new();
+        while !seen.contains(needle) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "没有等到 {needle:?}，已收到的输出：{seen}"
+            );
+            let chunk = read_some(
+                channel,
+                deadline.saturating_duration_since(tokio::time::Instant::now()),
+            )
+            .await;
+            if chunk.is_empty() {
+                break;
+            }
+            seen.push_str(&chunk);
+        }
+        assert!(
+            seen.contains(needle),
+            "没有等到 {needle:?}，已收到的输出：{seen}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "需要 script/docker-ssh-test 里的 OpenSSH 测试服务器（docker compose up -d），设置 NAVOP_SSH_E2E=1 后运行"]
+    async fn docker_ssh_otp_login_and_elevation_prompts() {
+        let Some(target) = e2e_target() else {
+            eprintln!("跳过：未设置 NAVOP_SSH_E2E=1");
+            return;
+        };
+        let (host, port) = target
+            .split_once(':')
+            .expect("NAVOP_SSH_E2E_ADDR 应为 host:port");
+        let username = e2e_env("NAVOP_SSH_E2E_USER", "tester");
+        let password = e2e_env("NAVOP_SSH_E2E_PASSWORD", "tester-pass");
+        let secret = e2e_env("NAVOP_SSH_E2E_OTP", "JBSWY3DPEHPK3PXP");
+
+        let otp = otp::OtpSecret::parse(&secret).expect("测试用 TOTP 密钥应可解析");
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let responder =
+            crate::terminal::TerminalMfaResponder::new(event_tx, None, Some(password.clone()))
+                .with_otp(Some(otp));
+
+        let config = SshConnectConfig {
+            host: host.to_string(),
+            port: port.parse().expect("端口应为数字"),
+            username: username.clone(),
+            auth: SshAuth::Password(password.clone()),
+            timeout: Some(Duration::from_secs(20)),
+            keepalive_interval: None,
+            keepalive_max: None,
+            jump_server: None,
+            proxy: None,
+            keyboard_interactive_responder: Some(
+                Arc::new(responder.clone()) as Arc<dyn KeyboardInteractiveResponder>
+            ),
+            host_key_verifier: HostKeyVerifier::insecure(),
+            x11_forwarding: false,
+            allow_legacy_algorithms: false,
+            forward_agent: false,
+            agent_identities: Vec::new(),
+        };
+
+        // 1) 认证阶段：验证码由客户端本地生成并自动提交，不应留下待人工输入的请求。
+        let mut client = RusshClient::connect(config)
+            .await
+            .expect("配置了 OTP 密钥后应能全自动完成 keyboard-interactive 认证");
+        assert!(
+            responder.pending_request().is_none(),
+            "验证码应自动应答，不应弹出手工输入"
+        );
+
+        let mut channel = client.open_channel().await.expect("打开 shell 通道");
+        channel
+            .request_pty(&PtyConfig {
+                term: "xterm-256color".to_string(),
+                width: 120,
+                height: 40,
+                pix_width: 0,
+                pix_height: 0,
+            })
+            .await
+            .expect("请求 PTY");
+        channel.request_shell().await.expect("请求 shell");
+        wait_for(&mut channel, "$ ", Duration::from_secs(20)).await;
+
+        // 2) 会话内提权：提权密码留空时回落到登录密码。
+        let mut elevate =
+            SessionPasswordExpect::new(&elevation(Some(true), ""), Some(&password), None);
+
+        channel.send_data(b"sudo -i\r").await.expect("发送 sudo -i");
+        let answer =
+            next_elevation_answer(&mut channel, &mut elevate, Duration::from_secs(20)).await;
+        assert_eq!(
+            String::from_utf8_lossy(&answer),
+            format!("{password}\r"),
+            "sudo 提示应回填登录密码"
+        );
+        channel.send_data(&answer).await.expect("回填 sudo 密码");
+        wait_for(&mut channel, "# ", Duration::from_secs(20)).await;
+        channel.send_data(b"id -un\r").await.expect("查询当前用户");
+        wait_for(&mut channel, "root", Duration::from_secs(20)).await;
+        channel.send_data(b"exit\r").await.expect("退出 root shell");
+        wait_for(&mut channel, "$ ", Duration::from_secs(20)).await;
+
+        // 3) su root 的 `Password:` 提示同样自动回填。
+        channel.send_data(b"su root\r").await.expect("发送 su root");
+        let answer =
+            next_elevation_answer(&mut channel, &mut elevate, Duration::from_secs(20)).await;
+        assert_eq!(
+            String::from_utf8_lossy(&answer),
+            format!("{password}\r"),
+            "su 提示应回填登录密码"
+        );
+        channel.send_data(&answer).await.expect("回填 su 密码");
+        wait_for(&mut channel, "# ", Duration::from_secs(20)).await;
+        channel.send_data(b"id -un\r").await.expect("查询当前用户");
+        wait_for(&mut channel, "root", Duration::from_secs(20)).await;
+
+        let _ = channel.eof().await;
+        let _ = channel.close().await;
+        let _ = client.disconnect().await;
     }
 }

@@ -293,6 +293,10 @@ SSH:
     en: One-time password secret
     zh-CN: 一次性验证码密钥
     zh-HK: 一次性驗證碼密鑰
+  otp_secret_desc:
+    en: Ask your server administrator for the secret, then paste an otpauth:// link or its base32 key here, or import a QR code image with the buttons below. navop generates the code locally and submits it during keyboard-interactive authentication, so the two-factor authentication switch above must stay on. The secret is stored with the connection like a saved password.
+    zh-CN: 密钥由服务器管理员提供：可以粘贴 otpauth:// 链接或其中的 base32 密钥，也可以用下面的按钮导入二维码图片。验证码由 navop 本地生成，并在 keyboard-interactive 认证时自动提交，因此上方的双因素认证开关需要保持开启。密钥与保存的密码一样随连接一起保存。
+    zh-HK: 密鑰由伺服器管理員提供：可以貼上 otpauth:// 連結或其中的 base32 密鑰，也可以用下面的按鈕匯入二維碼圖片。驗證碼由 navop 本機產生，並在 keyboard-interactive 認證時自動提交，因此上方的雙因素認證開關需要保持開啟。密鑰與已儲存的密碼一樣隨連線一起保存。
   otp_placeholder:
     en: "Optional: otpauth:// URI or base32 secret"
     zh-CN: "可选:otpauth:// 地址 或 base32 密钥"

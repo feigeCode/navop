@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use connection_import_protocol::{
     DatabaseImportRecord, ImportDatabaseType, ImportRecord, ImportRecordKind, ImporterCapabilities,
-    ImporterDescriptor, PasswordImportStatus, Platform,
+    ImporterDescriptor, PasswordImportStatus, Platform, SshImportAuthMethod, SshImportRecord,
 };
 use extension_runtime::connection_import_provider::ImportPreviewError;
 
@@ -50,6 +50,56 @@ fn import_window_model_exposes_preview_error_on_matching_source() {
     assert!(model.sources()[1].preview_error.is_none());
 }
 
+#[test]
+fn toggling_migration_defaults_reconverts_parsed_rows() {
+    let mut model = ConnectionImportWindowModel::empty_for_tests();
+    model.apply_preview_records(vec![ssh_record("legacy")]);
+
+    assert!(model.defaults().allow_legacy_algorithms);
+    assert!(!model.defaults().disable_shell_integration);
+
+    model.toggle_allow_legacy_algorithms();
+    model.toggle_disable_shell_integration();
+
+    let params = model.rows()[0]
+        .draft
+        .to_stored_connection()
+        .expect("convert ssh import")
+        .to_ssh_params()
+        .expect("ssh params");
+    assert_eq!(None, params.allow_legacy_algorithms);
+    assert_eq!(Some(true), params.disable_shell_integration);
+}
+
+fn ssh_record(name: &str) -> ImportRecord {
+    ImportRecord {
+        id: name.to_string(),
+        importer_id: "securecrt".to_string(),
+        source_label: "SecureCRT".to_string(),
+        source_id: None,
+        kind: ImportRecordKind::Ssh,
+        display_name: name.to_string(),
+        database: None,
+        ssh: Some(SshImportRecord {
+            name: name.to_string(),
+            host: "ssh.example.test".to_string(),
+            port: Some(22),
+            username: "deploy".to_string(),
+            group_path: None,
+            auth_method: SshImportAuthMethod::Password { password: None },
+            init_script: None,
+            jump_server: None,
+            proxy: None,
+        }),
+        telnet: None,
+        port_forwarding: None,
+        quick_command: None,
+        workspace: None,
+        password_status: PasswordImportStatus::Missing,
+        warnings: Vec::new(),
+    }
+}
+
 fn descriptor(id: &str) -> ImporterDescriptor {
     ImporterDescriptor {
         id: id.to_string(),
@@ -90,6 +140,7 @@ fn database_record(name: &str) -> ImportRecord {
             extra_params: BTreeMap::new(),
         }),
         ssh: None,
+        telnet: None,
         port_forwarding: None,
         quick_command: None,
         workspace: None,

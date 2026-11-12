@@ -2,6 +2,7 @@ use connection_import_protocol::{ImportRecord, ImportScanReport, ImporterDescrip
 use extension_runtime::connection_import_provider::ImportPreviewError;
 
 use super::is_save_candidate;
+use crate::home::connection_import_defaults::ImportConnectionDefaults;
 use crate::home::connection_import_draft::EditableImportDraft;
 use crate::home::connection_import_model::{
     ImportCenterState, ImportPreviewRow, ImportSourceState,
@@ -50,6 +51,22 @@ impl ConnectionImportWindowModel {
 
     pub(crate) fn workspace_group_paths(&self) -> Vec<String> {
         self.state.workspace_group_paths()
+    }
+
+    pub(crate) fn defaults(&self) -> ImportConnectionDefaults {
+        self.state.defaults()
+    }
+
+    pub(crate) fn toggle_allow_legacy_algorithms(&mut self) {
+        let mut defaults = self.state.defaults();
+        defaults.allow_legacy_algorithms = !defaults.allow_legacy_algorithms;
+        self.state.set_defaults(defaults);
+    }
+
+    pub(crate) fn toggle_disable_shell_integration(&mut self) {
+        let mut defaults = self.state.defaults();
+        defaults.disable_shell_integration = !defaults.disable_shell_integration;
+        self.state.set_defaults(defaults);
     }
 
     pub(crate) fn toggle_source(&mut self, importer_id: &str) {
