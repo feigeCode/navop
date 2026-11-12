@@ -2625,6 +2625,13 @@ impl SshFormWindow {
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.paste_otp_image(window, cx);
                                         })),
+                                )
+                                .child(
+                                    Button::new("otp-secret-help")
+                                        .icon(IconName::Info)
+                                        .ghost()
+                                        .xsmall()
+                                        .tooltip(t!("SSH.otp_secret_desc").to_string()),
                                 ),
                         ),
                 ),
