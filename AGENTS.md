@@ -822,6 +822,13 @@
 - **验证方式**：`cargo test -p terminal --lib ssh_shell_integration`（`ready_marker_releases_input_without_waiting_for_prompt_marker` 必须断言收到 marker 后立即 `accepts_terminal_input()`）；真机 `cargo test -p terminal --test ssh_runtime_integration_live -- --ignored --nocapture` 同时验证无 `133;B` 时 ready marker、命令记录与零远端写入。真机实测通道建立约 252ms、运行时注入就绪约 91ms；改前测试 15 秒都等不到 `133;B`。
 - **适用范围**：`crates/terminal/src/ssh_backend.rs`、`crates/terminal/src/ssh_shell_integration.rs`、SSH 运行时注入真机测试，以及任何把 prompt 生命周期标记误当成“可以开始输入”前置条件的终端集成。
 
+- **标题**：长 SSH Shell Integration 脚本必须等 Bootstrap marker 后再注入，不能把登录 banner 当 shell-ready
+- **触发信号**：同一条注入命令在 `bash -c` / `bash -i -c` 测试通过，但真实 SSH PTY 偶发停在续行提示符 `>`，5 秒后超时降级；打开日志可见 PTY 已回显半条 6KB 命令，却没有 ready/failure marker（issue #537 后续排查）。
+- **根因 / 约束**：登录 expect 完成后收到的首段输出可能只是 PAM/login banner，此时交互 shell 尚未进入 readline/行编辑状态。直接把数 KB 的单行集成脚本写入 PTY，命令可能被拆行或当成未闭合语句，shell 进入 `>` 续行；普通 `-c` 测试没有这段时序，因此会假绿。
+- **正确做法**：首段输出后先发送几十字节的 Bootstrap 命令并等待私有 `ShellIntegrationBootstrap=1` marker，证明交互 shell 已实际执行输入；再发送完整集成脚本。完整脚本用 `if eval ...; then Ready; else Failed; fi` 包裹，失败 marker 要立即降级 Plain；Bootstrap/注入超时也直接进入 Plain 并放行 deferred 输入，不再等下一段输出。
+- **验证方式**：`cargo test -p terminal --lib ssh_shell_integration` 覆盖 Bootstrap marker 分段、失败 marker、超时立即放行和真实 bash/zsh；`cargo test -p terminal --test ssh_runtime_integration_live -- --ignored --nocapture` 连续跑 5 次，真机 ready 约 130–160ms 且命令记录、零远端写入均正常。只跑 `bash -i -c` 不能替代真实 PTY。
+- **适用范围**：`crates/terminal/src/ssh_backend.rs`、`crates/terminal/src/ssh_shell_integration.rs`、所有通过 PTY stdin 注入多行/长脚本的终端初始化链路。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

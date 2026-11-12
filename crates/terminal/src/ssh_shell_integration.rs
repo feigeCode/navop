@@ -1,5 +1,9 @@
 const MAX_SUPPRESSED_OUTPUT_BYTES: usize = 64 * 1024;
 pub const SHELL_INTEGRATION_READY_MARKER: &[u8] = b"\x1b]1337;ShellIntegrationReady=1\x07";
+pub const SHELL_INTEGRATION_FAILED_MARKER: &[u8] = b"\x1b]1337;ShellIntegrationFailed=1\x07";
+const SHELL_INTEGRATION_BOOTSTRAP_MARKER: &[u8] = b"\x1b]1337;ShellIntegrationBootstrap=1\x07";
+const SHELL_INTEGRATION_BOOTSTRAP_COMMAND: &[u8] =
+    b" _ONETCLI_RUNTIME_SETUP=1; : __ONETCLI_RUNTIME_SETUP_1; printf '\\033]1337;ShellIntegrationBootstrap=1\\007'\r";
 
 /// 注入命令回显的开头（[`runtime_shell_integration_command`] 以空格开头）。
 ///
@@ -37,26 +41,41 @@ fn runtime_shell_integration_body() -> String {
     let script = crate::shell_integration::embedded_shell_integration_script();
     let body = script.lines().skip(3).collect::<Vec<_>>().join("\n");
     format!(
-        "{body}\nif [[ -n \"${{BASH_VERSION:-}}\" ]]; then\n    __onetcli_setup_history=\"$(history 2>/dev/null | while read -r __onetcli_history_number __onetcli_history_rest; do case \"$__onetcli_history_rest\" in *__ONETCLI_RUNTIME_SETUP_1*) printf '%s ' \"${{__onetcli_history_number%\\*}}\";; esac; done)\"\n    for __onetcli_history_number in $__onetcli_setup_history; do history -d \"$__onetcli_history_number\" 2>/dev/null; done\n    unset __onetcli_setup_history __onetcli_history_number __onetcli_history_rest\nfi\n__onetcli_emit_osc '1337;ShellIntegrationReady=1'",
+        "{body}\nif [[ -n \"${{BASH_VERSION:-}}\" ]]; then\n    __onetcli_setup_history=\"$(history 2>/dev/null | while read -r __onetcli_history_number __onetcli_history_rest; do case \"$__onetcli_history_rest\" in *__ONETCLI_RUNTIME_SETUP_1*) printf '%s ' \"${{__onetcli_history_number%\\*}}\";; esac; done)\"\n    for __onetcli_history_number in $__onetcli_setup_history; do history -d \"$__onetcli_history_number\" 2>/dev/null; done\n    unset __onetcli_setup_history __onetcli_history_number __onetcli_history_rest\nfi",
         body = body,
     )
 }
 
 pub(crate) fn runtime_shell_integration_command() -> Vec<u8> {
-    let body = ansi_c_quote(&runtime_shell_integration_body());
-    format!(" _ONETCLI_RUNTIME_SETUP=1; : __ONETCLI_RUNTIME_SETUP_1; eval {body}\r").into_bytes()
+    runtime_shell_integration_command_for_body(&runtime_shell_integration_body())
+}
+
+fn runtime_shell_integration_command_for_body(body: &str) -> Vec<u8> {
+    let body = ansi_c_quote(body);
+    format!(
+        " _ONETCLI_RUNTIME_SETUP=1; : __ONETCLI_RUNTIME_SETUP_1; \
+         if eval {body}; then \
+             printf '\\033]1337;ShellIntegrationReady=1\\007'; \
+         else \
+             printf '\\033]1337;ShellIntegrationFailed=1\\007'; \
+         fi; \
+         :\r"
+    )
+    .into_bytes()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShellIntegrationReady {
     None,
     Integrated,
+    Failed,
     Plain,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum FilteredShellOutput {
     Suppressed,
+    BootstrapReady,
     Forward {
         data: Vec<u8>,
         ready: ShellIntegrationReady,
@@ -66,13 +85,16 @@ pub enum FilteredShellOutput {
 enum RuntimeShellIntegrationPhase {
     Disabled,
     WaitingForFirstOutput,
+    Bootstrapping {
+        suppressed: Vec<u8>,
+    },
+    BootstrapReady,
     Injecting {
         suppressed: Vec<u8>,
         /// 静默缓冲超过上限被截断时，首屏已被切掉一段，不再尝试还原。
         overflowed: bool,
     },
     Integrated,
-    PlainAwaitingOutput,
     Plain,
 }
 
@@ -105,6 +127,10 @@ impl RuntimeShellIntegration {
         &self.command
     }
 
+    pub fn bootstrap_command(&self) -> &'static [u8] {
+        SHELL_INTEGRATION_BOOTSTRAP_COMMAND
+    }
+
     pub fn should_inject(&self, data: &[u8], login_complete: bool, expect_responded: bool) -> bool {
         !data.is_empty()
             && login_complete
@@ -119,10 +145,22 @@ impl RuntimeShellIntegration {
         if matches!(
             self.phase,
             RuntimeShellIntegrationPhase::WaitingForFirstOutput
+                | RuntimeShellIntegrationPhase::BootstrapReady
         ) {
             self.phase = RuntimeShellIntegrationPhase::Injecting {
                 suppressed: Vec::new(),
                 overflowed: false,
+            };
+        }
+    }
+
+    pub fn begin_bootstrap(&mut self) {
+        if matches!(
+            self.phase,
+            RuntimeShellIntegrationPhase::WaitingForFirstOutput
+        ) {
+            self.phase = RuntimeShellIntegrationPhase::Bootstrapping {
+                suppressed: Vec::new(),
             };
         }
     }
@@ -147,6 +185,18 @@ impl RuntimeShellIntegration {
 
     pub fn filter_output(&mut self, data: Vec<u8>) -> FilteredShellOutput {
         match &mut self.phase {
+            RuntimeShellIntegrationPhase::Bootstrapping { suppressed } => {
+                suppressed.extend_from_slice(&data);
+                if suppressed.len() > MAX_SUPPRESSED_OUTPUT_BYTES {
+                    let retain_from = suppressed.len() - MAX_SUPPRESSED_OUTPUT_BYTES;
+                    suppressed.drain(..retain_from);
+                }
+                if find_subslice(suppressed, SHELL_INTEGRATION_BOOTSTRAP_MARKER).is_some() {
+                    self.phase = RuntimeShellIntegrationPhase::BootstrapReady;
+                    return FilteredShellOutput::BootstrapReady;
+                }
+                FilteredShellOutput::Suppressed
+            }
             RuntimeShellIntegrationPhase::Injecting {
                 suppressed,
                 overflowed,
@@ -157,8 +207,25 @@ impl RuntimeShellIntegration {
                     suppressed.drain(..retain_from);
                     *overflowed = true;
                 }
-                let Some(marker_start) = find_subslice(suppressed, SHELL_INTEGRATION_READY_MARKER)
-                else {
+                let ready_marker = find_subslice(suppressed, SHELL_INTEGRATION_READY_MARKER)
+                    .map(|start| (start, SHELL_INTEGRATION_READY_MARKER.len()));
+                let failed_marker = find_subslice(suppressed, SHELL_INTEGRATION_FAILED_MARKER)
+                    .map(|start| (start, SHELL_INTEGRATION_FAILED_MARKER.len()));
+                let Some((marker_start, marker_len, ready)) = (match (ready_marker, failed_marker) {
+                    (Some(ready), Some(failed)) if ready.0 <= failed.0 => {
+                        Some((ready.0, ready.1, ShellIntegrationReady::Integrated))
+                    }
+                    (Some(_), Some(failed)) => {
+                        Some((failed.0, failed.1, ShellIntegrationReady::Failed))
+                    }
+                    (Some(ready), None) => {
+                        Some((ready.0, ready.1, ShellIntegrationReady::Integrated))
+                    }
+                    (None, Some(failed)) => {
+                        Some((failed.0, failed.1, ShellIntegrationReady::Failed))
+                    }
+                    (None, None) => None,
+                }) else {
                     return FilteredShellOutput::Suppressed;
                 };
                 // 注入回显之前的内容是真实首屏（登录 banner 等），只是被静默期连带
@@ -174,34 +241,31 @@ impl RuntimeShellIntegration {
                         })
                         .unwrap_or_default()
                 };
-                let suffix_start = marker_start + SHELL_INTEGRATION_READY_MARKER.len();
+                let suffix_start = marker_start + marker_len;
                 let suffix = suppressed.split_off(suffix_start);
                 suppressed.clear();
-                // ready marker 由集成脚本在所有 hook 安装完成后主动发出。
-                // 此时脚本已经执行成功，不应再等未必出现的 OSC 133;B：
-                // oh-my-posh / starship / p10k 等提示符框架可能把它冲掉，
-                // 等待只会让已经可用的终端白扣住用户输入。
-                self.phase = RuntimeShellIntegrationPhase::Integrated;
+                self.phase = match ready {
+                    // ready marker 由集成脚本在所有 hook 安装完成后主动发出。
+                    // 此时脚本已经执行成功，不应再等未必出现的 OSC 133;B。
+                    ShellIntegrationReady::Integrated => RuntimeShellIntegrationPhase::Integrated,
+                    // 注入命令返回失败时直接降级为裸终端，不能继续扣住输入等 5s。
+                    ShellIntegrationReady::Failed => RuntimeShellIntegrationPhase::Plain,
+                    ShellIntegrationReady::None | ShellIntegrationReady::Plain => unreachable!(),
+                };
                 FilteredShellOutput::Forward {
                     data: [restored.as_slice(), suffix.as_slice()].concat(),
-                    ready: ShellIntegrationReady::Integrated,
+                    ready,
                 }
             }
             RuntimeShellIntegrationPhase::WaitingForFirstOutput => FilteredShellOutput::Forward {
                 data,
                 ready: ShellIntegrationReady::None,
             },
+            RuntimeShellIntegrationPhase::BootstrapReady => FilteredShellOutput::Suppressed,
             RuntimeShellIntegrationPhase::Disabled | RuntimeShellIntegrationPhase::Integrated => {
                 FilteredShellOutput::Forward {
                     data,
                     ready: ShellIntegrationReady::None,
-                }
-            }
-            RuntimeShellIntegrationPhase::PlainAwaitingOutput => {
-                self.phase = RuntimeShellIntegrationPhase::Plain;
-                FilteredShellOutput::Forward {
-                    data,
-                    ready: ShellIntegrationReady::Plain,
                 }
             }
             RuntimeShellIntegrationPhase::Plain => FilteredShellOutput::Forward {
@@ -221,8 +285,13 @@ impl RuntimeShellIntegration {
     }
 
     pub fn on_timeout(&mut self) -> bool {
-        if matches!(self.phase, RuntimeShellIntegrationPhase::Injecting { .. }) {
-            self.phase = RuntimeShellIntegrationPhase::PlainAwaitingOutput;
+        if matches!(
+            self.phase,
+            RuntimeShellIntegrationPhase::Bootstrapping { .. }
+                | RuntimeShellIntegrationPhase::BootstrapReady
+                | RuntimeShellIntegrationPhase::Injecting { .. }
+        ) {
+            self.phase = RuntimeShellIntegrationPhase::Plain;
             return true;
         }
         false
@@ -232,8 +301,9 @@ impl RuntimeShellIntegration {
         !matches!(
             self.phase,
             RuntimeShellIntegrationPhase::WaitingForFirstOutput
+                | RuntimeShellIntegrationPhase::Bootstrapping { .. }
+                | RuntimeShellIntegrationPhase::BootstrapReady
                 | RuntimeShellIntegrationPhase::Injecting { .. }
-                | RuntimeShellIntegrationPhase::PlainAwaitingOutput
         )
     }
 
@@ -242,11 +312,25 @@ impl RuntimeShellIntegration {
         match self.phase {
             RuntimeShellIntegrationPhase::Disabled => "disabled",
             RuntimeShellIntegrationPhase::WaitingForFirstOutput => "waiting-for-first-output",
+            RuntimeShellIntegrationPhase::Bootstrapping { .. } => "bootstrapping",
+            RuntimeShellIntegrationPhase::BootstrapReady => "bootstrap-ready",
             RuntimeShellIntegrationPhase::Injecting { .. } => "injecting",
             RuntimeShellIntegrationPhase::Integrated => "integrated",
-            RuntimeShellIntegrationPhase::PlainAwaitingOutput => "plain-awaiting-output",
             RuntimeShellIntegrationPhase::Plain => "plain",
         }
+    }
+
+    /// 注入静默期内的原始输出，仅供真机诊断测试定位缺失 marker 的原因。
+    pub fn suppressed_output(&self) -> &[u8] {
+        match &self.phase {
+            RuntimeShellIntegrationPhase::Bootstrapping { suppressed } => suppressed,
+            RuntimeShellIntegrationPhase::Injecting { suppressed, .. } => suppressed,
+            _ => &[],
+        }
+    }
+
+    pub fn saw_injection_echo(&self) -> bool {
+        find_subslice(self.suppressed_output(), INJECTION_ECHO_PREFIX).is_some()
     }
 
     /// 看门狗兜底：把仍会暂存用户输入的握手态强制推进到裸终端。
@@ -258,8 +342,9 @@ impl RuntimeShellIntegration {
     pub fn force_release_input(&mut self) -> bool {
         match self.phase {
             RuntimeShellIntegrationPhase::WaitingForFirstOutput
-            | RuntimeShellIntegrationPhase::Injecting { .. }
-            | RuntimeShellIntegrationPhase::PlainAwaitingOutput => {
+            | RuntimeShellIntegrationPhase::Bootstrapping { .. }
+            | RuntimeShellIntegrationPhase::BootstrapReady
+            | RuntimeShellIntegrationPhase::Injecting { .. } => {
                 self.phase = RuntimeShellIntegrationPhase::Plain;
                 true
             }
@@ -283,6 +368,13 @@ mod tests {
     #[test]
     fn runtime_command_is_one_line_and_keeps_navop_osc_protocol() {
         let integration = RuntimeShellIntegration::new(true);
+        let bootstrap = String::from_utf8(integration.bootstrap_command().to_vec())
+            .expect("bootstrap command must be UTF-8 shell text");
+        assert!(bootstrap.starts_with(' '));
+        assert!(bootstrap.ends_with('\r'));
+        assert!(!bootstrap[..bootstrap.len() - 1].contains('\n'));
+        assert!(bootstrap.contains("ShellIntegrationBootstrap=1"));
+
         let command = String::from_utf8(integration.injection_command().to_vec())
             .expect("runtime command must be UTF-8 shell text");
 
@@ -294,6 +386,8 @@ mod tests {
         assert!(command.contains("133;A"));
         assert!(command.contains("1337;Command="));
         assert!(command.contains("ShellIntegrationReady=1"));
+        assert!(command.contains("ShellIntegrationFailed=1"));
+        assert!(command.contains("if eval"));
         assert!(command.contains("_ONETCLI_SHELL_INTEGRATED=1"));
         assert!(!command.contains(".config/onetcli"));
         assert!(!command.contains(".bashrc"));
@@ -328,6 +422,35 @@ mod tests {
         integration.on_input_start();
         assert!(integration.accepts_terminal_input());
         assert!(integration.is_integrated());
+    }
+
+    #[test]
+    fn bootstrap_marker_gates_full_injection_until_shell_is_ready() {
+        let mut integration = RuntimeShellIntegration::new(true);
+        assert!(integration.should_inject(b"login banner", true, false));
+        integration.begin_bootstrap();
+        assert_eq!("bootstrapping", integration.phase_name());
+        assert!(!integration.accepts_terminal_input());
+        assert_eq!(
+            FilteredShellOutput::Suppressed,
+            integration.filter_output(b"bootstrapped setup echo".to_vec())
+        );
+
+        let split = SHELL_INTEGRATION_BOOTSTRAP_MARKER.len() / 2;
+        assert_eq!(
+            FilteredShellOutput::Suppressed,
+            integration.filter_output(SHELL_INTEGRATION_BOOTSTRAP_MARKER[..split].to_vec())
+        );
+        assert_eq!(
+            FilteredShellOutput::BootstrapReady,
+            integration.filter_output(SHELL_INTEGRATION_BOOTSTRAP_MARKER[split..].to_vec())
+        );
+        assert_eq!("bootstrap-ready", integration.phase_name());
+        assert!(!integration.accepts_terminal_input());
+
+        integration.begin_injection();
+        assert_eq!("injecting", integration.phase_name());
+        assert!(!integration.should_inject(b"prompt", true, false));
     }
 
     /// 握手静默期里被吞掉的登录 banner（pam_motd 在注入前打印的那几行）必须还回去，
@@ -411,6 +534,31 @@ mod tests {
     }
 
     #[test]
+    fn injection_failure_marker_releases_input_and_falls_back_to_plain() {
+        let mut integration = RuntimeShellIntegration::new(true);
+        integration.begin_injection();
+        assert_eq!(
+            FilteredShellOutput::Suppressed,
+            integration.filter_output(b" _ONETCLI_RUNTIME_SETUP=1; echoed setup".to_vec())
+        );
+        assert!(integration.saw_injection_echo());
+        assert_eq!(
+            b" _ONETCLI_RUNTIME_SETUP=1; echoed setup".len(),
+            integration.suppressed_output().len()
+        );
+        assert_eq!(
+            FilteredShellOutput::Forward {
+                data: b"prompt".to_vec(),
+                ready: ShellIntegrationReady::Failed,
+            },
+            integration.filter_output(b"\x1b]1337;ShellIntegrationFailed=1\x07prompt".to_vec())
+        );
+        assert_eq!("plain", integration.phase_name());
+        assert!(integration.accepts_terminal_input());
+        assert!(!integration.is_integrated());
+    }
+
+    #[test]
     fn timeout_releases_suppressed_output_and_falls_back_to_plain_shell() {
         let mut integration = RuntimeShellIntegration::new(true);
         integration.begin_injection();
@@ -420,11 +568,12 @@ mod tests {
         );
 
         assert!(integration.on_timeout());
-        assert!(!integration.accepts_terminal_input());
+        assert!(integration.accepts_terminal_input());
+        assert_eq!("plain", integration.phase_name());
         assert_eq!(
             FilteredShellOutput::Forward {
                 data: b"next prompt".to_vec(),
-                ready: ShellIntegrationReady::Plain,
+                ready: ShellIntegrationReady::None,
             },
             integration.filter_output(b"next prompt".to_vec())
         );
@@ -462,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn handshake_watchdog_releases_stalled_injection_and_plain_wait() {
+    fn handshake_watchdog_releases_stalled_injection() {
         // 注入回显未出现完成标记：握手停在 Injecting。
         let mut integration = RuntimeShellIntegration::new(true);
         integration.begin_injection();
@@ -470,13 +619,11 @@ mod tests {
         assert!(integration.force_release_input());
         assert!(integration.accepts_terminal_input());
 
-        // 注入超时后等待下一段输出：远端不再产出时同样需要兜底。
+        // 注入超时直接进入 Plain，不能继续等下一段输出才释放输入。
         let mut integration = RuntimeShellIntegration::new(true);
         integration.begin_injection();
         assert!(integration.on_timeout());
-        assert_eq!("plain-awaiting-output", integration.phase_name());
-        assert!(!integration.accepts_terminal_input());
-        assert!(integration.force_release_input());
+        assert_eq!("plain", integration.phase_name());
         assert!(integration.accepts_terminal_input());
     }
 
@@ -551,6 +698,56 @@ mod tests {
                 stdout.contains("1337;ShellIntegrationReady=1"),
                 "{shell} 应输出完成标记，实际: {stdout:?}"
             );
+
+            let mut interactive_runner = std::process::Command::new(shell);
+            interactive_runner
+                .args(extra_flags)
+                .args(["-i", "-c", command])
+                .env("HISTFILE", "/dev/null")
+                .stdin(std::process::Stdio::null());
+            let output = interactive_runner
+                .output()
+                .expect("应能在交互模式下启动真实 shell 执行注入命令");
+            assert!(
+                output.status.success(),
+                "{shell} 交互模式应接受注入命令: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                stdout.contains("1337;ShellIntegrationReady=1"),
+                "{shell} 交互模式应输出完成标记，实际: {stdout:?}"
+            );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_command_emits_failure_marker_when_eval_fails() {
+        let shell = "/bin/bash";
+        if !std::path::Path::new(shell).exists() {
+            return;
+        }
+        let command = runtime_shell_integration_command_for_body("false");
+        let command = String::from_utf8(command).unwrap();
+        let command = command.trim_end_matches('\r');
+        let output = std::process::Command::new(shell)
+            .args(["--noprofile", "--norc", "-c", command])
+            .output()
+            .expect("应能启动真实 bash 执行失败注入命令");
+        assert!(
+            output.status.success(),
+            "外层命令应正常处理 eval 失败: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("1337;ShellIntegrationFailed=1"),
+            "eval 失败时必须输出失败标记，实际: {stdout:?}"
+        );
+        assert!(
+            !stdout.contains("1337;ShellIntegrationReady=1"),
+            "eval 失败时不能误报 ready，实际: {stdout:?}"
+        );
     }
 }

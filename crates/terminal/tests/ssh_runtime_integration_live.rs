@@ -137,6 +137,7 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
 
     let mut integration = RuntimeShellIntegration::new(shell_integration_requested);
     let mut saw_ready_marker = false;
+    let mut bootstrap_sent = false;
     let mut injected = false;
     let setup_started = std::time::Instant::now();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -149,20 +150,36 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
         let Some(ssh::ChannelEvent::Data(data)) = event else {
             continue;
         };
-        if !injected && integration.should_inject(&data, true, false) {
+        if !bootstrap_sent && integration.should_inject(&data, true, false) {
             use ssh::SshChannel as _;
             channel
-                .send_data(integration.injection_command())
+                .send_data(integration.bootstrap_command())
                 .await
-                .context("注入命令发送失败")?;
-            integration.begin_injection();
-            injected = true;
+                .context("Bootstrap 命令发送失败")?;
+            integration.begin_bootstrap();
+            bootstrap_sent = true;
             continue;
         }
         match integration.filter_output(data) {
             FilteredShellOutput::Suppressed => continue,
+            FilteredShellOutput::BootstrapReady => {
+                use ssh::SshChannel as _;
+                channel
+                    .send_data(integration.injection_command())
+                    .await
+                    .context("注入命令发送失败")?;
+                integration.begin_injection();
+                injected = true;
+                continue;
+            }
             FilteredShellOutput::Forward { data, ready } => {
-                assert_ne!(ready, ShellIntegrationReady::Plain, "真机注入不应超时降级");
+                assert!(
+                    matches!(
+                        ready,
+                        ShellIntegrationReady::None | ShellIntegrationReady::Integrated
+                    ),
+                    "真机注入不应失败或超时降级"
+                );
                 let text = String::from_utf8_lossy(&data);
                 assert!(
                     !text.contains("__ONETCLI_RUNTIME_SETUP_1"),
@@ -175,7 +192,18 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
             }
         }
     }
+    assert!(bootstrap_sent, "应完成 Bootstrap 探测");
     assert!(injected, "应完成注入");
+    if !saw_ready_marker {
+        let suppressed = integration.suppressed_output();
+        let tail_start = suppressed.len().saturating_sub(4096);
+        let tail = String::from_utf8_lossy(&suppressed[tail_start..]);
+        eprintln!(
+            "未收到 ready/failure marker；suppressed_len={} tail={:?}",
+            suppressed.len(),
+            tail.as_ref()
+        );
+    }
     assert!(
         saw_ready_marker,
         "应在超时前收到 ready marker（集成脚本执行完成）"
@@ -196,21 +224,24 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
             continue;
         };
         // 集成完成后 filter_output 直接转发，可安全解析 OSC。
-        if let FilteredShellOutput::Forward { data, .. } = integration.filter_output(data) {
-            let text = String::from_utf8_lossy(&data).to_string();
-            for payload in text
-                .split("\x1b]")
-                .filter(|p| p.starts_with("1337;Command="))
-            {
-                let encoded = payload
-                    .trim_start_matches("1337;Command=")
-                    .trim_end_matches('\x07')
-                    .trim_end_matches('\x1b');
-                use base64::Engine;
-                if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
-                    recorded_command = Some(String::from_utf8_lossy(&decoded).to_string());
+        match integration.filter_output(data) {
+            FilteredShellOutput::Forward { data, .. } => {
+                let text = String::from_utf8_lossy(&data).to_string();
+                for payload in text
+                    .split("\x1b]")
+                    .filter(|p| p.starts_with("1337;Command="))
+                {
+                    let encoded = payload
+                        .trim_start_matches("1337;Command=")
+                        .trim_end_matches('\x07')
+                        .trim_end_matches('\x1b');
+                    use base64::Engine;
+                    if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
+                        recorded_command = Some(String::from_utf8_lossy(&decoded).to_string());
+                    }
                 }
             }
+            FilteredShellOutput::Suppressed | FilteredShellOutput::BootstrapReady => {}
         }
     }
     assert_eq!(

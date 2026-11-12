@@ -25,7 +25,13 @@
 │   ├─ 支持   → 交互通道 pty+shell，标记"请求注入"        │
 │   └─ 不支持 → 交互通道 pty+shell，纯裸终端              │
 └────────────────────────────────────────────────────────┘
-          ↓ 登录 expect 完成，首段有效输出（prompt 出现）
+          ↓ 登录 expect 完成，首段有效输出
+┌─ Bootstrap ───────────────────────────────────────────┐
+│ 先发一条几十字节的探针命令，等 shell 真正执行并回私有  │
+│ Bootstrap marker；避免登录 banner 早于 shell 可编辑态时 │
+│ 直接灌入 6KB 脚本，被 PTY 拆成续行                     │
+└────────────────────────────────────────────────────────┘
+          ↓ Bootstrap marker
 ┌─ 注入 ────────────────────────────────────────────────┐
 │ PTY 输入: " : __ONETCLI_RUNTIME_SETUP_1; eval $'...'\r" │
 │ （脚本单行化 + ANSI-C 引号；期间用户输入进暂存队列）     │
@@ -114,43 +120,50 @@ transport 上开交互通道报 `Channel send error`）。因此探测返回后�
 ### 4. 回显抑制状态机（`RuntimeShellIntegration`）
 
 ```
-Disabled ────────────────────────────────────────┐ (未请求注入)
-WaitingForFirstOutput ──should_inject──► Injecting│
-       │ (期间收到 133;B)                        │
-       └────────────► Integrated (legacy 跳过注入)│
-Injecting ──ready marker──► Integrated            │
-    │                                            │
-    └──5s 超时──► PlainAwaitingOutput ──► Plain   │
+Disabled ──────────────────────────────────────────────┐ (未请求注入)
+WaitingForFirstOutput ──should_inject──► Bootstrapping│
+       │ (期间收到 133;B)                              │
+       └────────────► Integrated (legacy 跳过注入)    │
+Bootstrapping ──bootstrap marker──► BootstrapReady    │
+BootstrapReady ──发送完整脚本──► Injecting             │
+Injecting ──ready marker──► Integrated                │
+    │                                                  │
+    └──5s 超时──► Plain（立即放行输入）                │
 ```
 
+- `WaitingForFirstOutput` 的首段输出可能只是 PAM/登录 banner，此时 PTY 仍可能处于非行编辑态；
+  直接发送 6KB 集成脚本会被拆行或进入 `>` 续行。先发几十字节 Bootstrap 命令，等 marker
+  证明交互 shell 已真正执行命令，再发送完整脚本；
 - `Injecting` 期间所有输出进 `suppressed` 缓冲（上限 64KB，防止挂死 shell 无限撑内存）；
-- 在缓冲中跨 chunk 搜索完成标记 `OSC 1337;ShellIntegrationReady=1`，找到后标记之后的 suffix 恢复转发；
+- 在缓冲中跨 chunk 搜索 `ShellIntegrationReady=1` / `ShellIntegrationFailed=1`；
+  ready 后恢复转发，failed 则立即丢弃注入回显并降级 Plain；
 - ready marker 由集成脚本在 hook 安装完成后主动发出，收到即进入 `Integrated` 并放行输入；
   不再等待可能被 oh-my-posh / starship / p10k 等提示符框架冲掉的 `OSC 133;B`；
 - 注入期间 `accepts_terminal_input() == false`：actor 把用户 `Write`/`TerminalResponse` 命令压入 deferred 队列，就绪后按序重放。
 
 #### 就绪握手看门狗（Issue #206）
 
-握手态（`WaitingForFirstOutput` / `Injecting` / `PlainAwaitingOutput`）
+握手态（`WaitingForFirstOutput` / `Bootstrapping` / `BootstrapReady` / `Injecting`）
 统一表现为 `accepts_terminal_input() == false`，即**所有用户键盘输入（含 Enter、Ctrl+C）
-都被压入 deferred 队列**。这三个状态只能靠远端输出推进：
+都被压入 deferred 队列**。这些状态只能靠远端输出推进：
 
 | 状态 | 解除条件 |
 |---|---|
-| `WaitingForFirstOutput` | `should_inject`（需登录 expect 完成）或 OSC 133;B |
-| `Injecting` | ready marker 或 5s 注入超时 |
-| `PlainAwaitingOutput` | 下一段输出 |
+| `WaitingForFirstOutput` | 首段输出触发 Bootstrap，或 legacy OSC 133;B |
+| `Bootstrapping` | bootstrap marker 或 5s 超时 |
+| `BootstrapReady` | actor 发送完整注入命令 |
+| `Injecting` | ready/failed marker 或 5s 超时 |
 
 当远端长时间不再产生可解除握手的输出时——登录 expect 永不匹配（`login_expect` 未完成，
 `should_inject` 便永不触发）、远端不复现 prompt 结束标记等——会话会永久停在暂存态：
 远端输出照常刷新、终端看起来完全正常，但键盘输入被静默吞掉，界面没有任何提示
-（Issue #206 的现象）。`Injecting` 有 5s 超时兜底，另外两个状态在引入本看门狗前没有任何超时。
+（Issue #206 的现象）。Bootstrap/注入都有 5s 超时兜底，超时后立即进入 Plain 并放行输入。
 
 兜底实现（`SshBackend` actor）：
 
 - actor 启动时若 `accepts_terminal_input() == false`，武装
   `SHELL_INTEGRATION_HANDSHAKE_TIMEOUT`（30s）看门狗；
-- 到期时 `RuntimeShellIntegration::force_release_input()` 把上述三个状态强制推进到
+- 到期时 `RuntimeShellIntegration::force_release_input()` 把上述握手状态强制推进到
   `Plain`（丢弃注入回显缓冲，此后不再抑制输出、不再注入），并置 `shell_ready = true`
   让初始化命令不再等 OSC prompt 信号；
 - 下一轮循环按序重放 deferred 队列，用户输入恢复投递；
@@ -171,12 +184,13 @@ Injecting ──ready marker──► Integrated            │
 decode → login_expect.advance → filter_output(抑制/转发)
   → osc_parser.push → exec_supervisor.on_terminal_chunk
   → TerminalEvent 分发（ready marker 时 shell_ready；133;B 时 on_input_start）
-  → should_inject? → 发送注入命令 + 起 5s 定时器
+  → should_inject? → 发送 Bootstrap 命令 + 起 5s 定时器
+  → bootstrap marker → 发送完整注入命令 + 重置 5s 定时器
   → shell_ready 后发送 init_commands（integrated 无延迟；plain 保持 250ms 间隔）
 ```
 
-- 注入完成（收到 ready marker）即取消定时器；
-- 超时触发：`send 0x03`（Ctrl+C）→ 降级 Plain → 下一段输出携带 `ShellIntegrationReady::Plain` 恢复 `shell_ready`，放行暂存输入。
+- 注入完成（收到 ready/failed marker）即取消定时器；
+- 超时触发：`send 0x03`（Ctrl+C）→ 立即降级 Plain、放行暂存输入，不再等下一段输出。
 
 ### 6. 旧版遗留兼容
 
@@ -194,9 +208,9 @@ decode → login_expect.advance → filter_output(抑制/转发)
 
 | 层级 | 内容 |
 |---|---|
-| 单元契约（7 个） | 命令单行化/不含远端路径与 mkdir；跨 chunk 回显抑制；超时降级；禁用路径直通；登录未完成/expect 轮延迟注入；legacy 133;B 检测；**真实 bash/zsh 执行注入命令并输出完成标记** |
+| 单元契约 | Bootstrap marker 分段对齐；完整脚本 ready/failed marker；跨 chunk 回显抑制；超时立即放行；禁用路径直通；登录未完成/expect 轮延迟注入；legacy 133;B 检测；真实 bash/zsh 执行注入命令 |
 | ssh_backend mock | 探测通道只读（Exec+Close）；不支持 shell 跳过注入；channel open 失败单通道重连；探测超时降级 |
-| 真机（181，`#[ignore]`） | 旧残留自动卸载 → 探测 → 注入 → 回显无泄漏 → ready marker 就绪 → `echo` 经 OSC 1337 记录 → **连接前后远端 md5 快照一致** |
+| 真机（181，`#[ignore]`） | 旧残留自动卸载 → 探测 → Bootstrap → 完整注入 → 回显无泄漏 → ready marker 就绪 → `echo` 经 OSC 1337 记录 → **连接前后远端 md5 快照一致** |
 | 回归 | terminal 446+5、ssh 144、terminal_view 35 全通过 |
 
 真机测试入口：
