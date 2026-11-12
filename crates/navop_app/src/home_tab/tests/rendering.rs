@@ -588,3 +588,32 @@ fn workspace_context_menu_offers_move_to_parent() {
         "移动目标必须排除分组自己那颗子树，否则菜单里会出现必然成环的目标"
     );
 }
+
+#[test]
+fn connection_card_and_row_require_the_first_click_for_double_click_open() {
+    for (name, source) in [
+        ("connection_list.rs", include_str!("../connection_list.rs")),
+        ("connection_card.rs", include_str!("../connection_card.rs")),
+    ] {
+        let double_click = source
+            .split(".on_double_click(")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{name} 的连接卡片/行缺少 on_double_click"))
+            .split(".on_click(")
+            .next()
+            .expect("on_double_click 之后应注册 on_click");
+        assert!(
+            double_click.contains("is_double_click("),
+            "{name} 的双击打开必须先确认第一次点击落在本项上，否则快捷打开对话框关闭时的第二次点击会重复打开连接"
+        );
+
+        let single_click = source
+            .split(".on_click(")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{name} 的连接卡片/行缺少 on_click"));
+        assert!(
+            single_click.contains("record_click("),
+            "{name} 的主键点击必须记录，供双击判定使用"
+        );
+    }
+}

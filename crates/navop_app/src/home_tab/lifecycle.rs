@@ -128,6 +128,7 @@ impl HomePage {
             auth_error: None,
             master_key_unlock_prompt_pending: false,
             master_key_dialog_open: false,
+            connection_double_click: Default::default(),
             team_permissions: TeamPermissionSnapshot::from_persisted_user_id(persisted_user_id),
         };
 
