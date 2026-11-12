@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use connection_import_protocol::{
-    ImportRecord, ImportRecordKind, ImportScanReport, ImporterAvailability, ImporterDescriptor,
-    Platform,
+    ImportRecord, ImportRecordKind, ImportScanReport, ImportWarning, ImporterAvailability,
+    ImporterDescriptor, Platform,
 };
 use extension_runtime::connection_import_provider::ImportPreviewError;
 
@@ -25,6 +25,11 @@ pub(crate) struct ImportSourceState {
     pub(crate) scan_error: Option<String>,
     pub(crate) preview_error: Option<String>,
     pub(crate) discovered_workspace_paths: Vec<String>,
+    /// 导入器在扫描阶段报的结构性告警（例如「跳过了多少条非 SSH/Telnet 会话」）。
+    ///
+    /// 之前这些告警被直接丢弃，用户只能看到「少了 78 条」却看不到原因；
+    /// 现在原样保留，供来源行展示并写进日志。
+    pub(crate) scan_warnings: Vec<ImportWarning>,
 }
 
 pub(crate) struct ImportPreviewRow {
@@ -148,6 +153,17 @@ impl ImportCenterState {
                     ImporterAvailability::Error { message } => Some(message.clone()),
                     _ => None,
                 };
+                source.scan_warnings = report.warnings;
+                for warning in &source.scan_warnings {
+                    // 扫描告警是「为什么少了连接」的唯一线索，必须进日志文件。
+                    tracing::warn!(
+                        target: "connection_import",
+                        importer = %report.importer_id,
+                        code = %warning.code,
+                        "{}",
+                        warning.message
+                    );
+                }
             }
         }
     }
@@ -288,6 +304,7 @@ impl ImportSourceState {
             scan_error: None,
             preview_error: None,
             discovered_workspace_paths: Vec::new(),
+            scan_warnings: Vec::new(),
         }
     }
 }

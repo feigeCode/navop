@@ -115,7 +115,15 @@ pub(super) fn render_source_row(
                             .whitespace_nowrap()
                             .child(text),
                     )
-                }),
+                })
+                // 扫描告警要能整条读完：它是「为什么少了连接」的唯一解释，
+                // 截断掉关键字（协议名、条数、失败原因）等于没显示。
+                .children(source.scan_warnings.iter().map(|warning| {
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().warning)
+                        .child(warning.message.clone())
+                })),
         )
         .when(
             source.descriptor.capabilities.supports_manual_file_pick,
