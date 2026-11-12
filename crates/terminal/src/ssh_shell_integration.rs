@@ -37,9 +37,28 @@ fn ansi_c_quote(input: &str) -> String {
     quoted
 }
 
+/// 兼容各平台终端的行内输入上限：N_TTY 的输入队列只有 4 KiB，一次写入超过它
+/// 的部分会被内核直接丢弃（表现为远端 bash 停在 `>` 续行提示符上、Ready 标记
+/// 永不出现，5 秒后降级）。留出余量取 4000 字节。
+const MAX_INJECTION_COMMAND_BYTES: usize = 4000;
+
+/// 去掉缩进、空行与整行注释，把注入脚本压到 PTY 单次输入队列能装下的长度。
+///
+/// 脚本里没有续行符、heredoc 或多行字符串，因此按行去缩进是安全的。
+fn minified_shell_integration_body(body: &str) -> String {
+    body.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            (!trimmed.is_empty() && !trimmed.starts_with('#')).then_some(trimmed)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn runtime_shell_integration_body() -> String {
     let script = crate::shell_integration::embedded_shell_integration_script();
-    let body = script.lines().skip(3).collect::<Vec<_>>().join("\n");
+    let body =
+        minified_shell_integration_body(&script.lines().skip(3).collect::<Vec<_>>().join("\n"));
     format!(
         "{body}\nif [[ -n \"${{BASH_VERSION:-}}\" ]]; then\n    __onetcli_setup_history=\"$(history 2>/dev/null | while read -r __onetcli_history_number __onetcli_history_rest; do case \"$__onetcli_history_rest\" in *__ONETCLI_RUNTIME_SETUP_1*) printf '%s ' \"${{__onetcli_history_number%\\*}}\";; esac; done)\"\n    for __onetcli_history_number in $__onetcli_setup_history; do history -d \"$__onetcli_history_number\" 2>/dev/null; done\n    unset __onetcli_setup_history __onetcli_history_number __onetcli_history_rest\nfi",
         body = body,
@@ -47,7 +66,18 @@ fn runtime_shell_integration_body() -> String {
 }
 
 pub(crate) fn runtime_shell_integration_command() -> Vec<u8> {
-    runtime_shell_integration_command_for_body(&runtime_shell_integration_body())
+    let command = runtime_shell_integration_command_for_body(&runtime_shell_integration_body());
+    // 超出 PTY 输入队列的命令会被内核截断：远端停在 `>` 续行提示符上，Ready 标记
+    // 永不出现，连接要卡满 5 秒兜底才降级。脚本变长时这里会先报警。
+    if command.len() > MAX_INJECTION_COMMAND_BYTES {
+        tracing::warn!(
+            target: "terminal.ssh.setup",
+            len = command.len(),
+            limit = MAX_INJECTION_COMMAND_BYTES,
+            "运行时 Shell Integration 注入命令超过 PTY 输入队列上限，远端可能截断"
+        );
+    }
+    command
 }
 
 fn runtime_shell_integration_command_for_body(body: &str) -> Vec<u8> {
@@ -393,6 +423,26 @@ mod tests {
         assert!(!command.contains(".bashrc"));
         assert!(!command.contains(".zshrc"));
         assert!(!command.contains("mkdir"));
+    }
+
+    #[test]
+    fn runtime_command_fits_in_the_pty_input_queue() {
+        // 真机（CentOS 7 上的 bash 4.2）复现过：注入命令 6285 字节，超过 N_TTY
+        // 的 4 KiB 输入队列后被内核截断，远端停在 `>` 续行提示符，Ready 标记
+        // 永不出现 → 连接卡满 5 秒兜底。
+        let command = runtime_shell_integration_command();
+        assert!(
+            command.len() <= MAX_INJECTION_COMMAND_BYTES,
+            "注入命令 {} 字节，超过 PTY 输入队列安全上限 {} 字节",
+            command.len(),
+            MAX_INJECTION_COMMAND_BYTES
+        );
+        let command = String::from_utf8(command).expect("runtime command must be UTF-8 shell text");
+        // 压缩脚本只去掉缩进/空行/整行注释，钩子与 trap 必须原样保留。
+        assert!(command.contains("__onetcli_preexec_bash"));
+        assert!(command.contains("precmd_functions+=(__onetcli_precmd_zsh)"));
+        assert!(command.contains("__onetcli_update_cwd"));
+        assert!(command.contains("trap "));
     }
 
     #[test]

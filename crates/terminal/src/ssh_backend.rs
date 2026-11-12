@@ -832,6 +832,7 @@ impl SshBackend {
             expect_password.as_deref(),
             init_commands.as_deref(),
         );
+        let setup_started_at = Instant::now();
         let (client, mut channel, shell_integration_requested) = Self::establish_channel(
             &session_manager,
             &pty_config,
@@ -840,6 +841,12 @@ impl SshBackend {
         )
         .await
         .map_err(add_connect_error_context)?;
+        tracing::debug!(
+            target: "terminal.ssh.setup",
+            connection_id,
+            elapsed_ms = setup_started_at.elapsed().as_millis() as u64,
+            "SSH 连接与交互通道建立完成"
+        );
         // Keep the exact transport generation with the actor so any late
         // failure report cannot invalidate a replacement published by another
         // shared consumer.
@@ -966,13 +973,18 @@ impl SshBackend {
                             .map(|started_at| started_at.elapsed().as_millis() as u64);
                         let suppressed_bytes = shell_integration.suppressed_output().len();
                         let saw_injection_echo = shell_integration.saw_injection_echo();
+                        let suppressed_snapshot = shell_integration.suppressed_output().to_vec();
+                        let phase_at_timeout = shell_integration.phase_name();
                         if shell_integration.on_timeout() {
+                            let tail_start = suppressed_snapshot.len().saturating_sub(400);
                             tracing::warn!(
                                 target: "terminal.ssh.setup",
                                 connection_id,
                                 elapsed_ms,
                                 suppressed_bytes,
                                 saw_injection_echo,
+                                phase = phase_at_timeout,
+                                tail = %String::from_utf8_lossy(&suppressed_snapshot[tail_start..]).escape_debug(),
                                 "运行时 Shell Integration 初始化超时，发送 Ctrl+C 并降级为裸终端"
                             );
                             if let Err(error) = send_terminal_data(&mut channel, &[0x03])
@@ -1352,6 +1364,13 @@ impl SshBackend {
                             break 'actor;
                         }
                         shell_integration.begin_injection();
+                        tracing::debug!(
+                            target: "terminal.ssh.setup",
+                            connection_id,
+                            elapsed_ms = setup_started_at.elapsed().as_millis() as u64,
+                            injection_len = shell_integration.injection_command().len(),
+                            "已发送运行时 Shell Integration 注入命令"
+                        );
                         shell_integration_injected_at = Some(Instant::now());
                         shell_integration_timeout = Some(Box::pin(tokio::time::sleep(
                             SHELL_INTEGRATION_RUNTIME_TIMEOUT,
@@ -1370,6 +1389,7 @@ impl SshBackend {
                                 target: "terminal.ssh.setup",
                                 connection_id,
                                 elapsed_ms = started_at.elapsed().as_millis() as u64,
+                                total_ms = setup_started_at.elapsed().as_millis() as u64,
                                 "运行时 Shell Integration 已就绪"
                             );
                         }
