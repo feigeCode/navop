@@ -71,7 +71,6 @@ enum RuntimeShellIntegrationPhase {
         /// 静默缓冲超过上限被截断时，首屏已被切掉一段，不再尝试还原。
         overflowed: bool,
     },
-    AwaitingPrompt,
     Integrated,
     PlainAwaitingOutput,
     Plain,
@@ -178,22 +177,26 @@ impl RuntimeShellIntegration {
                 let suffix_start = marker_start + SHELL_INTEGRATION_READY_MARKER.len();
                 let suffix = suppressed.split_off(suffix_start);
                 suppressed.clear();
-                self.phase = RuntimeShellIntegrationPhase::AwaitingPrompt;
+                // ready marker 由集成脚本在所有 hook 安装完成后主动发出。
+                // 此时脚本已经执行成功，不应再等未必出现的 OSC 133;B：
+                // oh-my-posh / starship / p10k 等提示符框架可能把它冲掉，
+                // 等待只会让已经可用的终端白扣住用户输入。
+                self.phase = RuntimeShellIntegrationPhase::Integrated;
                 FilteredShellOutput::Forward {
                     data: [restored.as_slice(), suffix.as_slice()].concat(),
-                    ready: ShellIntegrationReady::None,
+                    ready: ShellIntegrationReady::Integrated,
                 }
             }
             RuntimeShellIntegrationPhase::WaitingForFirstOutput => FilteredShellOutput::Forward {
                 data,
                 ready: ShellIntegrationReady::None,
             },
-            RuntimeShellIntegrationPhase::Disabled
-            | RuntimeShellIntegrationPhase::AwaitingPrompt
-            | RuntimeShellIntegrationPhase::Integrated => FilteredShellOutput::Forward {
-                data,
-                ready: ShellIntegrationReady::None,
-            },
+            RuntimeShellIntegrationPhase::Disabled | RuntimeShellIntegrationPhase::Integrated => {
+                FilteredShellOutput::Forward {
+                    data,
+                    ready: ShellIntegrationReady::None,
+                }
+            }
             RuntimeShellIntegrationPhase::PlainAwaitingOutput => {
                 self.phase = RuntimeShellIntegrationPhase::Plain;
                 FilteredShellOutput::Forward {
@@ -212,25 +215,9 @@ impl RuntimeShellIntegration {
         if matches!(
             self.phase,
             RuntimeShellIntegrationPhase::WaitingForFirstOutput
-                | RuntimeShellIntegrationPhase::AwaitingPrompt
         ) {
             self.phase = RuntimeShellIntegrationPhase::Integrated;
         }
-    }
-
-    /// 就绪标记已到、只差首个 OSC 133;B 时的兜底：直接放行输入并保持集成态。
-    ///
-    /// 提示符框架（oh-my-posh / starship / powerlevel10k 等）每轮重写
-    /// `PS1`/`PROMPT`，把注入时补上的 prompt-end 标记冲掉时，握手会一直停在
-    /// `AwaitingPrompt`，直到 30 秒看门狗把整个集成降级。注入命令已经执行成功
-    /// （ready marker 已收到），此时没有任何理由继续扣着键盘输入。
-    /// 返回是否真的改变了状态。
-    pub fn release_awaiting_prompt(&mut self) -> bool {
-        if matches!(self.phase, RuntimeShellIntegrationPhase::AwaitingPrompt) {
-            self.phase = RuntimeShellIntegrationPhase::Integrated;
-            return true;
-        }
-        false
     }
 
     pub fn on_timeout(&mut self) -> bool {
@@ -246,7 +233,6 @@ impl RuntimeShellIntegration {
             self.phase,
             RuntimeShellIntegrationPhase::WaitingForFirstOutput
                 | RuntimeShellIntegrationPhase::Injecting { .. }
-                | RuntimeShellIntegrationPhase::AwaitingPrompt
                 | RuntimeShellIntegrationPhase::PlainAwaitingOutput
         )
     }
@@ -257,7 +243,6 @@ impl RuntimeShellIntegration {
             RuntimeShellIntegrationPhase::Disabled => "disabled",
             RuntimeShellIntegrationPhase::WaitingForFirstOutput => "waiting-for-first-output",
             RuntimeShellIntegrationPhase::Injecting { .. } => "injecting",
-            RuntimeShellIntegrationPhase::AwaitingPrompt => "awaiting-prompt",
             RuntimeShellIntegrationPhase::Integrated => "integrated",
             RuntimeShellIntegrationPhase::PlainAwaitingOutput => "plain-awaiting-output",
             RuntimeShellIntegrationPhase::Plain => "plain",
@@ -274,7 +259,6 @@ impl RuntimeShellIntegration {
         match self.phase {
             RuntimeShellIntegrationPhase::WaitingForFirstOutput
             | RuntimeShellIntegrationPhase::Injecting { .. }
-            | RuntimeShellIntegrationPhase::AwaitingPrompt
             | RuntimeShellIntegrationPhase::PlainAwaitingOutput => {
                 self.phase = RuntimeShellIntegrationPhase::Plain;
                 true
@@ -335,13 +319,15 @@ mod tests {
         assert_eq!(
             FilteredShellOutput::Forward {
                 data: b"\x1b]133;B\x07tail".to_vec(),
-                ready: ShellIntegrationReady::None,
+                ready: ShellIntegrationReady::Integrated,
             },
             integration.filter_output(b"IntegrationReady=1\x07\x1b]133;B\x07tail".to_vec())
         );
-        assert!(!integration.accepts_terminal_input());
+        assert!(integration.accepts_terminal_input());
+        assert!(integration.is_integrated());
         integration.on_input_start();
         assert!(integration.accepts_terminal_input());
+        assert!(integration.is_integrated());
     }
 
     /// 握手静默期里被吞掉的登录 banner（pam_motd 在注入前打印的那几行）必须还回去，
@@ -371,13 +357,14 @@ mod tests {
                 data: b"Last login: Sun Nov  9 09:50:00 2026 from 10.0.0.2\r\n\
                         \x1b]133;A\x07user@host:~$ "
                     .to_vec(),
-                ready: ShellIntegrationReady::None,
+                ready: ShellIntegrationReady::Integrated,
             },
             integration.filter_output(
                 b"\x1b]1337;ShellIntegrationReady=1\x07\x1b]133;A\x07user@host:~$ ".to_vec()
             )
         );
-        assert_eq!("awaiting-prompt", integration.phase_name());
+        assert_eq!("integrated", integration.phase_name());
+        assert!(integration.accepts_terminal_input());
     }
 
     /// 静默缓冲被截断时首屏已经不完整，宁可不还原，也不要吐半截内容。
@@ -393,36 +380,31 @@ mod tests {
         assert_eq!(
             FilteredShellOutput::Forward {
                 data: b"prompt".to_vec(),
-                ready: ShellIntegrationReady::None,
+                ready: ShellIntegrationReady::Integrated,
             },
             integration.filter_output(chunk)
         );
     }
 
-    /// 提示符框架把 133;B 冲掉时，宽限期到点只放行输入、保持集成态，
-    /// 而不是像 30 秒看门狗那样整体降级为裸终端。
+    /// ready marker 已经证明集成脚本执行完成，不能再等未必出现的 133;B。
+    /// 提示符框架可以把 133;B 冲掉，若握手仍依赖它，用户每次连接都会白等宽限期。
     #[test]
-    fn prompt_grace_releases_input_but_keeps_integration() {
+    fn ready_marker_releases_input_without_waiting_for_prompt_marker() {
         let mut integration = RuntimeShellIntegration::new(true);
         integration.begin_injection();
         // ready marker 与回显同批到达时，本批就只剩 marker 之后的空后缀。
         assert_eq!(
             FilteredShellOutput::Forward {
                 data: Vec::new(),
-                ready: ShellIntegrationReady::None,
+                ready: ShellIntegrationReady::Integrated,
             },
             integration.filter_output(b"echoed\r\n\x1b]1337;ShellIntegrationReady=1\x07".to_vec())
         );
-        assert_eq!("awaiting-prompt", integration.phase_name());
-        assert!(!integration.accepts_terminal_input());
-
-        assert!(integration.release_awaiting_prompt());
+        assert_eq!("integrated", integration.phase_name());
         assert!(integration.accepts_terminal_input());
         assert!(integration.is_integrated());
-        assert_eq!("integrated", integration.phase_name());
 
-        // 幂等，且之后真正到达的 133;B 不会把它降级回握手态。
-        assert!(!integration.release_awaiting_prompt());
+        // 之后真正到达的 133;B 只用于命令生命周期事件，不会把状态降级回握手态。
         integration.on_input_start();
         assert!(integration.is_integrated());
         assert!(!integration.force_release_input());
@@ -480,27 +462,13 @@ mod tests {
     }
 
     #[test]
-    fn handshake_watchdog_releases_stalled_injection_and_prompt_wait() {
+    fn handshake_watchdog_releases_stalled_injection_and_plain_wait() {
         // 注入回显未出现完成标记：握手停在 Injecting。
         let mut integration = RuntimeShellIntegration::new(true);
         integration.begin_injection();
         assert_eq!("injecting", integration.phase_name());
         assert!(integration.force_release_input());
         assert!(integration.accepts_terminal_input());
-
-        // 找到完成标记后远端迟迟不给 OSC 133;B：握手停在 AwaitingPrompt。
-        let mut integration = RuntimeShellIntegration::new(true);
-        integration.begin_injection();
-        assert_eq!(
-            FilteredShellOutput::Suppressed,
-            integration.filter_output(b"echoed setup without marker".to_vec())
-        );
-        let _ = integration.filter_output(b"\x1b]1337;ShellIntegrationReady=1\x07prompt".to_vec());
-        assert_eq!("awaiting-prompt", integration.phase_name());
-        assert!(!integration.accepts_terminal_input());
-        assert!(integration.force_release_input());
-        assert!(integration.accepts_terminal_input());
-        assert_eq!("plain", integration.phase_name());
 
         // 注入超时后等待下一段输出：远端不再产出时同样需要兜底。
         let mut integration = RuntimeShellIntegration::new(true);

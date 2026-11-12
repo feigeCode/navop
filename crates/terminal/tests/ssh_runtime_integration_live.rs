@@ -1,7 +1,7 @@
 //! 真机 SSH 运行时 Shell Integration 集成测试。
 //!
 //! 验证 meatshell 式运行时注入的完整生命周期：
-//! 只读探测 → 首屏输出注入 → 回显抑制 → OSC 133;B 就绪 → 命令记录 → 远端零文件写入。
+//! 只读探测 → 首屏输出注入 → 回显抑制 → ready marker 就绪 → 命令记录 → 远端零文件写入。
 //!
 //! 通过环境变量 `NAVOP_LIVE_SSH` 提供目标（缺省时使用内网默认值），格式：
 //! `NAVOP_LIVE_SSH=user:password@host:port`
@@ -117,23 +117,28 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
     }
 
     // 2. 建立交互通道（走新的探测 + 裸 PTY 路径）。
+    let connect_started = std::time::Instant::now();
     let (_client, mut channel, shell_integration_requested) =
         SshBackend::establish_channel_for_test(&manager, &PtyConfig::default(), Some(1), false)
             .await
             .context("建立交互通道失败")?;
+    println!("交互通道建立耗时: {:?}", connect_started.elapsed());
     assert!(
         shell_integration_requested,
         "Ubuntu 默认 shell 应探测为支持注入"
     );
 
-    // 3. 模拟 actor：读首屏 → 注入 → 抑制回显直到完成标记 → 等首个 133;B。
+    // 3. 模拟 actor：读首屏 → 注入 → 抑制回显直到 ready marker。
+    // ready marker 已证明 hook 安装完成；部分提示符框架不会补出 133;B，
+    // 因此连接就绪不能再依赖它。
     use terminal::test_support::{
         FilteredShellOutput, RuntimeShellIntegration, ShellIntegrationReady,
     };
 
     let mut integration = RuntimeShellIntegration::new(shell_integration_requested);
-    let mut saw_input_start = false;
+    let mut saw_ready_marker = false;
     let mut injected = false;
+    let setup_started = std::time::Instant::now();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
 
     while tokio::time::Instant::now() < deadline {
@@ -163,9 +168,8 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
                     !text.contains("__ONETCLI_RUNTIME_SETUP_1"),
                     "注入命令回显不得泄漏到转发输出: {text:?}"
                 );
-                if text.contains("\x1b]133;B\x07") {
-                    saw_input_start = true;
-                    integration.on_input_start();
+                if ready == ShellIntegrationReady::Integrated {
+                    saw_ready_marker = true;
                     break;
                 }
             }
@@ -173,9 +177,10 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
     }
     assert!(injected, "应完成注入");
     assert!(
-        saw_input_start,
-        "应在超时前收到首个 OSC 133;B（prompt 就绪）"
+        saw_ready_marker,
+        "应在超时前收到 ready marker（集成脚本执行完成）"
     );
+    println!("运行时注入就绪耗时: {:?}", setup_started.elapsed());
     assert!(integration.accepts_terminal_input());
 
     // 4. 命令记录：执行 echo，等待 OSC 1337;Command=<base64>。

@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 use tokio::time::Sleep;
@@ -51,20 +51,13 @@ const SHELL_INTEGRATION_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 const DEGRADED_RECONNECT_BACKOFFS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
 /// 运行时注入必须快速完成；超时后中断内部命令并降级为裸终端。
 const SHELL_INTEGRATION_RUNTIME_TIMEOUT: Duration = Duration::from_secs(5);
-/// 就绪握手（等待首个输出 / 注入回显 / 首个 OSC 133;B）的看门狗。
+/// 就绪握手（等待首个输出 / 注入回显 / ready marker）的看门狗。
 ///
 /// 握手期间 actor 会暂存用户输入，等待远端输出把状态机推到可输入态。远端一旦
-/// 长时间不再产生输出（登录 expect 永不完成、shell 不回 prompt 结束标记等），
+/// 长时间不再产生输出（登录 expect 永不完成、注入脚本不回 ready marker 等），
 /// 握手就会永久停在暂存态，用户键盘输入被静默吞掉（Issue #206）。看门狗到期
 /// 后强制降级为裸终端并放行暂存输入，保证输入路径不会无限期失效。
 const SHELL_INTEGRATION_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
-/// 注入成功（收到 ready marker）后只等首个 OSC 133;B 的宽限期。
-///
-/// 30 秒看门狗是给「远端压根没有输出」准备的；而提示符框架重写
-/// `PS1`/`PROMPT` 导致 133;B 丢失是另一回事：集成本身已经装好，只是等不到
-/// prompt-end 标记。这种情况不该让用户白等满 30 秒，宽限期一到就放行输入、
-/// 保持集成态（后续真收到 133;B 时照常切到集成态）。
-const SHELL_INTEGRATION_PROMPT_GRACE: Duration = Duration::from_secs(3);
 /// 显式卸载属于用户主动操作，允许比自动探测更长的完成时间。
 const SHELL_INTEGRATION_UNINSTALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// 没有 OSC prompt 信号时，多行初始化命令之间留出设备处理和显示交互提示的时间。
@@ -117,22 +110,17 @@ async fn wait_for_shell_integration_handshake(
 /// 只有仍会暂存用户输入的握手态才需要看门狗。
 ///
 /// 注意 `bool::then` 是「为真才取」，这里必须在 `accepts_terminal_input() == false`
-/// （即 `WaitingForFirstOutput` / `Injecting` / `AwaitingPrompt` /
-/// `PlainAwaitingOutput`）时武装；写成 `accepts_terminal_input().then(..)` 会正好
-/// 反过来，让看门狗只在不需要它的会话里到期。
+/// （即 `WaitingForFirstOutput` / `Injecting` / `PlainAwaitingOutput`）时武装；
+/// 写成 `accepts_terminal_input().then(..)` 会正好反过来，让看门狗只在不需要它
+/// 的会话里到期。
 ///
-/// 状态机推进是单向的（可输入态不会再退回握手态）；只是「只等 133;B」那一段
-/// 会在收到 ready marker 时换成更短的宽限定时器（[`arm_shell_integration_prompt_grace`]）。
+/// 状态机推进是单向的（可输入态不会再退回握手态）；收到 ready marker 后
+/// 状态机会直接进入 `Integrated`，看门狗随即撤销。
 fn arm_shell_integration_handshake_watchdog(
     shell_integration: &RuntimeShellIntegration,
 ) -> Option<ShellIntegrationHandshakeWatchdog> {
     (!shell_integration.accepts_terminal_input())
         .then(|| Box::pin(tokio::time::sleep(SHELL_INTEGRATION_HANDSHAKE_TIMEOUT)))
-}
-
-/// 收到 ready marker、进入「只等首个 133;B」阶段后换上的短宽限定时器。
-fn arm_shell_integration_prompt_grace() -> Option<ShellIntegrationHandshakeWatchdog> {
-    Some(Box::pin(tokio::time::sleep(SHELL_INTEGRATION_PROMPT_GRACE)))
 }
 
 /// 看门狗到期时的兜底：握手态必须降级为裸终端并放行暂存输入。
@@ -889,6 +877,7 @@ impl SshBackend {
             let mut zmodem_probe_flush = None;
             let mut shell_integration = RuntimeShellIntegration::new(shell_integration_requested);
             let mut shell_integration_timeout = None;
+            let mut shell_integration_injected_at: Option<Instant> = None;
             // 只有在握手态（输入被暂存）才需要看门狗；已可输入的会话不额外养定时器。
             let mut shell_integration_handshake =
                 arm_shell_integration_handshake_watchdog(&shell_integration);
@@ -972,6 +961,7 @@ impl SshBackend {
                     }
                     SshRuntimeInput::ShellIntegrationTimeout => {
                         shell_integration_timeout.take();
+                        shell_integration_injected_at = None;
                         if shell_integration.on_timeout() {
                             tracing::warn!(
                                 target: "terminal.ssh.setup",
@@ -989,18 +979,7 @@ impl SshBackend {
                     }
                     SshRuntimeInput::ShellIntegrationHandshakeTimeout => {
                         shell_integration_handshake.take();
-                        if shell_integration.release_awaiting_prompt() {
-                            // 集成已装好，只是等不到 prompt-end 标记（提示符框架把它
-                            // 冲掉了）。保持集成态、放行输入，别整体降级为裸终端。
-                            tracing::warn!(
-                                target: "terminal.ssh.setup",
-                                connection_id,
-                                "等待远端 prompt 结束标记（OSC 133;B）超时，先放行输入并保持 Shell Integration"
-                            );
-                            shell_ready = true;
-                        } else if release_stalled_shell_integration_handshake(
-                            &mut shell_integration,
-                        ) {
+                        if release_stalled_shell_integration_handshake(&mut shell_integration) {
                             // 降级为裸终端后，初始化命令不再等 OSC prompt 信号。
                             shell_ready = true;
                         }
@@ -1065,20 +1044,20 @@ impl SshBackend {
                                                     .context("failed to send Ctrl-C over SSH")
                                                 {
                                                     Ok(()) => {
-                                                        let _ = result.send(
-                                                            Ok(TerminalControlOutput {
+                                                        let _ = result.send(Ok(
+                                                            TerminalControlOutput {
                                                                 action: request.action,
                                                                 sent: true,
                                                                 readiness_before: Some(
                                                                     readiness_before,
                                                                 ),
-                                                            }),
-                                                        );
+                                                            },
+                                                        ));
                                                     }
                                                     Err(error) => {
-                                                        let _ = result.send(
-                                                            Err(TerminalControlError::Disconnected),
-                                                        );
+                                                        let _ = result.send(Err(
+                                                            TerminalControlError::Disconnected,
+                                                        ));
                                                         disconnect_error = Some(error);
                                                         break;
                                                     }
@@ -1355,12 +1334,21 @@ impl SshBackend {
                 };
                 if was_injecting && !shell_integration.is_injecting() {
                     shell_integration_timeout.take();
-                    // 注入已完成（ready marker 已到），只差首个 OSC 133;B：把 30 秒
-                    // 看门狗换成短宽限，别让提示符框架把用户输入按住半分钟。
-                    shell_integration_handshake = arm_shell_integration_prompt_grace();
+                    if let Some(started_at) = shell_integration_injected_at.take() {
+                        tracing::debug!(
+                            target: "terminal.ssh.setup",
+                            connection_id,
+                            elapsed_ms = started_at.elapsed().as_millis() as u64,
+                            "运行时 Shell Integration 已就绪"
+                        );
+                    }
                 }
-                if integration_ready == ShellIntegrationReady::Plain {
+                if matches!(
+                    integration_ready,
+                    ShellIntegrationReady::Integrated | ShellIntegrationReady::Plain
+                ) {
                     shell_ready = true;
+                    shell_integration_handshake.take();
                 }
                 if data.is_empty() {
                     continue;
@@ -1394,10 +1382,10 @@ impl SshBackend {
                         }
                         OscEvent::InputStart => {
                             let _ = event_tx.send(TerminalEvent::InputStart);
-                            // 133;B: prompt 渲染完，用户可以输入了
-                            // 第一次收到时发送 init_commands
+                            // 133;B: prompt 已渲染。运行时注入会在 ready marker
+                            // 时更早放行输入，这里仍负责 legacy 检测与 init_commands。
                             shell_integration.on_input_start();
-                            // 已经可以输入，握手看门狗/宽限定时器都没必要留着了。
+                            // 已经可以输入，握手看门狗没必要留着了。
                             shell_integration_handshake.take();
                             if !shell_ready {
                                 shell_ready = true;
@@ -1432,6 +1420,7 @@ impl SshBackend {
                         break 'actor;
                     }
                     shell_integration.begin_injection();
+                    shell_integration_injected_at = Some(Instant::now());
                     shell_integration_timeout = Some(Box::pin(tokio::time::sleep(
                         SHELL_INTEGRATION_RUNTIME_TIMEOUT,
                     )));

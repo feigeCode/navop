@@ -37,7 +37,8 @@
 └────────────────────────────────────────────────────────┘
           ↓ 标记之后的输出恢复转发
 ┌─ 就绪握手 ────────────────────────────────────────────┐
-│ 等首个 OSC 133;B（prompt 渲染完成）→ 放行暂存的用户输入│
+│ ready marker 已证明 hook 安装完成 → 立即放行用户输入  │
+│ 后续 OSC 133;B 只用于命令生命周期事件                 │
 │ 5s 超时 → 发 Ctrl+C、丢弃缓冲、降级为裸终端            │
 └────────────────────────────────────────────────────────┘
           ↓ 正常会话
@@ -117,39 +118,39 @@ Disabled ───────────────────────�
 WaitingForFirstOutput ──should_inject──► Injecting│
        │ (期间收到 133;B)                        │
        └────────────► Integrated (legacy 跳过注入)│
-Injecting ──ready marker──► AwaitingPrompt        │
+Injecting ──ready marker──► Integrated            │
     │                                            │
     └──5s 超时──► PlainAwaitingOutput ──► Plain   │
-AwaitingPrompt ──133;B──► Integrated              │
 ```
 
 - `Injecting` 期间所有输出进 `suppressed` 缓冲（上限 64KB，防止挂死 shell 无限撑内存）；
 - 在缓冲中跨 chunk 搜索完成标记 `OSC 1337;ShellIntegrationReady=1`，找到后标记之后的 suffix 恢复转发；
+- ready marker 由集成脚本在 hook 安装完成后主动发出，收到即进入 `Integrated` 并放行输入；
+  不再等待可能被 oh-my-posh / starship / p10k 等提示符框架冲掉的 `OSC 133;B`；
 - 注入期间 `accepts_terminal_input() == false`：actor 把用户 `Write`/`TerminalResponse` 命令压入 deferred 队列，就绪后按序重放。
 
 #### 就绪握手看门狗（Issue #206）
 
-握手态（`WaitingForFirstOutput` / `Injecting` / `AwaitingPrompt` / `PlainAwaitingOutput`）
+握手态（`WaitingForFirstOutput` / `Injecting` / `PlainAwaitingOutput`）
 统一表现为 `accepts_terminal_input() == false`，即**所有用户键盘输入（含 Enter、Ctrl+C）
-都被压入 deferred 队列**。这四个状态只能靠远端输出推进：
+都被压入 deferred 队列**。这三个状态只能靠远端输出推进：
 
 | 状态 | 解除条件 |
 |---|---|
 | `WaitingForFirstOutput` | `should_inject`（需登录 expect 完成）或 OSC 133;B |
 | `Injecting` | ready marker 或 5s 注入超时 |
-| `AwaitingPrompt` | 下一个 OSC 133;B |
 | `PlainAwaitingOutput` | 下一段输出 |
 
 当远端长时间不再产生可解除握手的输出时——登录 expect 永不匹配（`login_expect` 未完成，
 `should_inject` 便永不触发）、远端不复现 prompt 结束标记等——会话会永久停在暂存态：
 远端输出照常刷新、终端看起来完全正常，但键盘输入被静默吞掉，界面没有任何提示
-（Issue #206 的现象）。`Injecting` 有 5s 超时兜底，另外三个状态在引入本看门狗前没有任何超时。
+（Issue #206 的现象）。`Injecting` 有 5s 超时兜底，另外两个状态在引入本看门狗前没有任何超时。
 
 兜底实现（`SshBackend` actor）：
 
 - actor 启动时若 `accepts_terminal_input() == false`，武装
   `SHELL_INTEGRATION_HANDSHAKE_TIMEOUT`（30s）看门狗；
-- 到期时 `RuntimeShellIntegration::force_release_input()` 把上述四个状态强制推进到
+- 到期时 `RuntimeShellIntegration::force_release_input()` 把上述三个状态强制推进到
   `Plain`（丢弃注入回显缓冲，此后不再抑制输出、不再注入），并置 `shell_ready = true`
   让初始化命令不再等 OSC prompt 信号；
 - 下一轮循环按序重放 deferred 队列，用户输入恢复投递；
@@ -169,7 +170,7 @@ AwaitingPrompt ──133;B──► Integrated              │
 ```
 decode → login_expect.advance → filter_output(抑制/转发)
   → osc_parser.push → exec_supervisor.on_terminal_chunk
-  → TerminalEvent 分发（133;B 时 on_input_start + shell_ready）
+  → TerminalEvent 分发（ready marker 时 shell_ready；133;B 时 on_input_start）
   → should_inject? → 发送注入命令 + 起 5s 定时器
   → shell_ready 后发送 init_commands（integrated 无延迟；plain 保持 250ms 间隔）
 ```
@@ -195,7 +196,7 @@ decode → login_expect.advance → filter_output(抑制/转发)
 |---|---|
 | 单元契约（7 个） | 命令单行化/不含远端路径与 mkdir；跨 chunk 回显抑制；超时降级；禁用路径直通；登录未完成/expect 轮延迟注入；legacy 133;B 检测；**真实 bash/zsh 执行注入命令并输出完成标记** |
 | ssh_backend mock | 探测通道只读（Exec+Close）；不支持 shell 跳过注入；channel open 失败单通道重连；探测超时降级 |
-| 真机（181，`#[ignore]`） | 旧残留自动卸载 → 探测 → 注入 → 回显无泄漏 → 133;B 就绪 → `echo` 经 OSC 1337 记录 → **连接前后远端 md5 快照一致** |
+| 真机（181，`#[ignore]`） | 旧残留自动卸载 → 探测 → 注入 → 回显无泄漏 → ready marker 就绪 → `echo` 经 OSC 1337 记录 → **连接前后远端 md5 快照一致** |
 | 回归 | terminal 446+5、ssh 144、terminal_view 35 全通过 |
 
 真机测试入口：
