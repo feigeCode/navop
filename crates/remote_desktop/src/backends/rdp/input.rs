@@ -1,9 +1,12 @@
 use super::reconnect::remember_reconnect_state;
-use super::transport::{BackendSignal, write_request};
+use super::transport::{BackendSignal, write_request, write_requests};
 use super::*;
+use std::time::Instant;
 
 const HELPER_CLOSE_GRACE_PERIOD: Duration = Duration::from_millis(500);
 const HELPER_CLOSE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+pub(super) const HELPER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+pub(super) const HELPER_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
 
 enum RemoteInputBatch {
     Inputs(Vec<RemoteDesktopInput>),
@@ -20,29 +23,50 @@ pub(super) struct RemoteInputContext<'a> {
     pub(super) protocol: RemoteDesktopProtocol,
 }
 
+pub(super) struct BackendSignalContext<'a> {
+    pub(super) helper: &'a mut std::process::Child,
+    pub(super) stdin: &'a mut std::process::ChildStdin,
+    pub(super) output_tx: &'a OutputMailboxSender,
+    pub(super) protocol: RemoteDesktopProtocol,
+    pub(super) diagnostic_tx:
+        &'a Option<std::sync::mpsc::Sender<RemoteDesktopConnectionDiagnostic>>,
+    pub(super) last_pong: &'a mut Instant,
+}
+
 pub(super) fn handle_backend_signals(
     signal_rx: &std::sync::mpsc::Receiver<BackendSignal>,
-    helper: &mut std::process::Child,
-    stdin: &mut std::process::ChildStdin,
-    output_tx: &OutputMailboxSender,
+    context: &mut BackendSignalContext<'_>,
     was_connected: &mut bool,
-    protocol: RemoteDesktopProtocol,
-    diagnostic_tx: &Option<std::sync::mpsc::Sender<RemoteDesktopConnectionDiagnostic>>,
 ) -> Option<HelperRunResult> {
     while let Ok(signal) = signal_rx.try_recv() {
         match signal {
+            BackendSignal::ServerHello(_) => {}
             BackendSignal::Connected => {
                 *was_connected = true;
-                send_connection_ready(diagnostic_tx);
+                send_connection_ready(context.diagnostic_tx);
             }
+            BackendSignal::Pong(_) => *context.last_pong = Instant::now(),
             BackendSignal::Disconnected(disconnect) => {
-                close_helper(helper, stdin, output_tx, protocol);
+                close_helper(
+                    context.helper,
+                    context.stdin,
+                    context.output_tx,
+                    context.protocol,
+                );
                 return Some(reconnect_result(disconnect, false, *was_connected));
             }
             BackendSignal::OutputEnded => {
-                close_helper(helper, stdin, output_tx, protocol);
+                close_helper(
+                    context.helper,
+                    context.stdin,
+                    context.output_tx,
+                    context.protocol,
+                );
                 return Some(reconnect_result(
-                    internal_disconnect(format!("{} helper output ended", protocol.label())),
+                    internal_disconnect(format!(
+                        "{} helper output ended",
+                        context.protocol.label()
+                    )),
                     false,
                     *was_connected,
                 ));
@@ -70,9 +94,28 @@ pub(super) fn handle_remote_input(
         }
     };
 
+    let mut requests = Vec::with_capacity(inputs.len());
     for input in inputs {
         match input {
             RemoteDesktopInput::Close => {
+                if let Some(reason) = flush_remote_input_requests(
+                    &mut requests,
+                    context.stdin,
+                    context.output_tx,
+                    context.protocol,
+                ) {
+                    close_helper(
+                        context.helper,
+                        context.stdin,
+                        context.output_tx,
+                        context.protocol,
+                    );
+                    return Some(reconnect_result(
+                        internal_disconnect(reason),
+                        false,
+                        was_connected,
+                    ));
+                }
                 close_helper(
                     context.helper,
                     context.stdin,
@@ -82,6 +125,24 @@ pub(super) fn handle_remote_input(
                 return Some(HelperRunResult::Closed);
             }
             RemoteDesktopInput::Reconnect => {
+                if let Some(reason) = flush_remote_input_requests(
+                    &mut requests,
+                    context.stdin,
+                    context.output_tx,
+                    context.protocol,
+                ) {
+                    close_helper(
+                        context.helper,
+                        context.stdin,
+                        context.output_tx,
+                        context.protocol,
+                    );
+                    return Some(reconnect_result(
+                        internal_disconnect(reason),
+                        false,
+                        was_connected,
+                    ));
+                }
                 close_helper(
                     context.helper,
                     context.stdin,
@@ -102,23 +163,31 @@ pub(super) fn handle_remote_input(
                     context.latest_clipboard_files,
                     context.protocol,
                 );
-                if let Some(reason) =
-                    forward_remote_input(input, context.stdin, context.output_tx, context.protocol)
+                if let Some(request) =
+                    HelperRequest::from_remote_input_for_protocol(&input, context.protocol)
                 {
-                    close_helper(
-                        context.helper,
-                        context.stdin,
-                        context.output_tx,
-                        context.protocol,
-                    );
-                    return Some(reconnect_result(
-                        internal_disconnect(reason),
-                        false,
-                        was_connected,
-                    ));
+                    requests.push(request);
                 }
             }
         }
+    }
+    if let Some(reason) = flush_remote_input_requests(
+        &mut requests,
+        context.stdin,
+        context.output_tx,
+        context.protocol,
+    ) {
+        close_helper(
+            context.helper,
+            context.stdin,
+            context.output_tx,
+            context.protocol,
+        );
+        return Some(reconnect_result(
+            internal_disconnect(reason),
+            false,
+            was_connected,
+        ));
     }
     None
 }
@@ -166,16 +235,20 @@ where
     coalesced
 }
 
-fn forward_remote_input(
-    input: RemoteDesktopInput,
+fn flush_remote_input_requests(
+    requests: &mut Vec<HelperRequest>,
     stdin: &mut std::process::ChildStdin,
     output_tx: &OutputMailboxSender,
     protocol: RemoteDesktopProtocol,
 ) -> Option<String> {
-    let request = HelperRequest::from_remote_input_for_protocol(&input, protocol)?;
-    write_request(stdin, &request, output_tx, protocol)
+    if requests.is_empty() {
+        return None;
+    }
+    let result = write_requests(stdin, requests.iter(), output_tx, protocol);
+    requests.clear();
+    result
         .err()
-        .map(|_| format!("failed to send {} helper request", protocol.label()))
+        .map(|_| format!("failed to send {} helper request batch", protocol.label()))
 }
 
 pub(super) fn poll_helper_exit(
@@ -214,14 +287,19 @@ fn reconnect_result(
         // the result is classified.
         connected_for: None,
         disconnect_kind: disconnect.kind,
+        failure: disconnect.failure,
     }
 }
 
 fn internal_disconnect(reason: String) -> HelperDisconnect {
-    HelperDisconnect { kind: None, reason }
+    HelperDisconnect {
+        kind: None,
+        reason,
+        failure: None,
+    }
 }
 
-fn close_helper(
+pub(super) fn close_helper(
     helper: &mut std::process::Child,
     stdin: &mut std::process::ChildStdin,
     output_tx: &OutputMailboxSender,

@@ -65,7 +65,7 @@ fn create_backend_with_registry_rejects_outdated_rdp_provider() {
         .expect("version error");
     assert_eq!(RemoteDesktopProtocol::Rdp, version_error.protocol);
     assert_eq!("0.1.3", version_error.installed);
-    assert_eq!("0.3.0", version_error.required);
+    assert_eq!("0.4.0", version_error.required);
     assert!(!version_error.invalid);
 }
 
@@ -98,7 +98,7 @@ fn create_backend_with_registry_rejects_outdated_vnc_provider() {
 }
 
 #[test]
-fn proxied_options_use_loopback_destination_and_keep_guard() {
+fn proxied_options_preserve_server_identity_and_expose_loopback_relay() {
     let mut options = options(RemoteDesktopProtocol::Rdp);
     options.proxy = Some(ProxyTunnelConfig {
         proxy_type: ProxyTunnelType::Socks5,
@@ -108,12 +108,14 @@ fn proxied_options_use_loopback_destination_and_keep_guard() {
         password: None,
     });
 
-    let (resolved, guard) = super::resolve_proxy_options(options).unwrap();
+    let (resolved, guard, relay) = super::resolve_proxy_options(options).unwrap();
 
-    let destination = resolved
-        .destination
+    assert_eq!("127.0.0.1:3389", resolved.destination);
+    let relay = relay.expect("proxied connection should expose a loopback relay");
+    let destination = relay
+        .address
         .split_once(':')
-        .expect("proxied destination should contain a port");
+        .expect("relay address should contain a port");
     assert!(
         destination
             .0
@@ -121,6 +123,7 @@ fn proxied_options_use_loopback_destination_and_keep_guard() {
             .unwrap()
             .is_loopback()
     );
+    assert!(relay.authentication.is_empty());
     assert!(matches!(guard, Some(TunnelGuard::Proxy(_))));
 }
 

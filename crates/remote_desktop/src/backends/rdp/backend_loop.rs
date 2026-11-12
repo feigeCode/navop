@@ -64,7 +64,7 @@ impl BackendLoop {
     }
 
     fn run_helper_session(&mut self, output_tx: &OutputMailboxSender) -> HelperRunResult {
-        let Ok((helper, stdin, signal_rx)) = transport::start_helper_session(
+        let Ok((helper, stdin, signal_rx, server_hello)) = transport::start_helper_session(
             &self.helper,
             &self.connect,
             &self.latest_clipboard_text,
@@ -74,7 +74,14 @@ impl BackendLoop {
         ) else {
             return helper_start_failure();
         };
-        poll_helper_session(self, helper, stdin, signal_rx, output_tx)
+        poll_helper_session(
+            self,
+            helper,
+            stdin,
+            signal_rx,
+            output_tx,
+            server_hello.capabilities.heartbeat,
+        )
     }
 
     fn handle_result(&mut self, result: HelperRunResult) -> bool {
@@ -96,8 +103,15 @@ impl BackendLoop {
                 was_connected,
                 connected_for,
                 disconnect_kind,
+                failure,
                 ..
-            } => self.handle_disconnect(reason, was_connected, connected_for, disconnect_kind),
+            } => self.handle_disconnect(
+                reason,
+                was_connected,
+                connected_for,
+                disconnect_kind,
+                failure,
+            ),
         }
     }
 
@@ -107,8 +121,9 @@ impl BackendLoop {
         was_connected: bool,
         connected_for: Option<Duration>,
         disconnect_kind: Option<HelperDisconnectKind>,
+        failure: Option<crate::helper_protocol::RdpFailureKind>,
     ) -> bool {
-        match reconnect::reconnect_decision(&reason, was_connected, disconnect_kind) {
+        match reconnect::reconnect_decision(&reason, was_connected, disconnect_kind, failure) {
             reconnect::ReconnectDecision::Retry(reconnect_reason) => {
                 self.retry(was_connected, connected_for, reconnect_reason)
             }
@@ -185,6 +200,7 @@ fn helper_start_failure() -> HelperRunResult {
         was_connected: false,
         connected_for: None,
         disconnect_kind: None,
+        failure: Some(crate::helper_protocol::RdpFailureKind::Internal),
     }
 }
 
@@ -194,19 +210,76 @@ fn poll_helper_session(
     mut stdin: std::process::ChildStdin,
     signal_rx: std::sync::mpsc::Receiver<super::transport::BackendSignal>,
     output_tx: &OutputMailboxSender,
+    heartbeat_enabled: bool,
 ) -> HelperRunResult {
     let mut was_connected = false;
     let mut connected_since: Option<Instant> = None;
+    let mut last_pong = Instant::now();
+    let mut next_ping = Instant::now() + input::HELPER_HEARTBEAT_INTERVAL;
+    let mut heartbeat_sequence = 0u64;
     loop {
-        if let Some(result) = input::handle_backend_signals(
-            &signal_rx,
-            &mut helper,
-            &mut stdin,
+        let now = Instant::now();
+        if heartbeat_enabled
+            && now.saturating_duration_since(last_pong) > input::HELPER_HEARTBEAT_TIMEOUT
+        {
+            input::close_helper(&mut helper, &mut stdin, output_tx, backend.protocol);
+            return with_connected_for(
+                HelperRunResult::Reconnect {
+                    reason: format!(
+                        "{} helper heartbeat timed out after {} seconds",
+                        backend.protocol.label(),
+                        input::HELPER_HEARTBEAT_TIMEOUT.as_secs()
+                    ),
+                    manual: false,
+                    was_connected,
+                    connected_for: None,
+                    disconnect_kind: Some(super::HelperDisconnectKind::ConnectionFailure),
+                    failure: Some(crate::helper_protocol::RdpFailureKind::Timeout),
+                },
+                connected_since,
+            );
+        }
+        if heartbeat_enabled && now >= next_ping {
+            heartbeat_sequence = heartbeat_sequence.wrapping_add(1);
+            if transport::write_request(
+                &mut stdin,
+                &HelperRequest::Ping {
+                    sequence: heartbeat_sequence,
+                },
+                output_tx,
+                backend.protocol,
+            )
+            .is_err()
+            {
+                input::close_helper(&mut helper, &mut stdin, output_tx, backend.protocol);
+                return with_connected_for(
+                    HelperRunResult::Reconnect {
+                        reason: format!(
+                            "failed to send {} helper heartbeat",
+                            backend.protocol.label()
+                        ),
+                        manual: false,
+                        was_connected,
+                        connected_for: None,
+                        disconnect_kind: Some(super::HelperDisconnectKind::ConnectionFailure),
+                        failure: Some(crate::helper_protocol::RdpFailureKind::Transport),
+                    },
+                    connected_since,
+                );
+            }
+            next_ping = now + input::HELPER_HEARTBEAT_INTERVAL;
+        }
+        let mut signal_context = input::BackendSignalContext {
+            helper: &mut helper,
+            stdin: &mut stdin,
             output_tx,
-            &mut was_connected,
-            backend.protocol,
-            &backend.diagnostic_tx,
-        ) {
+            protocol: backend.protocol,
+            diagnostic_tx: &backend.diagnostic_tx,
+            last_pong: &mut last_pong,
+        };
+        if let Some(result) =
+            input::handle_backend_signals(&signal_rx, &mut signal_context, &mut was_connected)
+        {
             return with_connected_for(result, connected_since);
         }
         if was_connected && connected_since.is_none() {
@@ -246,6 +319,7 @@ fn with_connected_for(
             manual,
             was_connected,
             disconnect_kind,
+            failure,
             ..
         } => HelperRunResult::Reconnect {
             reason,
@@ -253,6 +327,7 @@ fn with_connected_for(
             was_connected,
             connected_for: connected_since.map(|since| since.elapsed()),
             disconnect_kind,
+            failure,
         },
         result => result,
     }

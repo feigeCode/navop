@@ -10,6 +10,10 @@ use super::transport::HelperOutput;
 use super::*;
 
 const MAX_CURSOR_DIMENSION: u16 = 1024;
+const MAX_EVENT_HEADER_BYTES: usize = 256 * 1024;
+const MAX_FRAME_DIMENSION: u16 = 8192;
+const MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
+const MAX_FRAME_RECTS: usize = 65_536;
 
 #[derive(Clone, Copy)]
 struct CursorHeader {
@@ -29,6 +33,22 @@ pub(super) fn read_helper_output(
     };
     let connected = matches!(event, HelperEvent::Connected { .. });
     let disconnect = helper_disconnect(&event);
+    let server_hello = match &event {
+        HelperEvent::ServerHello {
+            protocol_version,
+            provider_version,
+            capabilities,
+        } => Some(crate::helper_protocol::HelperServerHello {
+            protocol_version: *protocol_version,
+            provider_version: provider_version.clone(),
+            capabilities: *capabilities,
+        }),
+        _ => None,
+    };
+    let pong = match &event {
+        HelperEvent::Pong { sequence } => Some(*sequence),
+        _ => None,
+    };
     match event {
         HelperEvent::FrameBytes {
             width,
@@ -67,6 +87,8 @@ pub(super) fn read_helper_output(
             output: helper_event_to_output(event, protocol)?,
             connected,
             disconnect,
+            server_hello,
+            pong,
         })),
     }
 }
@@ -91,6 +113,8 @@ where
         })),
         connected: false,
         disconnect: None,
+        server_hello: None,
+        pong: None,
     })
 }
 
@@ -120,9 +144,17 @@ fn validate_cursor_header(header: CursorHeader) -> anyhow::Result<usize> {
 
 fn read_event_header(reader: &mut impl BufRead) -> anyhow::Result<Option<HelperEvent>> {
     let mut line = Vec::new();
-    if reader.read_until(b'\n', &mut line)? == 0 {
+    let read = reader
+        .by_ref()
+        .take((MAX_EVENT_HEADER_BYTES + 1) as u64)
+        .read_until(b'\n', &mut line)?;
+    if read == 0 {
         return Ok(None);
     }
+    anyhow::ensure!(
+        read <= MAX_EVENT_HEADER_BYTES,
+        "helper event header exceeds {MAX_EVENT_HEADER_BYTES} bytes"
+    );
     Ok(Some(decode_event_line(std::str::from_utf8(&line)?)?))
 }
 
@@ -148,6 +180,8 @@ where
         }),
         connected: false,
         disconnect: None,
+        server_hello: None,
+        pong: None,
     })
 }
 
@@ -157,23 +191,43 @@ fn validate_rects(
     rects: &[HelperFrameRect],
     bgra_len: usize,
 ) -> anyhow::Result<()> {
-    let expected_len: usize = rects.iter().map(|rect| rect.byte_len).sum();
+    validate_frame_extent(width, height)?;
+    anyhow::ensure!(
+        rects.len() <= MAX_FRAME_RECTS,
+        "BGRA rectangle count exceeds {MAX_FRAME_RECTS}"
+    );
+    anyhow::ensure!(
+        bgra_len <= MAX_FRAME_BYTES,
+        "BGRA payload exceeds {MAX_FRAME_BYTES} bytes"
+    );
+    let mut expected_len = 0usize;
+    for rect in rects {
+        let expected_rect_len = usize::from(rect.width)
+            .checked_mul(usize::from(rect.height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| anyhow::anyhow!("BGRA rectangle byte length overflow"))?;
+        expected_len = expected_len
+            .checked_add(expected_rect_len)
+            .ok_or_else(|| anyhow::anyhow!("BGRA rectangle payload length overflow"))?;
+        anyhow::ensure!(
+            expected_len <= MAX_FRAME_BYTES,
+            "BGRA rectangle payload exceeds {MAX_FRAME_BYTES} bytes"
+        );
+        anyhow::ensure!(rect.width > 0 && rect.height > 0, "BGRA rectangle is empty");
+        anyhow::ensure!(
+            u32::from(rect.x) + u32::from(rect.width) <= u32::from(width)
+                && u32::from(rect.y) + u32::from(rect.height) <= u32::from(height),
+            "BGRA rectangle is outside framebuffer"
+        );
+        anyhow::ensure!(
+            rect.byte_len == expected_rect_len,
+            "invalid BGRA rectangle byte length"
+        );
+    }
     anyhow::ensure!(
         bgra_len == expected_len,
         "invalid BGRA rectangle payload length"
     );
-    for rect in rects {
-        anyhow::ensure!(rect.width > 0 && rect.height > 0, "BGRA rectangle is empty");
-        anyhow::ensure!(
-            rect.x.saturating_add(rect.width) <= width
-                && rect.y.saturating_add(rect.height) <= height,
-            "BGRA rectangle is outside framebuffer"
-        );
-        anyhow::ensure!(
-            rect.byte_len == usize::from(rect.width) * usize::from(rect.height) * 4,
-            "invalid BGRA rectangle byte length"
-        );
-    }
     Ok(())
 }
 
@@ -207,6 +261,8 @@ where
         }),
         connected: false,
         disconnect: None,
+        server_hello: None,
+        pong: None,
     })
 }
 
@@ -230,6 +286,8 @@ where
         }),
         connected: false,
         disconnect: None,
+        server_hello: None,
+        pong: None,
     })
 }
 
@@ -239,12 +297,29 @@ fn validate_full_frame_len(
     actual_len: usize,
     format: &str,
 ) -> anyhow::Result<()> {
-    let expected_len = usize::from(width) * usize::from(height) * 4;
+    let expected_len = validate_frame_extent(width, height)?;
     anyhow::ensure!(
         actual_len == expected_len,
         "invalid {format} frame payload length: expected {expected_len}, got {actual_len}"
     );
     Ok(())
+}
+
+fn validate_frame_extent(width: u16, height: u16) -> anyhow::Result<usize> {
+    anyhow::ensure!(width > 0 && height > 0, "frame dimensions must be non-zero");
+    anyhow::ensure!(
+        width <= MAX_FRAME_DIMENSION && height <= MAX_FRAME_DIMENSION,
+        "frame dimensions exceed {MAX_FRAME_DIMENSION}"
+    );
+    let len = usize::from(width)
+        .checked_mul(usize::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| anyhow::anyhow!("frame payload length overflow"))?;
+    anyhow::ensure!(
+        len <= MAX_FRAME_BYTES,
+        "frame payload exceeds {MAX_FRAME_BYTES} bytes"
+    );
+    Ok(len)
 }
 
 #[cfg(test)]

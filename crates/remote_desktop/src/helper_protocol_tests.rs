@@ -84,6 +84,39 @@ fn connect_request_debug_redacts_credentials_and_shared_folders() {
 }
 
 #[test]
+fn connect_request_preserves_loopback_relay_without_logging_authentication() {
+    let relay = HelperRelay {
+        address: "127.0.0.1:43210".to_string(),
+        authentication: b"relay-secret".to_vec(),
+    };
+    let request = HelperRequest::connect_from_options_with_relay(
+        &rdp_options(),
+        RemoteDesktopSize {
+            width: 1280,
+            height: 720,
+            scale_factor: 100,
+        },
+        Some(relay.clone()),
+    );
+    let decoded = decode_request_line(&encode_request_line(&request).unwrap()).unwrap();
+
+    let HelperRequest::Connect {
+        destination,
+        relay: Some(decoded_relay),
+        ..
+    } = decoded
+    else {
+        panic!("expected relayed connect request");
+    };
+    assert_eq!("10.2.178.12:3389", destination);
+    assert!(relay == decoded_relay);
+    let debug = format!("{request:?}");
+    assert!(debug.contains("relay_present: true"));
+    assert!(!debug.contains("relay-secret"));
+    assert!(!debug.contains("127.0.0.1:43210"));
+}
+
+#[test]
 fn text_request_debug_reports_length_without_content() {
     for request in [
         HelperRequest::Text {
@@ -131,9 +164,11 @@ fn helper_event_debug_reports_metadata_without_payloads() {
         },
         HelperEvent::ConnectionFailure {
             message: "private-connection-error".to_string(),
+            kind: None,
         },
         HelperEvent::Terminated {
             message: "private-termination".to_string(),
+            kind: None,
         },
     ];
 
@@ -209,7 +244,7 @@ fn connect_request_preserves_complete_rdp_settings() {
     let HelperRequest::Connect { rdp, .. } = decoded else {
         panic!("decoded request is not Connect");
     };
-    assert_eq!(options.rdp, rdp);
+    assert_eq!(options.rdp, *rdp);
 
     let debug = format!("{request:?}");
     assert!(debug.contains("rdp_admin_session: true"));

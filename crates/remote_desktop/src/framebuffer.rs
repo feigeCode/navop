@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RgbaFramebuffer {
     width: u16,
     height: u16,
-    rgba: Vec<u8>,
+    rgba: Arc<Vec<u8>>,
 }
 
 impl RgbaFramebuffer {
@@ -11,7 +13,7 @@ impl RgbaFramebuffer {
         Self {
             width,
             height,
-            rgba: vec![0; len],
+            rgba: Arc::new(vec![0; len]),
         }
     }
 
@@ -21,7 +23,7 @@ impl RgbaFramebuffer {
         Ok(Self {
             width,
             height,
-            rgba: bgra,
+            rgba: Arc::new(bgra),
         })
     }
 
@@ -38,7 +40,11 @@ impl RgbaFramebuffer {
     }
 
     pub fn clone_rgba(&self) -> Vec<u8> {
-        self.rgba.clone()
+        self.rgba.as_ref().clone()
+    }
+
+    pub fn shared_bytes(&self) -> Arc<Vec<u8>> {
+        Arc::clone(&self.rgba)
     }
 
     pub fn patch_rgba_rect(
@@ -65,12 +71,13 @@ impl RgbaFramebuffer {
             "rectangle height exceeds framebuffer"
         );
 
+        let dst = Arc::make_mut(&mut self.rgba);
         for row in 0..height as usize {
             let src_start = row * width as usize * 4;
             let src_end = src_start + width as usize * 4;
             let dst_start = ((y as usize + row) * self.width as usize + x as usize) * 4;
             let dst_end = dst_start + width as usize * 4;
-            self.rgba[dst_start..dst_end].copy_from_slice(&rect_rgba[src_start..src_end]);
+            dst[dst_start..dst_end].copy_from_slice(&rect_rgba[src_start..src_end]);
         }
 
         Ok(())
@@ -107,10 +114,11 @@ impl RgbaFramebuffer {
         );
 
         let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+        let src = Arc::clone(&self.rgba);
         for row in 0..height as usize {
             let start = ((src_y as usize + row) * self.width as usize + src_x as usize) * 4;
             let end = start + width as usize * 4;
-            pixels.extend_from_slice(&self.rgba[start..end]);
+            pixels.extend_from_slice(&src[start..end]);
         }
         self.patch_rgba_rect(dst_x, dst_y, width, height, &pixels)
     }
@@ -144,5 +152,12 @@ mod tests {
         fb.copy_rect(0, 0, 1, 0, 2, 1).unwrap();
 
         assert_eq!(fb.as_rgba(), &[1, 0, 0, 255, 1, 0, 0, 255, 2, 0, 0, 255]);
+    }
+
+    #[test]
+    fn surface_can_share_the_framebuffer_without_copying_it() {
+        let fb = RgbaFramebuffer::new(2, 2);
+
+        assert!(Arc::ptr_eq(&fb.shared_bytes(), &fb.shared_bytes()));
     }
 }

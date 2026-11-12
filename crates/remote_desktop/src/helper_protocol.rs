@@ -4,9 +4,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::{RemoteDesktopConnectionOptions, RemoteDesktopSharedFolder, RemoteDesktopSize};
 
+pub const HELPER_PROTOCOL_VERSION: u32 = 2;
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum HelperRequest {
+    ClientHello {
+        protocol_version: u32,
+        app_version: String,
+    },
     Connect {
         destination: String,
         username: Option<String>,
@@ -24,8 +30,12 @@ pub enum HelperRequest {
         egfx: RdpEgfxMode,
         #[serde(default)]
         shared_folders: Vec<RemoteDesktopSharedFolder>,
+        /// Loopback listener for a host-side SOCKS/HTTP tunnel. The original destination remains
+        /// the TLS/CredSSP identity used by the RDP client.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relay: Option<HelperRelay>,
         #[serde(default)]
-        rdp: RdpSettings,
+        rdp: Box<RdpSettings>,
     },
     Resize {
         width: u16,
@@ -67,6 +77,10 @@ pub enum HelperRequest {
     CancelClipboardTransfer {
         transfer_id: u64,
     },
+    RequestFullFrame,
+    Ping {
+        sequence: u64,
+    },
     Close,
 }
 
@@ -74,6 +88,14 @@ impl HelperRequest {
     pub fn connect_from_options(
         options: &RemoteDesktopConnectionOptions,
         size: RemoteDesktopSize,
+    ) -> Self {
+        Self::connect_from_options_with_relay(options, size, None)
+    }
+
+    pub fn connect_from_options_with_relay(
+        options: &RemoteDesktopConnectionOptions,
+        size: RemoteDesktopSize,
+        relay: Option<HelperRelay>,
     ) -> Self {
         Self::Connect {
             destination: options.destination.clone(),
@@ -87,9 +109,17 @@ impl HelperRequest {
             audio_capture: options.audio_capture,
             egfx: options.rdp.graphics.egfx,
             shared_folders: options.shared_folders.clone(),
-            rdp: options.rdp.clone(),
+            relay,
+            rdp: Box::new(options.rdp.clone()),
         }
     }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelperRelay {
+    pub address: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authentication: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +143,11 @@ pub enum HelperReconnectReason {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum HelperEvent {
+    ServerHello {
+        protocol_version: u32,
+        provider_version: String,
+        capabilities: HelperServerCapabilities,
+    },
     Status {
         message: String,
     },
@@ -171,10 +206,48 @@ pub enum HelperEvent {
     },
     ConnectionFailure {
         message: String,
+        #[serde(default)]
+        kind: Option<RdpFailureKind>,
     },
     Terminated {
         message: String,
+        #[serde(default)]
+        kind: Option<RdpFailureKind>,
     },
+    Pong {
+        sequence: u64,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HelperServerCapabilities {
+    pub heartbeat: bool,
+    pub typed_errors: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HelperServerHello {
+    pub protocol_version: u32,
+    pub provider_version: String,
+    pub capabilities: HelperServerCapabilities,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RdpFailureKind {
+    Authentication,
+    Certificate,
+    Timeout,
+    ConnectionRefused,
+    Tls,
+    Negotiation,
+    SessionTakenOver,
+    ServerEndedSession,
+    Transport,
+    Protocol,
+    Internal,
+    Other,
 }
 
 impl HelperEvent {

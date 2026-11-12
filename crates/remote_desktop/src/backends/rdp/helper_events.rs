@@ -60,7 +60,10 @@ pub(super) fn helper_event_to_output(
                 delay_secs,
             }))
         }
-        HelperEvent::ConnectionFailure { .. } | HelperEvent::Terminated { .. } => None,
+        HelperEvent::ServerHello { .. }
+        | HelperEvent::Pong { .. }
+        | HelperEvent::ConnectionFailure { .. }
+        | HelperEvent::Terminated { .. } => None,
     })
 }
 
@@ -82,13 +85,15 @@ fn capabilities_for_protocol(protocol: RemoteDesktopProtocol) -> RemoteDesktopCa
 
 pub(super) fn helper_disconnect(event: &HelperEvent) -> Option<HelperDisconnect> {
     match event {
-        HelperEvent::ConnectionFailure { message } => Some(HelperDisconnect {
+        HelperEvent::ConnectionFailure { message, kind } => Some(HelperDisconnect {
             kind: Some(HelperDisconnectKind::ConnectionFailure),
             reason: message.clone(),
+            failure: *kind,
         }),
-        HelperEvent::Terminated { message } => Some(HelperDisconnect {
+        HelperEvent::Terminated { message, kind } => Some(HelperDisconnect {
             kind: Some(HelperDisconnectKind::Terminated),
             reason: message.clone(),
+            failure: *kind,
         }),
         _ => None,
     }

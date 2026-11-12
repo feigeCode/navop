@@ -12,8 +12,6 @@ use crate::pixels::rgba_to_bgra;
 use super::frames::apply_bgra_rects_to_framebuffer;
 use super::surface::RemoteDesktopSurface;
 
-const MAX_MERGED_DELTA_RECTS: usize = 4096;
-const MAX_MERGED_DELTA_BYTES: usize = 8 * 1024 * 1024;
 /// Fixed floor for a session that has not reported its desktop size yet.
 const MIN_PENDING_DELTA_RECTS: usize = 8192;
 const MIN_PENDING_DELTA_BYTES: usize = 16 * 1024 * 1024;
@@ -178,7 +176,7 @@ impl PresentationQueue {
             PresentationCommand::Frame {
                 generation,
                 ticket,
-                mut frame,
+                frame,
             } => {
                 self.retain_generation_commands(generation);
                 self.extent = Some(frame.dimensions());
@@ -207,38 +205,6 @@ impl PresentationQueue {
                             height,
                             recovery_required,
                         };
-                    }
-                    if let Some(PresentationCommand::Frame {
-                        generation: previous_generation,
-                        ticket: previous_ticket,
-                        frame:
-                            PresentationFrame::BgraRects {
-                                width: previous_width,
-                                height: previous_height,
-                                rects: previous_rects,
-                                bgra: previous_bgra,
-                            },
-                    }) = self.pending.back_mut()
-                        && *previous_generation == generation
-                        && (*previous_width, *previous_height) == frame.dimensions()
-                    {
-                        let PresentationFrame::BgraRects { rects, bgra, .. } = &mut frame else {
-                            unreachable!("delta frame checked above");
-                        };
-                        if previous_rects.len().saturating_add(rects.len())
-                            <= MAX_MERGED_DELTA_RECTS
-                            && previous_bgra.len().saturating_add(bgra.len())
-                                <= MAX_MERGED_DELTA_BYTES
-                        {
-                            previous_rects.append(rects);
-                            previous_bgra.append(bgra);
-                            *previous_ticket = ticket;
-                            self.pending_delta_rects =
-                                self.pending_delta_rects.saturating_add(delta_rects);
-                            self.pending_delta_bytes =
-                                self.pending_delta_bytes.saturating_add(delta_bytes);
-                            return PresentationQueuePushResult::Queued;
-                        }
                     }
                     self.pending_delta_rects = self.pending_delta_rects.saturating_add(delta_rects);
                     self.pending_delta_bytes = self.pending_delta_bytes.saturating_add(delta_bytes);
@@ -419,22 +385,12 @@ impl PresentationPacer {
     }
 }
 
+#[derive(Default)]
 pub(super) struct PresentationState {
     connected: bool,
     generation: u64,
     framebuffer: Option<RgbaFramebuffer>,
     surface: Option<Arc<RemoteDesktopSurface>>,
-}
-
-impl Default for PresentationState {
-    fn default() -> Self {
-        Self {
-            connected: false,
-            generation: 0,
-            framebuffer: None,
-            surface: None,
-        }
-    }
 }
 
 pub(super) struct PreparedFrame {
@@ -566,6 +522,10 @@ impl PresentationState {
         }
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the hot-path boundary keeps ticket and frame payload fields explicit"
+    )]
     fn process_delta_frame(
         &mut self,
         generation: u64,
@@ -617,6 +577,10 @@ impl PresentationState {
         )
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the hot-path boundary keeps ticket and frame payload fields explicit"
+    )]
     fn process_full_frame(
         &mut self,
         generation: u64,
@@ -718,9 +682,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        FRAME_PRESENTATION_INTERVAL, MAX_MERGED_DELTA_BYTES, MAX_MERGED_DELTA_RECTS, PreparedFrame,
-        PreparedFrameKind, PresentationCommand, PresentationFrame, PresentationPacer,
-        PresentationQueue, PresentationQueuePushResult, PresentationResult, PresentationState,
+        FRAME_PRESENTATION_INTERVAL, PreparedFrame, PreparedFrameKind, PresentationCommand,
+        PresentationFrame, PresentationPacer, PresentationQueue, PresentationQueuePushResult,
+        PresentationResult, PresentationState,
     };
     use remote_desktop::RemoteDesktopFrameRect;
     use std::time::{Duration, Instant};
@@ -784,14 +748,14 @@ mod tests {
     }
 
     #[test]
-    fn consecutive_deltas_merge_without_dropping_predecessor_payload() {
+    fn consecutive_helper_delta_chunks_remain_separate() {
         let mut queue = PresentationQueue::default();
         queue.push(PresentationCommand::Reset { generation: 7 });
         queue.push(PresentationCommand::Connected { generation: 7 });
         queue.push(delta(7, 1));
         queue.push(delta(7, 2));
 
-        assert_eq!(3, queue.len());
+        assert_eq!(4, queue.len());
         let _ = queue.pop_front();
         let _ = queue.pop_front();
         let Some(PresentationCommand::Frame {
@@ -800,12 +764,24 @@ mod tests {
             ..
         }) = queue.pop_front()
         else {
-            panic!("expected merged delta");
+            panic!("expected the first helper delta");
         };
-        assert_eq!(2, rects.len());
-        assert_eq!(8, bgra.len());
+        assert_eq!(1, rects.len());
+        assert_eq!(4, bgra.len());
         assert_eq!(1, bgra[0]);
-        assert_eq!(2, bgra[4]);
+        assert_eq!(1, ticket);
+
+        let Some(PresentationCommand::Frame {
+            ticket,
+            frame: PresentationFrame::BgraRects { rects, bgra, .. },
+            ..
+        }) = queue.pop_front()
+        else {
+            panic!("expected the second helper delta");
+        };
+        assert_eq!(1, rects.len());
+        assert_eq!(4, bgra.len());
+        assert_eq!(2, bgra[0]);
         assert_eq!(2, ticket);
     }
 
@@ -924,62 +900,11 @@ mod tests {
     }
 
     #[test]
-    fn merged_delta_stops_before_rect_limit_without_dropping_frames() {
+    fn presentation_queue_does_not_reassemble_helper_chunks() {
         let mut queue = PresentationQueue::default();
         queue.push(PresentationCommand::Reset { generation: 7 });
         queue.push(PresentationCommand::Connected { generation: 7 });
-
-        for value in 0..MAX_MERGED_DELTA_RECTS {
-            queue.push(delta(7, (value % 2) as u8));
-        }
-        queue.push(delta(7, 9));
-
-        assert_eq!(4, queue.len());
-        let _ = queue.pop_front();
-        let _ = queue.pop_front();
-
-        let Some(PresentationCommand::Frame {
-            frame: PresentationFrame::BgraRects { rects, bgra, .. },
-            ..
-        }) = queue.pop_front()
-        else {
-            panic!("expected the first bounded delta batch");
-        };
-        assert_eq!(MAX_MERGED_DELTA_RECTS, rects.len());
-        assert_eq!(MAX_MERGED_DELTA_RECTS * 4, bgra.len());
-
-        let Some(PresentationCommand::Frame {
-            frame: PresentationFrame::BgraRects { rects, bgra, .. },
-            ..
-        }) = queue.pop_front()
-        else {
-            panic!("expected the delta after the limit");
-        };
-        assert_eq!(1, rects.len());
-        assert_eq!(vec![9, 9, 9, 255], bgra);
-    }
-
-    #[test]
-    fn merged_delta_stops_before_payload_limit_without_truncating_payload() {
-        let mut queue = PresentationQueue::default();
-        queue.push(PresentationCommand::Reset { generation: 7 });
-        queue.push(PresentationCommand::Connected { generation: 7 });
-        queue.push(PresentationCommand::Frame {
-            generation: 7,
-            ticket: 1,
-            frame: PresentationFrame::BgraRects {
-                width: 2,
-                height: 1,
-                rects: vec![RemoteDesktopFrameRect {
-                    x: 0,
-                    y: 0,
-                    width: 1,
-                    height: 1,
-                    byte_len: MAX_MERGED_DELTA_BYTES,
-                }],
-                bgra: vec![1; MAX_MERGED_DELTA_BYTES],
-            },
-        });
+        queue.push(delta(7, 1));
         queue.push(delta(7, 2));
 
         assert_eq!(4, queue.len());
@@ -990,21 +915,17 @@ mod tests {
             ..
         }) = queue.pop_front()
         else {
-            panic!("expected the first bounded delta batch");
+            panic!("expected the first helper delta");
         };
-        assert_eq!(MAX_MERGED_DELTA_BYTES, bgra.len());
         assert_eq!(1, rects.len());
-        assert_eq!(1, bgra[0]);
-        assert_eq!(1, bgra[MAX_MERGED_DELTA_BYTES - 1]);
-
-        let Some(PresentationCommand::Frame {
-            frame: PresentationFrame::BgraRects { bgra, .. },
-            ..
-        }) = queue.pop_front()
-        else {
-            panic!("expected the delta after the payload limit");
-        };
-        assert_eq!(vec![2, 2, 2, 255], bgra);
+        assert_eq!(vec![1, 1, 1, 255], bgra);
+        assert!(matches!(
+            queue.pop_front(),
+            Some(PresentationCommand::Frame {
+                frame: PresentationFrame::BgraRects { .. },
+                ..
+            })
+        ));
     }
 
     #[test]

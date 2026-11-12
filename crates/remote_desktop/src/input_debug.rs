@@ -27,6 +27,7 @@ impl fmt::Debug for RemoteDesktopInput {
                 .debug_struct("CancelClipboardTransfer")
                 .field("transfer_id", transfer_id)
                 .finish(),
+            Self::RequestFullFrame => formatter.write_str("RequestFullFrame"),
             Self::Reconnect => formatter.write_str("Reconnect"),
             Self::Close => formatter.write_str("Close"),
         }
