@@ -14,7 +14,7 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use one_core::storage::SshAccountExpect;
 
-use ssh::{ChannelEvent, PtyConfig, SshChannel, SshClient, SshSessionManager};
+use ssh::{ChannelEvent, PtyConfig, SshChannel, SshClient, SshSessionManager, note_user_input};
 
 use crate::encoding::{TerminalEncoding, TerminalOutputDecoder, encode_terminal_input};
 use crate::exec_supervisor::{ExecEffect, ExecPhase, ExecSupervisor, TerminalInputSource};
@@ -969,6 +969,11 @@ impl SshBackend {
                         let (source, data) = pending_terminal_input
                             .pop()
                             .expect("pending terminal input should contain a chunk");
+                        if source == TerminalInputSource::User {
+                            // 侧边栏 SFTP 借用这条 SSH 连接时靠这个时钟让路；
+                            // 必须在发送前记录：发送本身也可能排在共享连接的上行队列里。
+                            note_user_input();
+                        }
                         if let Err(error) = send_terminal_data(&mut channel, &data)
                             .await
                             .context("failed to send terminal input over SSH")

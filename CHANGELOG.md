@@ -16,6 +16,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 #### 修复与优化
 
+- 修复上传文件时终端输入卡顿：侧边栏文件管理器的 SFTP 借用终端的同一条 SSH 连接，原先按大文件吞吐配置了统一 SFTP 写窗口（256 KB × 64 个在飞请求），按键要排在几 MB 的上行数据后面。现在借用交互连接的传输改用小窗口（128 KB × 2）、在用户打字前静默 100 ms 再写下一块，交互连接开启 TCP_NODELAY；独立 SFTP 标签页与批量下载仍走原来的高吞吐配置。
 - 修复 SSH 连上之后要卡 3～5 秒才能输入的问题（#537）：Shell Integration 收到 ready 标记后立即放行输入，不再等可能永远不出现的 `OSC 133;B`；注入改为「先发短 Bootstrap 命令确认交互 shell 已就绪、再发完整脚本」两阶段；同时把注入脚本从 6.2 KB 压到 3.9 KB，避免超过 PTY 4 KiB 输入队列后被截断、远端停在续行提示符上再等满 5 秒兜底。
 - 修复 SSH 提示符框架（oh-my-posh / starship / powerlevel10k）场景下的两处握手问题：`PROMPT_COMMAND` 尾部分号被拼成 `;;` 导致提示符阶段语法报错；禁用 Shell 集成时仍去读取远端历史。
 - SFTP 读目录失败不再无限自动重试与刷日志，失败回退有次数上限，运行期日志改为轮转。
@@ -38,6 +39,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 #### Fixes and Improvements
 
+- Fixed terminal input lagging while files upload: the sidebar file manager's SFTP borrows the terminal's SSH connection and used one large SFTP write window (256 KB × 64 in-flight requests), so keystrokes queued behind megabytes of upstream data. Transfers that borrow an interactive connection now use a small window (128 KB × 2), pause before writing when you are typing, and the interactive connection enables TCP_NODELAY; standalone SFTP tabs and bulk downloads keep the high-throughput settings.
 - Fixed SSH sessions taking 3–5 seconds before accepting input (#537): input is released as soon as the Shell Integration ready marker arrives instead of waiting for an `OSC 133;B` that may never come; injection is now two-phase (a short bootstrap command confirms the interactive shell is ready, then the full script is sent); and the injected script shrank from 6.2 KB to 3.9 KB so it no longer exceeds the 4 KiB PTY input queue, gets truncated, and stalls the shell on a continuation prompt until the 5-second fallback.
 - Fixed two handshake problems with prompt frameworks (oh-my-posh / starship / powerlevel10k): a trailing semicolon in `PROMPT_COMMAND` used to be joined into `;;` and broke the prompt with a syntax error, and remote history was still read when shell integration was disabled.
 - SFTP directory reads no longer retry forever or flood the log: the fallback is bounded and runtime logs now rotate.
