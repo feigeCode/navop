@@ -5,6 +5,7 @@ use one_core::storage::{ConnectionType, QuickCommand, StoredConnection};
 use one_ui::IconSize;
 use rust_i18n::t;
 
+use super::connection_import_defaults::ImportConnectionDefaults;
 use super::connection_import_draft_conversion::{
     import_draft_duplicate_identity, import_draft_to_editor_connection,
     import_draft_to_quick_command, import_draft_to_stored_connection, ssh_auth_edit_values,
@@ -58,6 +59,8 @@ pub(crate) struct EditableImportDraft {
     pub(crate) quick_command_command: String,
     pub(crate) quick_command_shortcut: String,
     pub(crate) quick_command_description: String,
+    /// 导入窗口里统一指定的高级设置默认项，转换时套用到连接参数上。
+    pub(crate) defaults: ImportConnectionDefaults,
     payload: ImportDraftPayload,
 }
 
@@ -95,6 +98,16 @@ impl EditableImportDraft {
         }
     }
 
+    /// 覆盖导入窗口里统一指定的高级设置默认项。
+    pub(crate) fn with_defaults(mut self, defaults: ImportConnectionDefaults) -> Self {
+        self.defaults = defaults;
+        self
+    }
+
+    pub(crate) fn set_defaults(&mut self, defaults: ImportConnectionDefaults) {
+        self.defaults = defaults;
+    }
+
     fn database(record: ImportRecord) -> Self {
         let imported = record.database.as_ref();
         Self {
@@ -125,6 +138,7 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
     }
@@ -160,6 +174,7 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
     }
@@ -195,6 +210,7 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
     }
@@ -226,6 +242,7 @@ impl EditableImportDraft {
             quick_command_description: imported
                 .and_then(|record| record.description.clone())
                 .unwrap_or_default(),
+            defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
     }
@@ -257,6 +274,7 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
     }
@@ -277,6 +295,7 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
     }

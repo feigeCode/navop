@@ -13,6 +13,7 @@ use one_core::storage::{
 use std::collections::BTreeMap;
 
 use super::connection_import_actions::save_import_draft;
+use super::connection_import_defaults::ImportConnectionDefaults;
 use super::connection_import_draft::{
     EditableImportDraft, ImportDraftEdit, ImportDraftField, ImportDraftKind, selected_import_count,
     selected_import_drafts_to_connections,
@@ -928,4 +929,56 @@ fn telnet_import(name: &str, username: Option<&str>, password: Option<&str>) -> 
         },
         warnings: Vec::new(),
     }
+}
+
+#[test]
+fn imported_ssh_connection_applies_migration_defaults() {
+    // 迁移场景下老设备（防火墙/交换机/工控机）大多只支持旧版算法，
+    // 批量导入时必须能一次性把高级设置勾好，否则几百条连接要逐条手改。
+    let draft = EditableImportDraft::new(ssh_import("legacy-algorithms")).with_defaults(
+        ImportConnectionDefaults {
+            allow_legacy_algorithms: true,
+            disable_shell_integration: true,
+        },
+    );
+
+    let params = draft
+        .to_stored_connection()
+        .expect("convert ssh import")
+        .to_ssh_params()
+        .expect("ssh params");
+
+    assert_eq!(Some(true), params.allow_legacy_algorithms);
+    assert_eq!(Some(true), params.disable_shell_integration);
+}
+
+#[test]
+fn default_migration_settings_enable_legacy_algorithms_only() {
+    let params = EditableImportDraft::new(ssh_import("plain"))
+        .to_stored_connection()
+        .expect("convert ssh import")
+        .to_ssh_params()
+        .expect("ssh params");
+
+    assert_eq!(Some(true), params.allow_legacy_algorithms);
+    assert_eq!(None, params.disable_shell_integration);
+}
+
+#[test]
+fn cleared_migration_defaults_leave_advanced_options_unset() {
+    let draft = EditableImportDraft::new(ssh_import("modern")).with_defaults(
+        ImportConnectionDefaults {
+            allow_legacy_algorithms: false,
+            disable_shell_integration: false,
+        },
+    );
+
+    let params = draft
+        .to_stored_connection()
+        .expect("convert ssh import")
+        .to_ssh_params()
+        .expect("ssh params");
+
+    assert_eq!(None, params.allow_legacy_algorithms);
+    assert_eq!(None, params.disable_shell_integration);
 }

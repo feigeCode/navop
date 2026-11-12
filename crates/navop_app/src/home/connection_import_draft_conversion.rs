@@ -209,9 +209,9 @@ fn to_ssh_connection(
         keepalive_max: None,
         default_directory: None,
         init_script: imported.init_script.clone(),
-        disable_shell_integration: None,
+        disable_shell_integration: draft.defaults.disable_shell_integration_param(),
         x11_forwarding: None,
-        allow_legacy_algorithms: None,
+        allow_legacy_algorithms: draft.defaults.allow_legacy_algorithms_param(),
         forward_agent: None,
         agent_forward_key: None,
         jump_server: imported
