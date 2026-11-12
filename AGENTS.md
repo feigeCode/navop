@@ -404,6 +404,13 @@
 - **验证方式**：用源码 contract 约束 Windows native controls 先 occlude 再声明 control area；用真实 GPUI 布局测试覆盖普通 tab → RDP tab、超长错误状态和大尺寸首帧，确认标题栏控件 bounds 不变；最后在 Windows 实机验证切换 tab、点击 Min/Max/Close、最大化/还原和拖动空白标题栏。
 - **适用范围**：`crates/core/src/tab_container.rs` 以及其他包含 broad Drag 区的 Windows GPUI 自绘标题栏。
 
+- **标题**：GPUI Fast 圆角 `overflow_hidden` 容器在部分 Windows D3D 驱动上会丢失全部后代
+- **触发信号**：升级到 gpui-fast 0.1.12+ 后，页签只剩圆角边框，连接卡片只剩背景/边框，卡片图标和文字、页签标题/图标都不显示；普通 tooltip、侧栏名称和未进入该裁剪组的表单输入仍正常，换主题或全新配置无效。
+- **根因 / 约束**：GPUI Fast 对「非零圆角 + 两个方向都 overflow hidden」的容器启用单独的 Direct3D 离屏裁剪 pass。`gpui-fast 0.1.8` 尚无这条路径，0.1.12/0.1.13 才引入；部分 Windows 驱动会丢掉该 pass 的所有子图元，但容器自身背景、边框和阴影仍正常绘制，因此截图表现为“只剩空圆角框”。不要把它误判为字体、主题、旧配置或连接数据问题。
+- **正确做法**：内容容器不必要时不要同时使用 `.rounded*()` 和 `.overflow_hidden()`。页签标题自身已有矩形 `overflow_hidden + text_ellipsis`，卡片标题/描述也各自裁剪，外层只保留圆角背景和边框即可；若确实需要圆角裁剪，应等待 gpui-fast 修复或增加可关闭该路径的全局 fallback，而不是逐个调整字体/颜色。
+- **验证方式**：先补源码 contract 回归，确保 `TabContainer` 的 pinned/regular tab 根节点和新建连接卡片根节点没有 `.overflow_hidden()`；再运行 `cargo test -p app_kit`、`cargo test -p one-core tab_container::tests` 和 `cargo check -p navop_app`。最终必须在受影响 Windows 机器上确认页签与卡片内容恢复。
+- **适用范围**：`crates/core/src/tab_container.rs`、`crates/app_kit/src/new_connection.rs`，以及所有把圆角背景容器同时设为双向 overflow hidden 的 GPUI 自绘列表/卡片/标签。
+
 - **标题**：RDP 自动重连必须保留最后呈现帧，瞬态状态不得替换 active tab 内容
 - **触发信号**：Windows 下 RDP 作为最后一个且当前激活的页签时，自动重连后窗口控件向内挤；打开其他页签后立即恢复；重连文案同时长期覆盖在远程桌面页面上。
 - **根因 / 约束**：RDP helper 会先发送 `ConnectionFailure` / `Terminated`，再经 backend signal 发送 `Reconnecting`。如果 View 在前一个终止事件里清掉 `RenderedFrameLifecycle::current`，或用 `connected` 门控当前图像，active view 会从大尺寸画面切换成状态文本/overlay，其 intrinsic layout 变化可继续影响 Windows window chrome。mailbox 丢弃旧 session 尚未呈现的 pending frame/delta 是正确隔离，不能与保留 View 已经呈现的最后一帧混为一谈。

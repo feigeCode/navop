@@ -1282,6 +1282,47 @@ impl UpdateMirror {
     }
 }
 
+/// 日志级别，对应启动时给 tracing 装的全局过滤器。
+///
+/// 用户可在「设置 → 通用 → 日志」里随时切换，改完立即生效（不需要重启）；
+/// 环境变量 `RUST_LOG` 仍然优先——它存在时启动阶段以环境变量为准，方便开发者
+/// 临时抓一次 debug 日志而不必先进设置页。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Error,
+    Warn,
+    /// 默认：只留告警与关键流程，日志文件不会涨得太快。
+    #[default]
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    /// 写进 `EnvFilter` 的指令字符串。
+    pub fn as_directive(self) -> &'static str {
+        match self {
+            LogLevel::Error => "error",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+            LogLevel::Trace => "trace",
+        }
+    }
+
+    /// 未知取值回退到默认级别：旧版本写下的新级别不该让日志在启动时静默消失。
+    pub fn from_directive(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "error" => LogLevel::Error,
+            "warn" => LogLevel::Warn,
+            "debug" => LogLevel::Debug,
+            "trace" => LogLevel::Trace,
+            _ => LogLevel::Info,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
@@ -1394,6 +1435,9 @@ pub struct AppSettings {
     pub local_terminal_profile: LocalTerminalProfileSettings,
     #[serde(default)]
     pub log_file_path: String,
+    /// 日志级别（见 [`LogLevel`]）；空值/旧配置一律按 `info`。
+    #[serde(default)]
+    pub log_level: LogLevel,
     #[serde(default = "default_true")]
     pub auto_update: bool,
     #[serde(default)]
@@ -1817,6 +1861,7 @@ impl Default for AppSettings {
             terminal_tool_panel_placements: BTreeMap::new(),
             local_terminal_profile: LocalTerminalProfileSettings::default(),
             log_file_path: String::new(),
+            log_level: LogLevel::default(),
             auto_update: true,
             skipped_update_version: None,
             update_channel: None,
@@ -2077,6 +2122,27 @@ impl AppSettings {
         };
 
         Self::peek_log_file_path_from(&path)
+    }
+
+    /// 启动阶段只读一句配置：日志级别要在 `load()` 之前装好过滤器。
+    pub fn peek_log_level() -> LogLevel {
+        let Some(path) = Self::config_path() else {
+            return LogLevel::default();
+        };
+
+        Self::peek_log_level_from(&path)
+    }
+
+    fn peek_log_level_from(path: &Path) -> LogLevel {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return LogLevel::default();
+        };
+
+        serde_json::from_str::<serde_json::Value>(&content)
+            .ok()
+            .and_then(|value| value.get("log_level").cloned())
+            .and_then(|value| serde_json::from_value::<LogLevel>(value).ok())
+            .unwrap_or_default()
     }
 
     fn peek_log_file_path_from(path: &Path) -> String {
@@ -2359,14 +2425,15 @@ mod tests {
         CloseButtonBehavior, ConnectionSortOrder, CustomFont, DEFAULT_AI_REQUEST_TIMEOUT_SECS,
         DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
         DEFAULT_TERMINAL_THEME, HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
-        LocalTerminalProfileKind, LocalTerminalProfileSettings, MAX_AI_REQUEST_TIMEOUT_SECS,
-        MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MAX_RECENT_WORKSPACE_ROOTS, MAX_REMEMBERED_ACP_SESSIONS,
-        MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, MasterKeyStorage, McpPermissionMode,
-        McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode, SidebarPlacement,
-        SqlFormatSettings, SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider,
-        TableViewMode, UpdateChannel, UpdateMirror, default_grid_font_fallback_families,
-        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
-        is_installed_font_family, resolve_installed_grid_monospace_font_family,
+        LocalTerminalProfileKind, LocalTerminalProfileSettings, LogLevel,
+        MAX_AI_REQUEST_TIMEOUT_SECS, MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MAX_RECENT_WORKSPACE_ROOTS,
+        MAX_REMEMBERED_ACP_SESSIONS, MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState,
+        MasterKeyStorage, McpPermissionMode, McpServerMode, PersonalSyncBackendKind,
+        RemoteFileOpenMode, SidebarPlacement, SqlFormatSettings, SqlIndentStyle, SqlKeywordCase,
+        StartupDefaultPage, SyncProvider, TableViewMode, UpdateChannel, UpdateMirror,
+        default_grid_font_fallback_families, default_grid_monospace_font_family,
+        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
+        resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -2455,6 +2522,33 @@ mod tests {
             )
             .is_err(),
             "整份反序列化应当失败，而 peek 仍要能取到日志路径"
+        );
+    }
+
+    #[test]
+    fn log_level_round_trips_and_degrades_to_info() {
+        assert_eq!(AppSettings::default().log_level, LogLevel::Info);
+        assert_eq!(LogLevel::Info.as_directive(), "info");
+        assert_eq!(LogLevel::from_directive("DEBUG"), LogLevel::Debug);
+        // 未知取值回退到 info：宁可多写一点日志，也不要让日志静默消失。
+        assert_eq!(LogLevel::from_directive("verbose-ish"), LogLevel::Info);
+
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"log_level":"trace"}"#).expect("只写日志级别的旧配置应能解析");
+        assert_eq!(settings.log_level, LogLevel::Trace);
+
+        // 启动期 peek 不能依赖整份配置解析成功，否则坏配置会把级别悄悄打回默认。
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"log_level":"debug","font_size":"坏值"}"#)
+            .expect("write settings");
+        assert_eq!(AppSettings::peek_log_level_from(&path), LogLevel::Debug);
+        assert!(
+            serde_json::from_str::<AppSettings>(
+                &std::fs::read_to_string(&path).expect("read settings")
+            )
+            .is_err(),
+            "整份反序列化应当失败，而 peek 仍要能取到日志级别"
         );
     }
 

@@ -228,6 +228,10 @@ fn build_russh_client_config(
             .keepalive_interval
             .or(Some(defaults::KEEPALIVE_INTERVAL)),
         keepalive_max: config.keepalive_max.unwrap_or(defaults::KEEPALIVE_MAX),
+        // 交互连接必须关掉 Nagle：一次按键就是一个几十字节的小包，等前一个包
+        // 的 ACK 再发会直接变成可感知的输入延迟；而批量流量本来就按 MTU 分段，
+        // 关掉 Nagle 不会让它多出多少小包。
+        nodelay: true,
         ..<_>::default()
     }))
 }

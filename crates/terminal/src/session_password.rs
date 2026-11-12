@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use one_core::storage::SshElevationExpect;
 use regex::Regex;
 use std::sync::OnceLock;
-use tracing::debug;
+use tracing::{debug, info};
 
 /// 保留的输出尾部长度上限；提示一定出现在最后几十个字节里。
 const TAIL_CHARS: usize = 4 * 1024;
@@ -23,10 +23,21 @@ const TAIL_CHARS: usize = 4 * 1024;
 const ARM_WINDOW: Duration = Duration::from_secs(20);
 /// 每次成功应答后顺延的 armed 时长，用于 `sudo su root` 这类连续提示。
 const ARM_EXTENSION: Duration = Duration::from_secs(10);
-/// 同一个提示在这个时间窗内再次出现，说明密码被拒，停止自动应答。
-const REJECT_WINDOW: Duration = Duration::from_secs(20);
-/// 单次会话最多自动应答多少次，防止误判后无限灌密码。
-const MAX_FILLS: u32 = 3;
+/// 同一个提示在这么短的时间内再次出现，说明密码被拒（远端立刻重试），
+/// 这时停止自动应答，把密码猜测的机会交还给用户。
+const REJECT_PROMPT_WINDOW: Duration = Duration::from_secs(5);
+/// 单次会话最多自动应答多少次。
+///
+/// 正常会话里 `sudo` 用上几十次很常见（装包、改配置、重启服务），上限只用于
+/// 防止误判后无限灌密码，不能设得太低，否则用着用着就「突然不填了」。
+const MAX_FILLS: u32 = 32;
+/// 远端明确提示密码错误时，立即停止自动应答。
+const REJECTED_PASSWORD_MARKERS: [&str; 4] = [
+    "authentication failure",
+    "sorry, try again",
+    "incorrect password",
+    "authentication denied",
+];
 
 fn privilege_command_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
@@ -125,6 +136,19 @@ impl SessionPasswordExpect {
             if privilege_command_regex().is_match(&self.tail[..completed_end]) {
                 self.armed_until = Some(now + ARM_WINDOW);
             }
+            let completed = self.tail[..completed_end].to_ascii_lowercase();
+            if REJECTED_PASSWORD_MARKERS
+                .iter()
+                .any(|marker| completed.contains(marker))
+            {
+                // 远端明确说密码不对：立刻收手，别继续拿同一个密码试。
+                self.armed_until = None;
+                info!(
+                    target: "terminal.ssh.session_password",
+                    fills = self.fills,
+                    "远端提示密码错误，本次会话停止自动填入提权密码"
+                );
+            }
             // 已经结束的行只用于识别命令，之后不必再参与匹配：把尾部收窄到
             // 「最后一行未完成的输出」，既省内存，也避免旧命令反复续期 armed。
             self.tail.drain(..completed_end);
@@ -136,21 +160,23 @@ impl SessionPasswordExpect {
         }
         if self.fills >= MAX_FILLS {
             self.armed_until = None;
-            debug!(
+            info!(
                 target: "terminal.ssh.session_password",
-                "session password auto-fill reached the per-session limit"
+                fills = self.fills,
+                "本次会话自动填入提权密码次数已达上限，后续提示交给用户输入"
             );
             return None;
         }
         if self.last_fill.is_some_and(|filled_at| {
-            now.duration_since(filled_at) < REJECT_WINDOW
+            now.duration_since(filled_at) < REJECT_PROMPT_WINDOW
                 && self.last_prompt.as_deref() == Some(prompt.as_str())
         }) {
-            // 同一个提示再次出现说明密码被拒：停手，别把用户的密码反复喂给远端。
+            // 同一个提示紧接着再次出现说明密码被拒：停手，别把用户的密码反复喂给远端。
             self.armed_until = None;
-            debug!(
+            info!(
                 target: "terminal.ssh.session_password",
-                "session password auto-fill stopped after a rejected prompt"
+                fills = self.fills,
+                "提权密码提示紧接着重复出现，判定密码被拒并停止自动填入"
             );
             return None;
         }
@@ -454,11 +480,11 @@ mod tests {
     }
 
     #[test]
-    fn gives_up_after_the_fill_limit() {
+    fn keeps_filling_across_many_sudo_calls() {
         let mut expect = responder(Some("secret"));
         let mut now = Instant::now();
         let mut answered = 0;
-        for index in 0..5 {
+        for index in 0..10 {
             let _ = expect.observe("alice@host:~$ sudo -i\r\n", now);
             if expect
                 .observe(
@@ -469,7 +495,87 @@ mod tests {
             {
                 answered += 1;
             }
-            now += Duration::from_secs(1);
+            let _ = expect.observe(
+                "root@host:~# exit\r\nexit\r\nalice@host:~$ ",
+                now + Duration::from_millis(200),
+            );
+            now += Duration::from_secs(3);
+        }
+        assert_eq!(answered, 10, "连续多次 sudo 不该被上限挡住");
+    }
+
+    #[test]
+    fn fills_again_after_su_and_exit() {
+        let mut expect = responder(Some("secret"));
+        let now = Instant::now();
+        let _ = expect.observe("alice@host:~$ su root\r\n", now);
+        assert!(
+            expect
+                .observe("Password: ", now + Duration::from_millis(100))
+                .is_some(),
+            "首次 su 应自动填入"
+        );
+        let _ = expect.observe(
+            "root@host:~# exit\r\nexit\r\nalice@host:~$ ",
+            now + Duration::from_secs(10),
+        );
+        let _ = expect.observe("alice@host:~$ su root\r\n", now + Duration::from_secs(20));
+        assert!(
+            expect
+                .observe(
+                    "Password: ",
+                    now + Duration::from_secs(20) + Duration::from_millis(100)
+                )
+                .is_some(),
+            "退出后再次 su 仍应自动填入"
+        );
+    }
+
+    #[test]
+    fn stops_after_remote_reports_a_rejected_password() {
+        let mut expect = responder(Some("secret"));
+        let now = Instant::now();
+        let _ = expect.observe("alice@host:~$ sudo -i\r\n", now);
+        assert!(
+            expect
+                .observe(
+                    "[sudo] password for alice: ",
+                    now + Duration::from_millis(100)
+                )
+                .is_some()
+        );
+        let _ = expect.observe(
+            "Sorry, try again.\r\n[sudo] password for alice: ",
+            now + Duration::from_millis(300),
+        );
+        assert!(
+            expect
+                .observe(
+                    "[sudo] password for alice: ",
+                    now + Duration::from_millis(400)
+                )
+                .is_none(),
+            "远端已提示密码错误，不应继续尝试"
+        );
+    }
+
+    #[test]
+    fn gives_up_after_the_fill_limit() {
+        let mut expect = responder(Some("secret"));
+        let mut now = Instant::now();
+        let mut answered = 0;
+        for index in 0..(MAX_FILLS + 2) {
+            let _ = expect.observe("alice@host:~$ sudo -i\r\n", now);
+            if expect
+                .observe(
+                    &format!("[sudo] password for user{index}: "),
+                    now + Duration::from_millis(100),
+                )
+                .is_some()
+            {
+                answered += 1;
+            }
+            now += Duration::from_secs(6);
         }
         assert_eq!(answered, MAX_FILLS as usize);
     }

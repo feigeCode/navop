@@ -283,7 +283,7 @@ redis_client = { package = "redis", version = "0.27", features = [
 
 # SSH and SFTP
 # dsa feature enables verifying/offering the legacy ssh-dss host-key algorithm.
-russh = { version = "0.65.0", features = ["dsa"] }
+russh = { version = "0.65.1", features = ["dsa"] }
 russh-sftp = "3.0.1"
 tokio-socks = "0.5"
 async_ftp = "6.0.0"
@@ -448,12 +448,14 @@ gpui-fast-windows          = { git = "https://github.com/feigeCode/gpui-fast.git
 # Regression test: crates/ssh/tests/legacy_hostkey_mpint.rs
 ssh-encoding = { git = "https://github.com/feigeCode/SSH.git", tag = "ssh-encoding/v0.3.0-navop.1" }
 
-# russh（截至 v0.65.0 的全部已发布版本）钉 `rsa =0.10.0-rc.18` +
-# `pkcs1 =0.8.0-rc.4`，而 quickjs-jit-stdlib 0.14.1（nsh 宿主的 quickjs
-# crypto 模块）要求 `rsa ^0.10.0-rc.19`，两者无法同时满足。rsa rc.18→rc.19
-# 仅伴随 pkcs1 rc.4→rc.5 的泛型化（`RsaPrivateKeyRef<'a>` 别名保持
-# `try_from(&[u8])`/`as_bytes()` 旧用法），russh 源码零改动即兼容。Fork of
-# warp-tech/russh carrying tag `v0.65.0-navop.1`（仅改两行版本钉 + 删 CI
-# workflows）；等 russh 上游跟进 rc.19 后可删除。
+# russh 上游（v0.65.1 与 master 现有 ssh-key 0.7.0-rc.12）钉 `rsa = "0.10"`
+# （即 ^0.10.0，排除预发布版），而 quickjs-jit-stdlib 0.14.2（nsh 宿主的
+# quickjs crypto 模块，当前最新版）要求 `rsa/sha2` 等特性；该特性只存在于
+# rsa 0.10.0 的预发布线（rc.19+），0.10.0 正式版已移除，于是 quickjs 必须
+# 用 rc 版、russh 必须用正式版，二者无法共存。Fork of warp-tech/russh
+# carrying tag `v0.65.1-navop.1`：基于上游 v0.65.1 最新发布（含其安全修复），
+# 仅将 rsa 钉 `=0.10.0-rc.19`、pkcs1 钉 `=0.8.0-rc.5`，附 pkcs1 rc.5 的
+# `RsaPrivateKeyRef` 兼容修复并删 CI workflows；ssh-key 保持上游的
+# 0.7.0-rc.11。等 quickjs-jit-stdlib 跟进 rsa 0.10 正式版后可删除。
 # 验证：cargo check -p ssh 与 crates/ssh 全量测试（含 legacy hostkey 回归）。
-russh = { git = "https://github.com/feigeCode/russh.git", tag = "v0.65.0-navop.1" }
+russh = { git = "https://github.com/feigeCode/russh.git", tag = "v0.65.1-navop.1" }

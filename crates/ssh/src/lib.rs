@@ -4,6 +4,7 @@ mod connection_error;
 mod connection_key;
 mod dynamic_socks;
 mod host_key;
+mod interactive;
 mod mfa;
 mod remote_forwarding;
 mod session_manager;
@@ -21,6 +22,7 @@ pub use host_key::{
     HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyPolicy, HostKeyProxyType,
     HostKeyRejection, HostKeyRoute, HostKeyVerifier, KnownHost,
 };
+pub use interactive::{note_user_input, user_input_idle, yield_to_user_input};
 pub use mfa::{
     auto_answer_keyboard_interactive, is_otp_prompt, is_password_prompt, needs_manual_input,
 };

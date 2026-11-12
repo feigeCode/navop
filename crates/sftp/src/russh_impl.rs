@@ -63,15 +63,48 @@ const SFTP_MAX_WRITE_PACKET_LEN: u32 = SFTP_MAX_PACKET_LEN;
 /// 所以不能太长；但 fsync（flush 阶段）在慢速网络存储上合法耗时可能到几十秒，
 /// 满载服务器也可能延迟应答，所以保留 60s 余量而不用更激进的 30s。
 const SFTP_REQUEST_TIMEOUT_SECS: u64 = 60;
+/// 借用交互会话的连接上允许的在飞写字节：2 × 128 KiB = 256 KiB。
+///
+/// `russh-sftp` 的写窗口就是"最多有多少字节已交给传输层、还没等来服务端确认"，
+/// 也就是用户按键最多要排多少数据。侧边栏文件管理器与终端共用同一条 TCP，
+/// 独占连接那套 16 MiB 窗口在上行 1 MB/s 的链路上等于十几秒的按键延迟，
+/// 所以共享连接压到 256 KiB，独占连接继续用大窗口换吞吐。
+const SHARED_MAX_CONCURRENT_WRITES: usize = 2;
+const SHARED_MAX_WRITE_PACKET_LEN: u32 = 128 * 1024;
+/// 共享连接上的读取窗口同样收窄：SFTP 通道把终端连接的 SSH 窗口占满时，
+/// 服务端连回声都塞不进来。
+const SHARED_MAX_CONCURRENT_READS: usize = 8;
 const OWNER_LOOKUP_BATCH_SIZE: usize = 128;
 const OWNER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 
-fn sftp_session_config() -> SftpConfig {
+/// SFTP 会话独占这条 SSH 连接，还是与交互终端共用。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SftpTransport {
+    /// 整条连接只跑 SFTP（独立 SFTP 标签页、服务器间复制）。
+    Owned,
+    /// 借用交互会话的连接（侧边栏文件管理器的上传/下载）。
+    Shared,
+}
+
+fn sftp_session_config(transport: SftpTransport) -> SftpConfig {
+    let (max_concurrent_reads, max_concurrent_writes, max_write_packet_len) = match transport {
+        SftpTransport::Owned => (
+            SFTP_MAX_CONCURRENT_READS,
+            MAX_INFLIGHT_REQUESTS,
+            SFTP_MAX_WRITE_PACKET_LEN,
+        ),
+        SftpTransport::Shared => (
+            SHARED_MAX_CONCURRENT_READS,
+            SHARED_MAX_CONCURRENT_WRITES,
+            SHARED_MAX_WRITE_PACKET_LEN,
+        ),
+    };
+
     SftpConfig {
         max_packet_len: SFTP_MAX_PACKET_LEN,
-        max_concurrent_reads: SFTP_MAX_CONCURRENT_READS,
-        max_concurrent_writes: MAX_INFLIGHT_REQUESTS,
-        max_write_packet_len: SFTP_MAX_WRITE_PACKET_LEN,
+        max_concurrent_reads,
+        max_concurrent_writes,
+        max_write_packet_len,
         request_timeout_secs: SFTP_REQUEST_TIMEOUT_SECS,
     }
 }
@@ -1394,8 +1427,11 @@ impl RusshSftpClient {
             guard.open_raw_channel().await?
         };
         channel.request_subsystem(true, "sftp").await?;
-        let sftp =
-            SftpSession::new_with_config(channel.into_stream(), sftp_session_config()).await?;
+        let sftp = SftpSession::new_with_config(
+            channel.into_stream(),
+            sftp_session_config(SftpTransport::Shared),
+        )
+        .await?;
 
         Ok(Self {
             sftp,
@@ -1409,6 +1445,31 @@ impl RusshSftpClient {
 
     pub(crate) fn accepted_server_public_key(&self) -> Option<&str> {
         self.accepted_server_public_key.as_deref()
+    }
+
+    /// 这条客户端是否借用交互会话的连接（终端所在会话）。
+    ///
+    /// 共享连接上的批量写入要给用户按键让路：SFTP 不怕慢几十毫秒，
+    /// 终端输入怕。
+    fn shares_interactive_transport(&self) -> bool {
+        matches!(self.owner, SessionOwner::Shared { .. })
+    }
+
+    /// 共享连接写下一块前的让路点；独占连接没有交互流量，直接返回。
+    async fn wait_for_interactive_input(&self) {
+        if self.shares_interactive_transport() {
+            ssh::yield_to_user_input().await;
+        }
+    }
+
+    /// 流水线下载的并发读上限：独占连接用满预算，共享连接收窄到与写窗口
+    /// 同量级，避免 SFTP 通道把终端连接的 SSH 窗口占满。
+    fn pipeline_read_limit(&self) -> usize {
+        if self.shares_interactive_transport() {
+            SHARED_MAX_CONCURRENT_READS
+        } else {
+            MAX_INFLIGHT_REQUESTS
+        }
     }
 
     pub(crate) async fn ensure_copy_directory(&mut self, path: &str) -> Result<()> {
@@ -1643,6 +1704,7 @@ impl RusshSftpClient {
         raw_session: Arc<RawSftpSession>,
         remote_path: &str,
         total_size: u64,
+        max_in_flight: usize,
         cancelled: &AtomicBool,
         writer: &mut BufWriter<File>,
         mut on_progress: F,
@@ -1670,7 +1732,7 @@ impl RusshSftpClient {
                 break;
             }
 
-            while next_request < total_chunks && reads.len() < MAX_INFLIGHT_REQUESTS {
+            while next_request < total_chunks && reads.len() < max_in_flight {
                 let offset = next_request * chunk_size;
                 let expected_len = expected_chunk_len(offset, total_size)?;
                 let raw = Arc::clone(&raw_session);
@@ -1773,6 +1835,7 @@ impl RusshSftpClient {
         remote_path: &str,
         local_path: &str,
         total_size: u64,
+        max_in_flight: usize,
         cancelled: &AtomicBool,
         progress: &(dyn Fn(TransferProgress) + Send + Sync),
     ) -> Result<()> {
@@ -1786,6 +1849,7 @@ impl RusshSftpClient {
             raw_session,
             remote_path,
             total_size,
+            max_in_flight,
             cancelled,
             &mut writer,
             |transferred| {
@@ -1843,6 +1907,7 @@ impl RusshSftpClient {
         dir_transferred: &mut u64,
         dir_total: u64,
         start_time: Instant,
+        max_in_flight: usize,
         cancelled: &AtomicBool,
         progress: &(dyn Fn(TransferProgress) + Send + Sync),
     ) -> Result<()> {
@@ -1856,6 +1921,7 @@ impl RusshSftpClient {
             raw_session,
             remote_path,
             total_size,
+            max_in_flight,
             cancelled,
             &mut writer,
             |transferred| {
@@ -2029,6 +2095,8 @@ impl RusshSftpClient {
             .unwrap_or(request.source_path)
             .to_string();
         let started_at = Instant::now();
+        // 服务器间复制的目标连接同样可能是侧边栏借用的交互连接。
+        let target_shares_interactive = target.shares_interactive_transport();
         let result = with_remote_replace(
             &target.sftp,
             &target_path,
@@ -2045,6 +2113,9 @@ impl RusshSftpClient {
                         .map_err(|error| anyhow!("Failed to read {}: {}", source_path, error))?;
                     if read == 0 {
                         break;
+                    }
+                    if target_shares_interactive {
+                        ssh::yield_to_user_input().await;
                     }
                     target_file
                         .write_all(&buffer[..read])
@@ -2226,8 +2297,11 @@ impl SftpClient for RusshSftpClient {
         let channel = session.channel_open_session().await?;
         channel.request_subsystem(true, "sftp").await?;
 
-        let sftp =
-            SftpSession::new_with_config(channel.into_stream(), sftp_session_config()).await?;
+        let sftp = SftpSession::new_with_config(
+            channel.into_stream(),
+            sftp_session_config(SftpTransport::Owned),
+        )
+        .await?;
         let accepted_server_public_key = accepted_server_public_key
             .lock()
             .map_err(|_| anyhow!("SFTP server host key capture lock was poisoned"))?
@@ -2370,11 +2444,13 @@ impl RemoteFileClient for RusshSftpClient {
                 }
             };
 
+            let max_in_flight = self.pipeline_read_limit();
             let result = Self::pipelined_download(
                 raw_session,
                 remote_path,
                 local_path,
                 total_size,
+                max_in_flight,
                 &cancelled,
                 &progress,
             )
@@ -2411,60 +2487,71 @@ impl RemoteFileClient for RusshSftpClient {
         let total_size = metadata.len();
 
         let mut local_file = BufReader::with_capacity(BUFFER_SIZE, local_file);
+        // 共享连接（侧边栏与终端同一条 SSH）要在每块写入前给用户按键让路。
+        let shares_interactive = self.shares_interactive_transport();
 
         let result = race_with_cancel(
             &cancelled,
-            with_remote_replace(&self.sftp, remote_path, total_size, |mut remote_file| async {
-                let mut buffer = vec![0u8; BUFFER_SIZE];
-                let mut transferred = 0u64;
-                let started_at = Instant::now();
-                let mut last_update = Instant::now();
+            with_remote_replace(
+                &self.sftp,
+                remote_path,
+                total_size,
+                |mut remote_file| async {
+                    let mut buffer = vec![0u8; BUFFER_SIZE];
+                    let mut transferred = 0u64;
+                    let started_at = Instant::now();
+                    let mut last_update = Instant::now();
 
-                loop {
+                    loop {
+                        ensure_not_cancelled(&cancelled)?;
+                        let bytes_read = local_file
+                            .read(&mut buffer)
+                            .await
+                            .map_err(|e| anyhow!("Failed to read from local file: {}", e))?;
+
+                        if bytes_read == 0 {
+                            break;
+                        }
+
+                        if shares_interactive {
+                            ssh::yield_to_user_input().await;
+                        }
+
+                        remote_file
+                            .write_all(&buffer[..bytes_read])
+                            .await
+                            .map_err(|e| anyhow!("Failed to write to remote file: {}", e))?;
+
+                        transferred += bytes_read as u64;
+
+                        let now = Instant::now();
+                        let elapsed = now.duration_since(last_update).as_secs_f64();
+
+                        if elapsed >= 0.1 {
+                            let total_elapsed = started_at.elapsed().as_secs_f64();
+                            let speed = if total_elapsed > 0.0 {
+                                transferred as f64 / total_elapsed
+                            } else {
+                                0.0
+                            };
+
+                            progress(TransferProgress {
+                                transferred,
+                                total: total_size,
+                                speed,
+                                current_file: None,
+                                current_file_transferred: 0,
+                                current_file_total: 0,
+                            });
+
+                            last_update = now;
+                        }
+                    }
+
                     ensure_not_cancelled(&cancelled)?;
-                    let bytes_read = local_file
-                        .read(&mut buffer)
-                        .await
-                        .map_err(|e| anyhow!("Failed to read from local file: {}", e))?;
-
-                    if bytes_read == 0 {
-                        break;
-                    }
-
-                    remote_file
-                        .write_all(&buffer[..bytes_read])
-                        .await
-                        .map_err(|e| anyhow!("Failed to write to remote file: {}", e))?;
-
-                    transferred += bytes_read as u64;
-
-                    let now = Instant::now();
-                    let elapsed = now.duration_since(last_update).as_secs_f64();
-
-                    if elapsed >= 0.1 {
-                        let total_elapsed = started_at.elapsed().as_secs_f64();
-                        let speed = if total_elapsed > 0.0 {
-                            transferred as f64 / total_elapsed
-                        } else {
-                            0.0
-                        };
-
-                        progress(TransferProgress {
-                            transferred,
-                            total: total_size,
-                            speed,
-                            current_file: None,
-                            current_file_transferred: 0,
-                            current_file_total: 0,
-                        });
-
-                        last_update = now;
-                    }
-                }
-
-                ensure_not_cancelled(&cancelled)?;
-                Ok((remote_file, transferred))
-            }),
+                    Ok((remote_file, transferred))
+                },
+            ),
         )
         .await;
 
@@ -2674,6 +2761,7 @@ impl RemoteFileClient for RusshSftpClient {
     }
 
     async fn write_file(&mut self, path: &str, content: &[u8]) -> Result<()> {
+        self.wait_for_interactive_input().await;
         with_remote_replace(
             &self.sftp,
             path,
@@ -2781,6 +2869,8 @@ impl RemoteFileClient for RusshSftpClient {
 
         let files: Vec<&FileEntry> = entries.iter().filter(|e| !e.is_dir).collect();
         let start_time = Instant::now();
+        // 共享连接上流水线下载要收窄并发，别把终端连接的 SSH 窗口占满。
+        let max_in_flight = self.pipeline_read_limit();
 
         // 检查是否有大文件需要流水线下载
         let has_large_files = files.iter().any(|f| f.size > PIPELINE_THRESHOLD);
@@ -2833,6 +2923,7 @@ impl RemoteFileClient for RusshSftpClient {
                         &mut transferred,
                         total_size,
                         start_time,
+                        max_in_flight,
                         &cancelled,
                         &progress,
                     )
@@ -2958,10 +3049,7 @@ impl RemoteFileClient for RusshSftpClient {
             .map(|(_, _, size)| size)
             .sum();
         let mut replacement = if conflict_policy == DirectoryConflictPolicy::Replace {
-            Some(
-                race_with_cancel(&cancelled, self.begin_directory_replace(remote_path))
-                    .await?,
-            )
+            Some(race_with_cancel(&cancelled, self.begin_directory_replace(remote_path)).await?)
         } else {
             race_with_cancel(&cancelled, self.ensure_copy_directory(remote_path)).await?;
             None
@@ -3008,6 +3096,7 @@ impl RemoteFileClient for RusshSftpClient {
             let cancelled = &cancelled;
             let progress = &progress;
             let upload_root = upload_root.as_str();
+            let shares_interactive = self.shares_interactive_transport();
             let written = AtomicU64::new(0);
             let written = &written;
             let published = ProgressHighWater::new();
@@ -3048,12 +3137,17 @@ impl RemoteFileClient for RusshSftpClient {
 
                                 loop {
                                     ensure_not_cancelled(cancelled)?;
-                                    let bytes_read = local_file.read(&mut buffer).await.map_err(
-                                        |e| anyhow!("Failed to read from local file: {}", e),
-                                    )?;
+                                    let bytes_read =
+                                        local_file.read(&mut buffer).await.map_err(|e| {
+                                            anyhow!("Failed to read from local file: {}", e)
+                                        })?;
 
                                     if bytes_read == 0 {
                                         break;
+                                    }
+
+                                    if shares_interactive {
+                                        ssh::yield_to_user_input().await;
                                     }
 
                                     remote_file.write_all(&buffer[..bytes_read]).await.map_err(
@@ -3221,8 +3315,7 @@ mod tests {
     #[tokio::test]
     async fn race_with_cancel_passes_through_completed_request() {
         let cancelled = AtomicBool::new(false);
-        let result: Result<u64> =
-            race_with_cancel(&cancelled, async { Ok(42u64) }).await;
+        let result: Result<u64> = race_with_cancel(&cancelled, async { Ok(42u64) }).await;
         assert_eq!(result.expect("must pass through"), 42);
     }
 
@@ -3292,15 +3385,13 @@ mod tests {
         assert!(!names.iter().any(|name| name == "broken_link"));
 
         let find = |name: &str| {
-            entries
-                .iter()
-                .find(|(path, _, _)| {
-                    path.strip_prefix(base)
-                        .expect("strip prefix")
-                        .to_string_lossy()
-                        .replace('\\', "/")
-                        == name
-                })
+            entries.iter().find(|(path, _, _)| {
+                path.strip_prefix(base)
+                    .expect("strip prefix")
+                    .to_string_lossy()
+                    .replace('\\', "/")
+                    == name
+            })
         };
 
         let regular = find("regular.txt").expect("regular.txt should be present");
@@ -3613,7 +3704,7 @@ mod tests {
 
     #[test]
     fn sftp_session_config_uses_bounded_large_transfer_window_and_timeout() {
-        let config = sftp_session_config();
+        let config = sftp_session_config(SftpTransport::Owned);
 
         assert_eq!(config.max_packet_len, SFTP_MAX_PACKET_LEN);
         assert_eq!(config.max_concurrent_reads, SFTP_MAX_CONCURRENT_READS);
@@ -3643,6 +3734,39 @@ mod tests {
     }
 
     #[test]
+    fn shared_transport_config_keeps_the_write_window_small_enough_for_typing() {
+        let owned = sftp_session_config(SftpTransport::Owned);
+        let shared = sftp_session_config(SftpTransport::Shared);
+
+        // 借用交互连接时，按键最多排这么多字节，直接决定输入延迟：
+        // 256 KiB 在 1 MB/s 的上行链路上约 0.25s，16 MiB 则是十几秒。
+        let shared_write_window =
+            shared.max_write_packet_len as usize * shared.max_concurrent_writes;
+        assert_eq!(
+            shared_write_window,
+            SHARED_MAX_WRITE_PACKET_LEN as usize * SHARED_MAX_CONCURRENT_WRITES
+        );
+        assert_eq!(shared_write_window, 256 * 1024);
+        assert!(
+            shared_write_window * 16
+                <= owned.max_write_packet_len as usize * owned.max_concurrent_writes,
+            "共享连接必须显著小于独占连接的写窗口"
+        );
+
+        // 读取侧同理：SFTP 通道不能把终端连接的 SSH 窗口占满。
+        assert!(shared.max_concurrent_reads < owned.max_concurrent_reads);
+        assert!(
+            shared.max_concurrent_reads * (shared.max_packet_len as usize)
+                < owned.max_concurrent_reads * (owned.max_packet_len as usize)
+        );
+
+        // 共享连接也要保持分钟级请求超时，避免一条卡死请求占住传输车道。
+        assert_eq!(shared.request_timeout_secs, SFTP_REQUEST_TIMEOUT_SECS);
+        // 单次 WRITE 仍然要能装下 header + 句柄。
+        assert!(shared.max_write_packet_len > 25 + 255);
+    }
+
+    #[test]
     fn sftp_transfer_window_matches_ssh_channel_window() {
         let identity = HostKeyIdentity::new("host.example", 22, ssh::HostKeyRoute::Direct);
         let ssh_config = SshConnectConfig {
@@ -3665,7 +3789,7 @@ mod tests {
 
         let transport =
             build_sftp_russh_config(&ssh_config, &identity).expect("SFTP config should build");
-        let config = sftp_session_config();
+        let config = sftp_session_config(SftpTransport::Owned);
 
         // Each direction must be able to fill the SSH channel window: a packet
         // ceiling times the concurrent request budget that falls short of
@@ -3678,6 +3802,12 @@ mod tests {
         assert_eq!(
             config.max_packet_len as usize * config.max_concurrent_writes,
             transport.window_size as usize
+        );
+        // 共享连接故意小于 SSH 窗口：它要和终端的交互通道抢同一条传输。
+        let shared = sftp_session_config(SftpTransport::Shared);
+        assert!(
+            shared.max_packet_len as usize * shared.max_concurrent_writes
+                < transport.window_size as usize
         );
     }
 

@@ -49,6 +49,50 @@ fn scan_reports_are_scoped_to_the_matching_source() {
 }
 
 #[test]
+fn scan_reports_keep_importer_warnings_for_display() {
+    let mut state = ImportCenterState::new(
+        vec![descriptor("securecrt", vec![Platform::Macos])],
+        Platform::Macos,
+    );
+    let mut report = scan_report(
+        "securecrt",
+        ImporterAvailability::Available {
+            estimated_count: Some(144),
+        },
+    );
+    report.warnings = vec![ImportWarning {
+        code: "securecrt_unsupported_protocols".to_string(),
+        message: "Skipped 78 session(s) with unsupported protocols (RDP 60, Serial 18)."
+            .to_string(),
+    }];
+
+    state.apply_scan_reports(vec![report]);
+
+    let warnings = &state.source("securecrt").unwrap().scan_warnings;
+    assert_eq!(1, warnings.len());
+    assert_eq!("securecrt_unsupported_protocols", warnings[0].code);
+    assert!(warnings[0].message.contains("78"));
+}
+
+#[test]
+fn a_later_scan_report_replaces_previous_scan_warnings() {
+    let mut state = ImportCenterState::new(
+        vec![descriptor("securecrt", vec![Platform::Macos])],
+        Platform::Macos,
+    );
+    let mut first = scan_report("securecrt", ImporterAvailability::NoData);
+    first.warnings = vec![ImportWarning {
+        code: "securecrt_unsupported_protocols".to_string(),
+        message: "Skipped 2 session(s) with unsupported protocols (RDP 2).".to_string(),
+    }];
+    state.apply_scan_reports(vec![first]);
+
+    state.apply_scan_reports(vec![scan_report("securecrt", ImporterAvailability::NoData)]);
+
+    assert!(state.source("securecrt").unwrap().scan_warnings.is_empty());
+}
+
+#[test]
 fn scan_reports_store_discovered_workspace_groups_per_source() {
     let mut state = ImportCenterState::new(
         vec![

@@ -134,6 +134,7 @@ async fn pipelined_download_from(
         Arc::new(raw),
         "/big.bin",
         total_size,
+        MAX_INFLIGHT_REQUESTS,
         &AtomicBool::new(false),
         &mut writer,
         |_| {},

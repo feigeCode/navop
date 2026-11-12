@@ -982,3 +982,23 @@ fn cleared_migration_defaults_leave_advanced_options_unset() {
     assert_eq!(None, params.allow_legacy_algorithms);
     assert_eq!(None, params.disable_shell_integration);
 }
+
+#[test]
+fn imported_ssh_password_survives_the_whole_conversion() {
+    let mut record = ssh_import("prod-db");
+    let ssh = record.ssh.as_mut().unwrap();
+    ssh.auth_method = SshImportAuthMethod::Password {
+        password: Some("s3cret-from-securecrt".to_string()),
+    };
+    record.password_status = PasswordImportStatus::Included;
+
+    let draft = EditableImportDraft::new(record);
+    assert_eq!("s3cret-from-securecrt", draft.password);
+
+    let stored = draft.to_stored_connection().expect("转换应成功");
+    let params = stored.to_ssh_params().expect("应为 SSH 连接");
+    match params.auth_method {
+        SshAuthMethod::Password { password } => assert_eq!("s3cret-from-securecrt", password),
+        other => panic!("导入的密码应保留为密码认证，实际为 {other:?}"),
+    }
+}

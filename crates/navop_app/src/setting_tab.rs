@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::app_init::is_valid_system_hotkey;
 use crate::auth::get_auth_service;
@@ -72,7 +72,7 @@ fn sync_page_index(pages_before_rest: usize) -> usize {
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
     AppSettings, CloseButtonBehavior, CustomFont, GlobalCurrentUser, GlobalProxySettings,
-    LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, MasterKeyStorage,
+    LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, LogLevel, MasterKeyStorage,
     PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, StartupDefaultPage, SyncProvider,
     effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
 };
@@ -358,7 +358,10 @@ pub fn init_settings(cx: &mut App) {
     // 先按磁盘上的 log_file_path 装好日志，再加载设置：`AppSettings::load()` 里的
     // 「Failed to parse settings」如果发生在 subscriber 安装之前，会被直接丢掉，
     // 生产上就只剩「设置被还原成默认值」这个结果，永远查不到原因。
-    init_tracing(&AppSettings::peek_log_file_path());
+    init_tracing(
+        &AppSettings::peek_log_file_path(),
+        AppSettings::peek_log_level(),
+    );
     let mut settings = AppSettings::load();
     // 没有系统凭据库的平台只提供本机文件：把从别处带来的「系统凭据库」配置归一到
     // 实际可用的选项，避免设置页下拉框出现一个永远选不中的值。
@@ -380,9 +383,24 @@ pub fn init_settings(cx: &mut App) {
     cx.set_global(settings);
 }
 
-fn init_tracing(log_file_path: &str) {
+/// 运行期可替换的日志过滤器句柄。
+///
+/// 设置页切换日志级别时改的是这个句柄，而不是环境变量：`EnvFilter` 包在
+/// `reload` 层里，替换后新级别立刻生效，不需要重启应用。
+static LOG_FILTER: OnceLock<
+    tracing_subscriber::reload::Handle<
+        tracing_subscriber::EnvFilter,
+        tracing_subscriber::registry::Registry,
+    >,
+> = OnceLock::new();
+
+fn init_tracing(log_file_path: &str, log_level: LogLevel) {
+    // `RUST_LOG` 优先：开发者临时要看某个模块的日志时，不必先进设置页。
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level.as_directive()));
+    let (env_filter, filter_handle) = tracing_subscriber::reload::Layer::new(env_filter);
+    // subscriber 只能装一次，句柄重复写入时忽略即可。
+    let _ = LOG_FILTER.set(filter_handle);
 
     match crate::navop_app::configured_log_file_path(log_file_path) {
         Ok(log_file_path) => match crate::navop_app::RotatingLogWriter::open(&log_file_path) {
@@ -390,6 +408,7 @@ fn init_tracing(log_file_path: &str) {
                 let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
                 Box::leak(Box::new(guard));
                 tracing_subscriber::registry()
+                    .with(env_filter)
                     .with(tracing_subscriber::fmt::layer())
                     // 写文件的那一层必须关掉颜色：终端里的样式码落到文件里就是每行
                     // 前后裹一层转义序列，肉眼读不了、grep 也过滤不干净。
@@ -398,24 +417,38 @@ fn init_tracing(log_file_path: &str) {
                             .with_ansi(false)
                             .with_writer(non_blocking),
                     )
-                    .with(env_filter)
                     .init();
             }
             Err(err) => {
                 tracing_subscriber::registry()
-                    .with(tracing_subscriber::fmt::layer())
                     .with(env_filter)
+                    .with(tracing_subscriber::fmt::layer())
                     .init();
                 tracing::error!(path = %log_file_path.display(), error = %err, "日志文件初始化失败");
             }
         },
         Err(err) => {
             tracing_subscriber::registry()
-                .with(tracing_subscriber::fmt::layer())
                 .with(env_filter)
+                .with(tracing_subscriber::fmt::layer())
                 .init();
             tracing::error!(error = %err, "默认日志目录初始化失败");
         }
+    }
+}
+
+/// 设置页切换日志级别后立即生效，无需重启。
+///
+/// 只在 subscriber 已经安装后才有意义；环境变量 `RUST_LOG` 存在时启动阶段以它
+/// 为准，但用户在这里改过之后以设置页为准，直到下次启动。
+pub(crate) fn apply_log_level(level: LogLevel) {
+    let Some(filter_handle) = LOG_FILTER.get() else {
+        return;
+    };
+    if let Err(err) = filter_handle
+        .modify(|filter| *filter = tracing_subscriber::EnvFilter::new(level.as_directive()))
+    {
+        tracing::warn!(error = %err, "切换日志级别失败");
     }
 }
 
@@ -1153,6 +1186,62 @@ impl SettingsPanel {
                                 .default_value(SharedString::from("")),
                             )
                             .description(t!("Settings.General.Log.file_path_desc").to_string()),
+                        )
+                        .item(
+                            SettingItem::new(
+                                t!("Settings.General.Log.level"),
+                                SettingField::dropdown(
+                                    vec![
+                                        (
+                                            LogLevel::Error.as_directive().into(),
+                                            t!("Settings.General.Log.level_error")
+                                                .to_string()
+                                                .into(),
+                                        ),
+                                        (
+                                            LogLevel::Warn.as_directive().into(),
+                                            t!("Settings.General.Log.level_warn")
+                                                .to_string()
+                                                .into(),
+                                        ),
+                                        (
+                                            LogLevel::Info.as_directive().into(),
+                                            t!("Settings.General.Log.level_info")
+                                                .to_string()
+                                                .into(),
+                                        ),
+                                        (
+                                            LogLevel::Debug.as_directive().into(),
+                                            t!("Settings.General.Log.level_debug")
+                                                .to_string()
+                                                .into(),
+                                        ),
+                                        (
+                                            LogLevel::Trace.as_directive().into(),
+                                            t!("Settings.General.Log.level_trace")
+                                                .to_string()
+                                                .into(),
+                                        ),
+                                    ],
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx).log_level.as_directive(),
+                                        )
+                                    },
+                                    |val: SharedString, cx: &mut App| {
+                                        let level = LogLevel::from_directive(&val);
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.log_level = level;
+                                        });
+                                        // 过滤器包在 reload 层里，改完立即生效，不需要重启。
+                                        apply_log_level(level);
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.log_level.as_directive(),
+                                )),
+                            )
+                            .description(t!("Settings.General.Log.level_desc").to_string()),
                         ),
                     ];
                     // 远程文件编辑器属于终端（SFTP）领域，数据库产品里没有意义。
