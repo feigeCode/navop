@@ -4,6 +4,52 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.23.1] - 2026-11-12
+
+#### 更新内容
+
+- SSH 主机支持一次性验证码（TOTP）：在「编辑主机 → 高级选项」里填 `otpauth://` 地址或 base32 密钥，也可以直接扫描、粘贴二维码图片；登录时客户端本地生成验证码自动应答，不用再手输，行内会显示当前验证码与剩余秒数。密钥随连接一起加密保存，只在本机生成、不联网。
+- SSH 会话内自动填入 `su` / `sudo` 密码：执行提权命令被要求输入密码时自动提交，默认跟随登录方式（密码登录默认开启、密钥登录默认关闭），也可以单独设置一个提权密码（留空则用登录密码）；密码被拒绝后本次会话不再自动填写，避免反复试探导致账号锁死。
+- 「编辑主机」表单调整：认证方式由一排单选按钮改为下拉框、默认「密码」；双因素认证、一次性验证码密钥、su/sudo 自动填入与提权密码统一收进「高级选项」页，基本页只留常用项。
+- 连接导入新增 Telnet 记录支持，迁移导入时可以批量指定高级设置的默认值，导完不用逐条再改。
+- 新增独立的笔记 MCP 工具组，AI 与外部 MCP 客户端可以直接读写连接笔记。
+
+#### 修复与优化
+
+- 修复 SSH 连上之后要卡 3～5 秒才能输入的问题（#537）：Shell Integration 收到 ready 标记后立即放行输入，不再等可能永远不出现的 `OSC 133;B`；注入改为「先发短 Bootstrap 命令确认交互 shell 已就绪、再发完整脚本」两阶段；同时把注入脚本从 6.2 KB 压到 3.9 KB，避免超过 PTY 4 KiB 输入队列后被截断、远端停在续行提示符上再等满 5 秒兜底。
+- 修复 SSH 提示符框架（oh-my-posh / starship / powerlevel10k）场景下的两处握手问题：`PROMPT_COMMAND` 尾部分号被拼成 `;;` 导致提示符阶段语法报错；禁用 Shell 集成时仍去读取远端历史。
+- SFTP 读目录失败不再无限自动重试与刷日志，失败回退有次数上限，运行期日志改为轮转。
+- 修复首页「快捷打开」双击会开出两个会话的问题，第二下点击不再穿透到下层控件。
+- 快捷指令：命令框会提示 `{{name}}` 参数语法，参数表单确认后焦点回到终端，输入框跟随终端主题配色。
+- 终端侧栏 AI 现在能感知并继承终端的真实工作目录，提问时带上当前路径。
+- 修复笔记弹窗的「确定」按钮消失，以及 AI 对话里点击消息块会被整块选中的问题；AI 对话适配 dsh 的复合模型标识展示。
+- 修复设置里切换更新通道没有反应。
+- 发布与文档：R2 更新清单按产品前缀过滤安装包，避免把无关资产算进下载列表；README 与文档站按三个产品形态改写，补齐 GPU 依赖包与 Windows EXE 安装说明。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.1) 下载桌面端安装包
+
+#### What's New
+
+- SSH hosts support one-time passwords (TOTP): put an `otpauth://` URI or a base32 secret in Edit Host → Advanced, or scan / paste a QR code image. The client generates the code locally and answers the prompt automatically, showing the current code and its remaining seconds inline. The secret is stored encrypted with the connection and never leaves your machine.
+- SSH sessions fill `su` / `sudo` passwords automatically: when an elevation command asks for a password the client submits it, following the login method by default (on for password logins, off for key-based ones) with an optional separate elevation password (empty falls back to the login password). After a rejected attempt the session stops filling in, so a wrong password never turns into repeated guessing.
+- Edit Host cleanup: the authentication method is now a dropdown that defaults to "Password", and two-factor authentication, the TOTP secret, su/sudo auto-fill and the elevation password moved into the Advanced tab, leaving only the common fields on the basic page.
+- Connection import accepts Telnet records, and migration imports can set advanced defaults in bulk so imported connections do not need to be fixed one by one.
+- A standalone Notes MCP tool group lets the built-in agent and external MCP clients read and write connection notes.
+
+#### Fixes and Improvements
+
+- Fixed SSH sessions taking 3–5 seconds before accepting input (#537): input is released as soon as the Shell Integration ready marker arrives instead of waiting for an `OSC 133;B` that may never come; injection is now two-phase (a short bootstrap command confirms the interactive shell is ready, then the full script is sent); and the injected script shrank from 6.2 KB to 3.9 KB so it no longer exceeds the 4 KiB PTY input queue, gets truncated, and stalls the shell on a continuation prompt until the 5-second fallback.
+- Fixed two handshake problems with prompt frameworks (oh-my-posh / starship / powerlevel10k): a trailing semicolon in `PROMPT_COMMAND` used to be joined into `;;` and broke the prompt with a syntax error, and remote history was still read when shell integration was disabled.
+- SFTP directory reads no longer retry forever or flood the log: the fallback is bounded and runtime logs now rotate.
+- Fixed Home "quick open" double-click opening two sessions; the second click no longer falls through to the control underneath.
+- Quick commands: the command box hints at `{{name}}` placeholders, the parameter form returns focus to the terminal when confirmed, and the input follows the terminal theme colors.
+- The terminal sidebar AI now sees and inherits the terminal's real working directory, so prompts carry the current path.
+- Fixed the missing OK button in the notes dialog and clicking a message block selecting the whole block in AI chat; AI chat now displays dsh composite model identifiers correctly.
+- Fixed the update channel switch in Settings having no effect.
+- Release and docs: the R2 update manifest filters installers by product prefix so unrelated assets no longer show up as downloads; the README and docs site were rewritten for the three-product layout and now cover GPU dependency packages and the Windows EXE installer.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.23.0...v0.23.1
+
 ## [v0.23.0] - 2026-11-09
 
 #### 更新内容

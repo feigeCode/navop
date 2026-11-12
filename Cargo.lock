@@ -8276,7 +8276,7 @@ dependencies = [
 
 [[package]]
 name = "navop"
-version = "0.23.0"
+version = "0.23.1"
 dependencies = [
  "anyhow",
  "data_domain",
@@ -8289,7 +8289,7 @@ dependencies = [
 
 [[package]]
 name = "navop-data"
-version = "0.23.0"
+version = "0.23.1"
 dependencies = [
  "anyhow",
  "data_domain",
@@ -8301,7 +8301,7 @@ dependencies = [
 
 [[package]]
 name = "navop-shell"
-version = "0.23.0"
+version = "0.23.1"
 dependencies = [
  "anyhow",
  "domain_api",
@@ -8313,7 +8313,7 @@ dependencies = [
 
 [[package]]
 name = "navop_app"
-version = "0.23.0"
+version = "0.23.1"
 dependencies = [
  "agent_runtime",
  "ai_chat_view",
