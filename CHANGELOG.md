@@ -4,6 +4,46 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.23.2] - 2026-11-13
+
+本版本集中修复连接稳定性与输入体验问题，并补上 0.23.1 说明里提到的日志级别、SFTP 上传让路与提权自动填入改进。
+
+#### 更新内容
+
+- Windows 原生 RDP 连接加固：与本地辅助进程握手时校验协议版本，新增心跳与超时检测，上行请求改为批量合并发送，断线重连时回放剪贴板等上次状态；网络抖动下不再出现「看着在线、实际卡死」。
+- SFTP 目录下载改为有界并发：同一会话里的多个文件共享读预算，进度在并发更新下保持单调；大文件仍走独占通道，独立 SFTP 页签的吞吐保持不变。
+- 连接导入结果页会列出扫描告警：导入器跳过或无法识别的记录单独展示，方便定位漏导的会话。
+- 「设置 → 通用 → 日志」新增日志级别下拉（错误 / 警告 / 信息 / 调试 / 追踪），切换即时生效，无需重启；`RUST_LOG` 环境变量在启动时仍然优先。
+- SSH 依赖 russh 升级到上游 v0.65.1，带上 cipher / kex / agent 的安全修复。
+
+#### 修复与优化
+
+- 修复部分老设备（如华为 VRP）SSH 连不上：其 ssh-rsa 主机公钥的 e / n 带多余前导 0x00，严格解码会让整把主机密钥解析失败，表现为 `Connection Lost` 与 `SshKey: mpint encoding invalid`；现在按 OpenSSH 语义接受并归一化这类编码。
+- 修复从侧边栏上传文件时终端输入卡顿：借用终端连接的 SFTP 改用小窗口，用户打字时批量写入主动让路，交互连接开启 TCP_NODELAY。
+- 修复 su / sudo 密码自动填入用几次后失效：单会话上限从 3 次提到 32 次，重复提示判定窗口从 20 秒收到 5 秒，识别到远端密码被拒后立即停手；每次连接还会在日志里记录本次是否启用自动填入及原因。
+- 修复 GPUI Fast 的圆角裁剪导致页签和卡片内容丢失。
+- 修复 Windows CI 冷缓存构建失败：cargo 1.100 的中间产物新布局会让单条 rustc 命令超过 Windows 32,767 字符上限，CI 工具链固定回 1.99.1，并让 sccache 启动失败时降级为无缓存构建。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.2) 下载桌面端安装包。
+
+---
+
+#### What's New
+
+- Hardened the Windows native RDP pipeline: the handshake with the local helper now validates protocol versions, adds heartbeat and timeout detection, batches outgoing requests, and replays clipboard state after a reconnect, so a flaky network no longer leaves a session that looks connected but is stuck.
+- SFTP directory downloads now run with bounded concurrency: files in one session share a read budget, progress stays monotonic under concurrent updates, large files keep the exclusive lane, and standalone SFTP tabs keep their throughput.
+- The connection import result now lists scan warnings: records the importer skipped or could not recognize are shown separately, making missing sessions easy to find.
+- Settings → General → Log now has a log level dropdown (Error, Warning, Info, Debug, Trace) that applies immediately without a restart; the `RUST_LOG` environment variable still takes precedence at startup.
+- The SSH stack upgrades russh to upstream v0.65.1, bringing the cipher / kex / agent security fixes.
+
+#### Fixes and Improvements
+
+- Fixed SSH connections failing against some older devices (such as Huawei VRP): their ssh-rsa host keys carry redundant leading 0x00 bytes in e / n, and strict decoding failed the whole host key, surfacing as `Connection Lost` plus `SshKey: mpint encoding invalid`; these encodings are now accepted and normalized the way OpenSSH does it.
+- Fixed terminal input lagging while uploading from the sidebar: SFTP sessions that borrow an interactive connection now use a small write window, batch writes pause while you type, and the interactive connection enables TCP_NODELAY.
+- Fixed su / sudo password auto-fill stopping after a few uses: the per-session cap went from 3 to 32, the repeated-prompt window from 20 to 5 seconds, and a rejected password reported by the remote stops it immediately; each connection also logs whether auto-fill is active and why.
+- Fixed GPUI Fast rounded-corner clipping dropping tab and card content.
+- Fixed cold-cache Windows CI builds: cargo 1.100's new intermediate artifact layout pushed a single rustc command line past the Windows 32,767-character limit, so the CI toolchain is pinned back to 1.99.1 and sccache failures now degrade to an uncached build.
+
 ## [v0.23.1] - 2026-11-12
 
 #### 更新内容
