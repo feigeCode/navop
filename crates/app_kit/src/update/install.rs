@@ -93,6 +93,12 @@ pub(crate) fn start_install_update(download_path: PathBuf) -> Result<UpdateInsta
         return Err(format!("更新归档不存在: {}", download_path.display()));
     }
 
+    #[cfg(target_os = "linux")]
+    if let Some(target_path) = super::appimage::runtime_image_path() {
+        install_appimage_update(&download_path, &target_path)?;
+        return Ok(UpdateInstallAction::Quit);
+    }
+
     let staging_dir = create_staging_dir()?;
     extract_archive(&download_path, &staging_dir)?;
 
@@ -141,7 +147,16 @@ pub(super) fn cleanup_stale_update_backups() {
         }
     }
 
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(target_path) = super::appimage::runtime_image_path() {
+            let _ = remove_file_if_exists(&appimage_backup_path(&target_path));
+        } else if let Ok(target_path) = std::env::current_exe() {
+            let _ = remove_file_if_exists(&target_path.with_extension("old"));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
     {
         if let Ok(target_path) = std::env::current_exe() {
             let _ = remove_file_if_exists(&target_path.with_extension("old"));
@@ -511,6 +526,52 @@ fn install_linux(staging_dir: &Path) -> Result<(), String> {
     set_executable_permission(&target_path)?;
     restart_application(&target_path)?;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn install_appimage_update(source_path: &Path, target_path: &Path) -> Result<(), String> {
+    apply_appimage_update(source_path, target_path)?;
+    restart_application(target_path)
+}
+
+/// 把下载好的完整 AppImage 替换到 `$APPIMAGE` 指向的原始文件。
+///
+/// `current_exe()` 位于 AppImage 的只读 squashfs 挂载树，不能作为目标；原始镜像通常位于
+/// 用户可写目录，后续启动也仍会经过 AppImage runtime。
+#[cfg(target_os = "linux")]
+fn apply_appimage_update(source_path: &Path, target_path: &Path) -> Result<(), String> {
+    validate_appimage_file(source_path)?;
+    ensure_target_dir_writable(target_path)?;
+
+    let backup_path = appimage_backup_path(target_path);
+    replace_target_with_backup(target_path, &backup_path, || {
+        replace_via_staging_copy(source_path, target_path)
+    })
+    .map_err(|err| format!("替换 AppImage 失败: {}", err))?;
+    set_executable_permission(target_path)
+}
+
+#[cfg(target_os = "linux")]
+fn validate_appimage_file(path: &Path) -> Result<(), String> {
+    use std::io::Read;
+
+    let mut header = [0_u8; 11];
+    fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .map_err(|err| format!("读取 AppImage 更新包失败: {}", err))?;
+
+    let is_elf = header.starts_with(b"\x7fELF");
+    let is_appimage_type_1_or_2 = &header[8..11] == b"AI\x01" || &header[8..11] == b"AI\x02";
+    if !is_elf || !is_appimage_type_1_or_2 {
+        return Err("下载的更新包不是有效的 AppImage".to_string());
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn appimage_backup_path(target_path: &Path) -> PathBuf {
+    target_path.with_extension("AppImage.old")
 }
 
 #[cfg(target_os = "linux")]
@@ -947,6 +1008,68 @@ mod tests {
 
         let err = result.expect_err("只读目录必须被拒绝");
         assert!(err.contains("不可写"), "错误信息应说明目录不可写: {err}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_update_replaces_the_original_image_and_keeps_it_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use super::apply_appimage_update;
+
+        let temp_dir = TestDir::new("appimage-update");
+        let target_path = temp_dir.path.join("Navop.AppImage");
+        let source_path = temp_dir.path.join("downloaded.AppImage");
+        std::fs::write(&target_path, b"\x7fELFold-appimage").expect("写入旧 AppImage 失败");
+        std::fs::write(&source_path, b"\x7fELF\x02\x01\x01\x00AI\x02new-appimage")
+            .expect("写入新 AppImage 失败");
+        let mut permissions = std::fs::metadata(&target_path)
+            .expect("读取旧 AppImage 权限失败")
+            .permissions();
+        permissions.set_mode(0o644);
+        std::fs::set_permissions(&target_path, permissions).expect("设置旧 AppImage 权限失败");
+
+        apply_appimage_update(&source_path, &target_path).expect("AppImage 更新应成功");
+
+        assert_eq!(
+            std::fs::read(&target_path).expect("读取新 AppImage 失败"),
+            b"\x7fELF\x02\x01\x01\x00AI\x02new-appimage"
+        );
+        assert_ne!(
+            0,
+            std::fs::metadata(&target_path)
+                .expect("读取新 AppImage 权限失败")
+                .permissions()
+                .mode()
+                & 0o111,
+            "更新后的 AppImage 必须保留可执行权限"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_update_rejects_an_updater_archive() {
+        use super::apply_appimage_update;
+
+        let temp_dir = TestDir::new("appimage-rejects-archive");
+        let target_path = temp_dir.path.join("Navop.AppImage");
+        let source_path = temp_dir.path.join("download.tar.gz");
+        std::fs::write(&target_path, b"\x7fELF\x02\x01\x01\x00AI\x02old-image")
+            .expect("写入旧 AppImage 失败");
+        std::fs::write(&source_path, b"\x1f\x8bnot-an-appimage").expect("写入错误更新包失败");
+
+        let err = apply_appimage_update(&source_path, &target_path)
+            .expect_err("tar.gz 不能替换 AppImage");
+
+        assert!(
+            err.contains("不是有效的 AppImage"),
+            "错误应说明文件类型无效: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&target_path).expect("读取旧 AppImage 失败"),
+            b"\x7fELF\x02\x01\x01\x00AI\x02old-image",
+            "校验失败时不得改动旧 AppImage"
+        );
     }
 
     #[cfg(target_os = "macos")]

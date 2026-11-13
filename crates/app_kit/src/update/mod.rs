@@ -8,6 +8,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::settings::{AppSettings, UpdateChannel, UpdateMirror};
 use rust_i18n::t;
 
+mod appimage;
 mod check_state;
 mod config;
 mod custom_api;
@@ -32,10 +33,13 @@ pub use host::{icon_asset_path, set_icon_asset_path, set_shutdown_hook};
 use check_state::{CheckReport, begin_check, finish_check};
 pub use check_state::{UpdateCheckState, update_check_state};
 use custom_api::{
-    fetch_update_info, select_download_url, select_fallback_download_url, select_sha256,
+    fetch_update_info, select_appimage_package, select_download_url, select_fallback_download_url,
+    select_sha256,
 };
 use dialog::show_update_dialog;
-use github_release::{fetch_github_release, github_release_to_dialog_info};
+use github_release::{
+    fetch_github_release, github_release_to_appimage_dialog_info, github_release_to_dialog_info,
+};
 use install::{apply_update_helper, cleanup_stale_update_backups};
 use local_source::{is_local_file_source, resolve_local_reference};
 use network::check_network_connectivity;
@@ -558,7 +562,16 @@ async fn fetch_github_dialog_info(
         return Ok(None);
     }
 
-    github_release_to_dialog_info(&release, current_version, !latest_version.pre.is_empty())
+    let result = if appimage::runtime_image_path().is_some() {
+        github_release_to_appimage_dialog_info(
+            &release,
+            current_version,
+            !latest_version.pre.is_empty(),
+        )
+    } else {
+        github_release_to_dialog_info(&release, current_version, !latest_version.pre.is_empty())
+    };
+    result
         .map(Some)
         .map_err(|err| format!("转换 GitHub Release 失败: {}", err))
 }
@@ -587,10 +600,28 @@ async fn fetch_manifest_outcome(
         return Ok(AttemptOutcome::UpToDate);
     }
 
-    let download_url = select_download_url(&response, config.download_url.clone())
-        .map(|url| resolve_local_reference(&config.update_url, &url));
-    let fallback_download_url = select_fallback_download_url(&response)
-        .map(|url| resolve_local_reference(&config.update_url, &url));
+    let is_appimage = appimage::runtime_image_path().is_some();
+    let (download_url, fallback_download_url, expected_sha256) = if is_appimage {
+        let package = select_appimage_package(&response).ok_or_else(|| {
+            "更新清单缺少当前平台的 AppImage 安装包，无法执行应用内更新".to_string()
+        })?;
+        (
+            Some(resolve_local_reference(&config.update_url, &package.url)),
+            package
+                .fallback_url
+                .as_deref()
+                .map(|url| resolve_local_reference(&config.update_url, url)),
+            package.sha256,
+        )
+    } else {
+        (
+            select_download_url(&response, config.download_url.clone())
+                .map(|url| resolve_local_reference(&config.update_url, &url)),
+            select_fallback_download_url(&response)
+                .map(|url| resolve_local_reference(&config.update_url, &url)),
+            select_sha256(&response),
+        )
+    };
 
     Ok(AttemptOutcome::Found(UpdateDialogInfo {
         current_version: current_version.to_string(),
@@ -598,7 +629,7 @@ async fn fetch_manifest_outcome(
         release_notes: response.release_notes.clone(),
         download_url,
         fallback_download_url,
-        expected_sha256: select_sha256(&response),
+        expected_sha256,
         is_local_simulation: is_local_file_source(&config.update_url),
         is_prerelease: !latest_version.pre.is_empty(),
     }))
