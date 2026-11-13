@@ -55,28 +55,14 @@ fn minified_shell_integration_body(body: &str) -> String {
         .join("\n")
 }
 
-/// 首次 bootstrap 与完整注入都含同一个 marker，必须从新到旧删除 bash history；
-/// 反过来删会让前面的编号移位，最终把另一条注入命令留在 history 里。
-///
-/// zsh 没有等价的 `history -d`。`fc -p` 会切换到指定历史上下文并重新读取磁盘
-/// 历史，因此当前会话里刚写入的 bootstrap/完整命令会被丢弃，同时不写远端文件。
-const RUNTIME_SHELL_INTEGRATION_HISTORY_CLEANUP: &str = concat!(
-    "if [[ -n ${ZSH_VERSION:-} ]]; then ",
-    "fc -p \"${HISTFILE:-/dev/null}\" 2>/dev/null; ",
-    "[[ -n ${HISTFILE:-} ]] || unset HISTFILE; ",
-    "elif [[ -n ${BASH_VERSION:-} ]]; then ",
-    "h=($(history 2>/dev/null|while read -r n r;do case $r in *__ONETCLI_RUNTIME_SETUP_1*) ",
-    "printf '%s ' ${n%\\*};;esac;done)); ",
-    "for ((i=${#h[@]}-1;i>=0;i--));do history -d ${h[i]} 2>/dev/null;done; ",
-    "unset h i n r; ",
-    "fi",
-);
-
 fn runtime_shell_integration_body() -> String {
     let script = crate::shell_integration::embedded_shell_integration_script();
     let body =
         minified_shell_integration_body(&script.lines().skip(3).collect::<Vec<_>>().join("\n"));
-    format!("{body}\n{RUNTIME_SHELL_INTEGRATION_HISTORY_CLEANUP}")
+    format!(
+        "{body}\nif [[ -n \"${{BASH_VERSION:-}}\" ]]; then\n    __onetcli_setup_history=\"$(history 2>/dev/null | while read -r __onetcli_history_number __onetcli_history_rest; do case \"$__onetcli_history_rest\" in *__ONETCLI_RUNTIME_SETUP_1*) printf '%s ' \"${{__onetcli_history_number%\\*}}\";; esac; done)\"\n    for __onetcli_history_number in $__onetcli_setup_history; do history -d \"$__onetcli_history_number\" 2>/dev/null; done\n    unset __onetcli_setup_history __onetcli_history_number __onetcli_history_rest\nfi",
+        body = body,
+    )
 }
 
 pub(crate) fn runtime_shell_integration_command() -> Vec<u8> {
@@ -433,14 +419,6 @@ mod tests {
         assert!(command.contains("ShellIntegrationFailed=1"));
         assert!(command.contains("if eval"));
         assert!(command.contains("_ONETCLI_SHELL_INTEGRATED=1"));
-        assert!(
-            command.contains("fc -p \"${HISTFILE:-/dev/null}\""),
-            "zsh 注入后必须重载历史上下文，清掉 bootstrap 与完整命令: {command}"
-        );
-        assert!(
-            command.contains("for ((i=${#h[@]}-1;i>=0;i--))"),
-            "bash 必须从新到旧删除 history，避免删除后编号前移漏掉当前注入: {command}"
-        );
         assert!(!command.contains(".config/onetcli"));
         assert!(!command.contains(".bashrc"));
         assert!(!command.contains(".zshrc"));

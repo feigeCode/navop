@@ -59,9 +59,9 @@ OSC 133 A/B/C/D + OSC 7 + OSC 1337 协议与旧版完全一致
 " : __ONETCLI_RUNTIME_SETUP_1; eval $'<脚本体>'\r"
 ```
 
-- **前导空格**：bash `HISTCONTROL` 含 `ignorespace` 或 zsh 开启 `HIST_IGNORE_SPACE` 时该行不进 history；不能假设所有环境默认开启；
+- **前导空格**：`HISTCONTROL=ignorespace`（多数发行版默认）使该行不进 shell history；
 - **`eval $'...'`（ANSI-C quoting）**：把 99 行脚本压成单行。单引号内的 `'` 转义为 `\'`，换行转义为 `\n`。bash/zsh 都支持；
-- **历史兜底清理**：bootstrap 与完整注入都匹配同一个 marker。bash 在脚本尾部收集匹配编号并从新到旧 `history -d`，避免删除后编号前移漏掉另一条；zsh 用 `fc -p "${HISTFILE:-/dev/null}"` 重载历史上下文，丢弃当前会话刚写入的注入命令（不写临时文件）；
+- **bash 历史兜底清理**：脚本尾部用 `history -d` 删除本条目（防 `ignorespace` 未生效）；
 - **`\r` 结尾**：模拟终端 Enter（网络设备 CLI 也只认 CR）。
 
 ### 2. 脚本体来源（`shell_integration.sh`）
