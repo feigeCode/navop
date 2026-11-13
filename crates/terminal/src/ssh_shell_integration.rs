@@ -2,8 +2,7 @@ const MAX_SUPPRESSED_OUTPUT_BYTES: usize = 64 * 1024;
 pub const SHELL_INTEGRATION_READY_MARKER: &[u8] = b"\x1b]1337;ShellIntegrationReady=1\x07";
 pub const SHELL_INTEGRATION_FAILED_MARKER: &[u8] = b"\x1b]1337;ShellIntegrationFailed=1\x07";
 const SHELL_INTEGRATION_BOOTSTRAP_MARKER: &[u8] = b"\x1b]1337;ShellIntegrationBootstrap=1\x07";
-const SHELL_INTEGRATION_BOOTSTRAP_COMMAND: &[u8] =
-    b" _ONETCLI_RUNTIME_SETUP=1; : __ONETCLI_RUNTIME_SETUP_1; printf '\\033]1337;ShellIntegrationBootstrap=1\\007'\r";
+pub(crate) const SHELL_INTEGRATION_BOOTSTRAP_COMMAND: &[u8] = b" _ONETCLI_RUNTIME_SETUP=1; : __ONETCLI_RUNTIME_SETUP_1; [[ -n \"${ZSH_VERSION:-}\" ]] && eval 'zshaddhistory_functions+=(__onetcli_suppress_runtime_history); __onetcli_suppress_runtime_history() { [[ \"${1:-}\" == *__ONETCLI_RUNTIME_SETUP_1* ]] && return 1; return 0 }'; printf '\\033]1337;ShellIntegrationBootstrap=1\\007'\r";
 
 /// 注入命令回显的开头（[`runtime_shell_integration_command`] 以空格开头）。
 ///
@@ -59,8 +58,17 @@ fn runtime_shell_integration_body() -> String {
     let script = crate::shell_integration::embedded_shell_integration_script();
     let body =
         minified_shell_integration_body(&script.lines().skip(3).collect::<Vec<_>>().join("\n"));
+    // zsh 的 history 关联数组只读，事后无法删除条目；靠 bootstrap 行注册的
+    // zshaddhistory 钩子（见 SHELL_INTEGRATION_BOOTSTRAP_COMMAND）在入史前拦下
+    // 注入行。bash 则在注入尾部按「倒序」history -d 清掉 bootstrap 行与注入行：
+    // 每删一条后续条目都会重编号，升序会让第二个序号失效（issue #547）。
+    //
+    // 匹配必须用 `if [[ == ]]` 而不是 `case`：bash 解析「双引号内的 $()」时，
+    // `case` 模式的右括号会被误判为命令替换结束符，整个清理赋值从写下的那天
+    // 起就是断的（错误被 2>/dev/null 吞掉，表现为注入行残留 history，issue #547
+    // 的核心根因）。实测 `if [[ ]]` 形态在同样上下文里解析正确。
     format!(
-        "{body}\nif [[ -n \"${{BASH_VERSION:-}}\" ]]; then\n    __onetcli_setup_history=\"$(history 2>/dev/null | while read -r __onetcli_history_number __onetcli_history_rest; do case \"$__onetcli_history_rest\" in *__ONETCLI_RUNTIME_SETUP_1*) printf '%s ' \"${{__onetcli_history_number%\\*}}\";; esac; done)\"\n    for __onetcli_history_number in $__onetcli_setup_history; do history -d \"$__onetcli_history_number\" 2>/dev/null; done\n    unset __onetcli_setup_history __onetcli_history_number __onetcli_history_rest\nfi",
+        "{body}\nif [[ -n \"${{BASH_VERSION:-}}\" ]]; then\n    __onetcli_setup_history=\"$(history 2>/dev/null | while read -r __onetcli_history_number __onetcli_history_rest; do if [[ \"$__onetcli_history_rest\" == *__ONETCLI_RUNTIME_SETUP_1* ]]; then printf '%s\\n' \"${{__onetcli_history_number%\\*}}\"; fi; done | sort -rn)\"\n    for __onetcli_history_number in $__onetcli_setup_history; do history -d \"$__onetcli_history_number\" 2>/dev/null; done\n    unset __onetcli_setup_history __onetcli_history_number __onetcli_history_rest\nfi",
         body = body,
     )
 }
@@ -394,6 +402,189 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 剥掉 OSC 转义序列（`ESC ] ... BEL`），便于在断言里按行解析混着
+    /// 提示符转义的 bash 输出。
+    fn strip_osc_sequences(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' && chars.peek() == Some(&']') {
+                chars.next();
+                for c2 in chars.by_ref() {
+                    if c2 == '\x07' {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn bootstrap_command_registers_zsh_history_hook_for_zsh_only() {
+        // issue #547：bootstrap 行必须在 zsh 里注册 zshaddhistory 钩子，
+        // 拦下随后的注入大行；bash 里不能执行这段 eval（污染会话变量）。
+        let bootstrap = String::from_utf8(SHELL_INTEGRATION_BOOTSTRAP_COMMAND.to_vec())
+            .expect("bootstrap command must be UTF-8 shell text");
+        assert!(bootstrap.contains("ZSH_VERSION"));
+        assert!(bootstrap.contains("zshaddhistory_functions+=(__onetcli_suppress_runtime_history)"));
+        assert!(bootstrap.contains("ShellIntegrationBootstrap=1"));
+    }
+
+    /// issue #547：真实交互 bash 里跑完 bootstrap + 注入两行握手后，
+    /// history 里不允许残留任何 ONETCLI 注入条目（倒序删除必须删净
+    /// bootstrap 行与注入行两条），用户自己的命令要原样保留。
+    #[test]
+    fn bash_handshake_leaves_no_runtime_setup_entries_in_history() {
+        let bash = std::path::PathBuf::from("/bin/bash");
+        if !bash.exists() {
+            return; // 非 macOS/Linux 环境跳过
+        }
+        let integration = RuntimeShellIntegration::new(true);
+        let script_path = std::env::temp_dir().join(format!(
+            "onetcli-injection-e2e-{}.sh",
+            std::process::id()
+        ));
+        // 两行握手序列写成脚本喂给交互 bash（\r 结尾还原 PTY 输入形态）
+        let mut feed = String::new();
+        feed.push_str("echo USER_MARKER_BEFORE\n");
+        feed.push_str(
+            std::str::from_utf8(integration.bootstrap_command())
+                .expect("bootstrap command must be UTF-8 shell text"),
+        );
+        feed.push('\n');
+        feed.push_str(
+            std::str::from_utf8(integration.injection_command())
+                .expect("runtime command must be UTF-8 shell text"),
+        );
+        feed.push('\n');
+        feed.push_str("echo USER_MARKER_AFTER\n");
+        feed.push_str("history\n");
+        std::fs::write(&script_path, feed).expect("write handshake feed");
+
+        let output = std::process::Command::new(&bash)
+            .arg("--noprofile")
+            .arg("--norc")
+            .arg("-i")
+            .env("HISTFILE", format!("/tmp/onetcli-hist-e2e-{}", std::process::id()))
+            .stdin(std::fs::File::open(&script_path).expect("open feed"))
+            .output()
+            .expect("run interactive bash");
+        let _ = std::fs::remove_file(&script_path);
+        // 集成脚本激活后每条输出都包着 OSC 133/1337 序列，BEFORE 的 history 行
+        // 可能粘在转义序列后面；先剥掉 OSC（ESC ] ... BEL）再按行解析。
+        let stripped = strip_osc_sequences(&String::from_utf8_lossy(&output.stdout));
+        let text = stripped.replace('\r', "\n");
+
+        // history 列表行形如 "  12  command text"：逐行检查没有 ONETCLI 残留
+        for line in text.lines() {
+            let trimmed = line.trim_start();
+            let mut parts = trimmed.splitn(2, char::is_whitespace);
+            if let (Some(number), Some(rest)) = (parts.next(), parts.next()) {
+                if !number.chars().all(|c| c.is_ascii_digit()) || number.is_empty() {
+                    continue;
+                }
+                assert!(
+                    !rest.contains("ONETCLI"),
+                    "history 残留注入条目: {rest}"
+                );
+            }
+        }
+        // 用户命令保留，握手确实发生过
+        let history_lines: Vec<&str> = text
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                t.chars().next().is_some_and(|c| c.is_ascii_digit())
+            })
+            .collect();
+        assert!(
+            history_lines
+                .iter()
+                .any(|l| l.contains("USER_MARKER_BEFORE")),
+            "用户命令被误删: {text}"
+        );
+        assert!(
+            history_lines
+                .iter()
+                .any(|l| l.contains("USER_MARKER_AFTER")),
+            "握手后的用户命令缺失: {text}"
+        );
+    }
+
+    /// issue #547：真实交互 zsh 里跑完 bootstrap + 注入两行握手后，
+    /// 大段注入命令不允许出现在 history（zshaddhistory 钩子必须在入史前
+    /// 拦下注入行）。bootstrap 短行是「注册钩子的行无法拦自己」的已知
+    /// 残留，只断言注入大行不出现。
+    #[cfg(unix)]
+    #[test]
+    fn zsh_handshake_leaves_no_injection_entry_in_history() {
+        let zsh = std::path::PathBuf::from("/bin/zsh");
+        if !zsh.exists() {
+            return; // 无 zsh 的环境跳过
+        }
+        let integration = RuntimeShellIntegration::new(true);
+        // ZDOTDIR 指向空目录，隔离宿主 zsh 配置
+        let zdot = std::env::temp_dir().join(format!("onetcli-zdot-e2e-{}", std::process::id()));
+        std::fs::create_dir_all(&zdot).expect("create ZDOTDIR");
+        let histfile = zdot.join(".zsh_history");
+        std::fs::write(
+            zdot.join(".zshrc"),
+            format!("export HISTFILE={}\n", histfile.display()),
+        )
+        .expect("write isolated .zshrc");
+        let script_path = zdot.join("handshake.zsh");
+        let mut feed = String::new();
+        feed.push_str("echo USER_MARKER_BEFORE\n");
+        feed.push_str(
+            std::str::from_utf8(integration.bootstrap_command())
+                .expect("bootstrap command must be UTF-8 shell text"),
+        );
+        feed.push('\n');
+        feed.push_str(
+            std::str::from_utf8(integration.injection_command())
+                .expect("runtime command must be UTF-8 shell text"),
+        );
+        feed.push('\n');
+        feed.push_str("echo USER_MARKER_AFTER\n");
+        feed.push_str("fc -l\n");
+        std::fs::write(&script_path, feed).expect("write zsh handshake feed");
+
+        let output = std::process::Command::new(&zsh)
+            .arg("-i")
+            .env("ZDOTDIR", &zdot)
+            .stdin(std::fs::File::open(&script_path).expect("open feed"))
+            .output()
+            .expect("run interactive zsh");
+        let _ = std::fs::remove_file(&script_path);
+        let text = strip_osc_sequences(&String::from_utf8_lossy(&output.stdout)).replace('\r', "\n");
+
+        // fc -l 列表行形如 "  12  command"：注入大行不允许出现
+        for line in text.lines() {
+            let trimmed = line.trim_start();
+            let mut parts = trimmed.splitn(2, char::is_whitespace);
+            if let (Some(number), Some(rest)) = (parts.next(), parts.next()) {
+                if !number.chars().all(|c| c.is_ascii_digit()) || number.is_empty() {
+                    continue;
+                }
+                assert!(
+                    !rest.contains("if eval"),
+                    "zsh history 残留注入大行: {}",
+                    &rest[..rest.len().min(60)]
+                );
+                // bootstrap 短行（注册钩子的行）是已知可接受残留，只拦注入大行
+            }
+        }
+        // 用户命令保留，握手确实发生过（ZPRE 行 + bootstrap 行都在列表里）
+        assert!(
+            text.lines()
+                .any(|l| l.contains("USER_MARKER_BEFORE")),
+            "用户命令被误删: {text}"
+        );
+    }
 
     #[test]
     fn runtime_command_is_one_line_and_keeps_navop_osc_protocol() {
