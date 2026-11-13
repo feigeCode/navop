@@ -122,6 +122,14 @@ jobs:
     runs-on: ${{ matrix.run_on }}
     steps:
       - uses: actions/checkout@v7
+      # gpui 单个 crate 的 rustc 命令行在 Windows 上约 35K 字符（大量
+      # `--extern` / `-L dependency` 长路径），超过 CreateProcess 的 32,767
+      # 上限；sccache 冷编译时会以 `os error 206` 失败。把 target 目录换到
+      # 短路径可以把命令行压到 ~24K。详见 PR #546 的 Windows 构建失败。
+      - name: Shorten Windows build paths
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        run: echo "CARGO_TARGET_DIR=D:\t" >> $env:GITHUB_ENV
       - name: Install NASM
         if: ${{ matrix.platform == 'windows' }}
         shell: pwsh
@@ -294,6 +302,12 @@ jobs:
     runs-on: ${{ matrix.run_on }}
     steps:
       - uses: actions/checkout@v7
+      # 同 test job：gpui 的 rustc 命令行在 Windows 上超过 32,767 字符上限，
+      # 冷编译会以 `os error 206` 失败，这里也把 target 目录换到短路径。
+      - name: Shorten Windows build paths
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        run: echo "CARGO_TARGET_DIR=D:\t" >> $env:GITHUB_ENV
       - name: Install NASM
         if: ${{ matrix.platform == 'windows' }}
         shell: pwsh
