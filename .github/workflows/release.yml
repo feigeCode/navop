@@ -265,6 +265,11 @@ jobs:
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          # 固定 1.99.1：cargo 1.100 换了中间产物目录布局，Windows 上单条 rustc
+          # 命令行会膨胀到 4 万字符以上，sccache 又不支持为子进程写 @rsp，
+          # 最终撞上 CreateProcess 的 32,767 上限（os error 206）。与 ci.yml 一致；
+          # 升级工具链前先在 Windows 全量发布上验证命令行长度。
+          toolchain: 1.99.1
           target: ${{ matrix.target }}
           cache: false
 
