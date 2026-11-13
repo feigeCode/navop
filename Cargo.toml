@@ -444,9 +444,11 @@ gpui-fast-windows          = { git = "https://github.com/feigeCode/gpui-fast.git
 # OpenSSH tolerates when reading a peer's message. Without this patch the whole
 # host key fails to parse and the connection dies with
 # `SshKey: \`mpint\` encoding invalid`. Fork of RustCrypto/SSH carrying tag
-# `ssh-encoding/v0.3.0-navop.1`; drop once the change lands upstream.
+# `ssh-encoding/v0.3.0-navop.2`, which backports the `mpint` decoding from
+# upstream #622 (merged for 0.4) to the 0.3 release line; drop once 0.4 is
+# released and russh follows.
 # Regression test: crates/ssh/tests/legacy_hostkey_mpint.rs
-ssh-encoding = { git = "https://github.com/feigeCode/SSH.git", tag = "ssh-encoding/v0.3.0-navop.1" }
+ssh-encoding = { git = "https://github.com/feigeCode/SSH.git", tag = "ssh-encoding/v0.3.0-navop.2" }
 
 # russh 上游（v0.65.1 与 master 现有 ssh-key 0.7.0-rc.12）钉 `rsa = "0.10"`
 # （即 ^0.10.0，排除预发布版），而 quickjs-jit-stdlib 0.14.2（nsh 宿主的

@@ -143,7 +143,37 @@ pub(super) fn reconnect_decision(
     reason: &str,
     was_connected: bool,
     disconnect_kind: Option<HelperDisconnectKind>,
+    failure: Option<crate::helper_protocol::RdpFailureKind>,
 ) -> ReconnectDecision {
+    use crate::helper_protocol::RdpFailureKind;
+
+    match failure {
+        Some(RdpFailureKind::Authentication) => {
+            return ReconnectDecision::ConnectionFailure(
+                RemoteDesktopFailure::AuthenticationFailed,
+            );
+        }
+        Some(RdpFailureKind::Certificate | RdpFailureKind::Tls | RdpFailureKind::Negotiation) => {
+            return ReconnectDecision::ConnectionFailure(RemoteDesktopFailure::ConnectionFailed);
+        }
+        Some(RdpFailureKind::Timeout | RdpFailureKind::ConnectionRefused) => {
+            return ReconnectDecision::ConnectionFailure(RemoteDesktopFailure::HostUnreachable);
+        }
+        Some(RdpFailureKind::SessionTakenOver) => {
+            return ReconnectDecision::Terminated(RemoteDesktopFailure::SessionTakenOver);
+        }
+        Some(RdpFailureKind::ServerEndedSession) => {
+            return ReconnectDecision::Terminated(RemoteDesktopFailure::ServerEndedSession);
+        }
+        Some(RdpFailureKind::Transport) if was_connected => {
+            return ReconnectDecision::Retry(RemoteDesktopReconnectReason::ConnectionLost);
+        }
+        Some(RdpFailureKind::Transport | RdpFailureKind::Protocol | RdpFailureKind::Internal) => {
+            return ReconnectDecision::ConnectionFailure(RemoteDesktopFailure::ConnectionFailed);
+        }
+        Some(RdpFailureKind::Other) | None => {}
+    }
+
     let normalized = reason.to_ascii_lowercase();
     if contains_any(
         &normalized,

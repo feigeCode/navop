@@ -117,7 +117,7 @@ impl RemoteDesktopView {
                         },
                     );
                     if recovery_required {
-                        self.send_input(RemoteDesktopInput::Reconnect);
+                        self.request_frame_recovery(cx);
                     }
                 }
             }
@@ -193,6 +193,7 @@ impl RemoteDesktopView {
             } => {
                 if result_generation == generation {
                     self.record_rejected_delta(width, height, &reason);
+                    self.request_frame_recovery(cx);
                     should_notify = true;
                 }
             }
@@ -213,6 +214,7 @@ impl RemoteDesktopView {
                         self.presentation_queue.has_pending_frame(frame.generation);
                     match frame.kind {
                         presentation::PreparedFrameKind::Base { encoding } => {
+                            self._frame_recovery_task.take();
                             self.remote_size = Some((frame.width, frame.height));
                             self.frame_sync.accept_base((frame.width, frame.height));
                             if is_latest && !has_newer_frame {
@@ -275,7 +277,7 @@ impl RemoteDesktopView {
         if frame_sync_lost {
             self.recover_from_output_delta_overflow(cx);
         }
-        for output in batch.latest_frame.into_iter().chain(batch.latest_delta) {
+        for output in batch.latest_frame.into_iter().chain(batch.deltas) {
             self.apply_output(output, window, cx);
         }
         if stats.outputs_received > 0 {
@@ -316,7 +318,7 @@ impl RemoteDesktopView {
             "pending output deltas exceeded the memory budget",
         );
         if recovery_required {
-            self.send_input(RemoteDesktopInput::Reconnect);
+            self.request_frame_recovery(cx);
         }
         self.pump_presentation_queue(cx);
     }
@@ -522,6 +524,36 @@ impl RemoteDesktopView {
         self.pending_resize_size = None;
         self.pending_resize_updated_at = None;
         self.last_resize_sent_at = None;
+        self._frame_recovery_task.take();
+    }
+
+    fn request_frame_recovery(&mut self, cx: &mut Context<Self>) {
+        if self._frame_recovery_task.is_some() || !self.connected {
+            return;
+        }
+        let generation = self.frame_sync.snapshot().session_generation;
+        self.send_input(RemoteDesktopInput::RequestFullFrame);
+        self._frame_recovery_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(FRAME_RECOVERY_REQUEST_TIMEOUT)
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                view._frame_recovery_task = None;
+                let snapshot = view.frame_sync.snapshot();
+                if should_fallback_to_reconnect(
+                    generation,
+                    snapshot.session_generation,
+                    snapshot.phase,
+                ) {
+                    tracing::warn!(
+                        generation,
+                        "full-frame recovery timed out; reconnecting the remote desktop session"
+                    );
+                    view.send_input(RemoteDesktopInput::Reconnect);
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     fn next_presentation_frame_ticket(&self) -> u64 {
@@ -770,6 +802,14 @@ fn should_apply_remote_cursor_output(protocol: RemoteDesktopProtocol) -> bool {
 /// applied to the worker's framebuffer, so its synchronization state has to be committed.
 fn should_commit_prepared_frame(frame_generation: u64, current_generation: u64) -> bool {
     frame_generation == current_generation
+}
+
+fn should_fallback_to_reconnect(
+    requested_generation: u64,
+    current_generation: u64,
+    phase: frame_sync::FrameSyncPhase,
+) -> bool {
+    requested_generation == current_generation && phase != frame_sync::FrameSyncPhase::Ready
 }
 
 #[cfg(test)]

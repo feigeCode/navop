@@ -37,16 +37,9 @@ pub(super) struct FrameSyncSnapshot {
 /// and commits a delta only after validating and applying it atomically. The
 /// tracker records the predecessor relationship and exposes bounded
 /// diagnostics without making the GPUI render tree depend on frame pixels.
+#[derive(Default)]
 pub(super) struct FrameSyncTracker {
     snapshot: FrameSyncSnapshot,
-}
-
-impl Default for FrameSyncTracker {
-    fn default() -> Self {
-        Self {
-            snapshot: FrameSyncSnapshot::default(),
-        }
-    }
 }
 
 impl fmt::Debug for FrameSyncTracker {

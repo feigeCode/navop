@@ -5,6 +5,12 @@ use crate::helper_protocol::HelperRequest;
 impl fmt::Debug for HelperRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ClientHello {
+                protocol_version, ..
+            } => formatter
+                .debug_struct("ClientHello")
+                .field("protocol_version", protocol_version)
+                .finish(),
             Self::Connect { .. } => debug_connect_request(self, formatter),
             Self::Resize { .. }
             | Self::MouseMove { .. }
@@ -16,6 +22,11 @@ impl fmt::Debug for HelperRequest {
             | Self::ClipboardText { .. }
             | Self::ClipboardFiles { .. }
             | Self::CancelClipboardTransfer { .. } => debug_clipboard_request(self, formatter),
+            Self::RequestFullFrame => formatter.write_str("RequestFullFrame"),
+            Self::Ping { sequence } => formatter
+                .debug_struct("Ping")
+                .field("sequence", sequence)
+                .finish(),
             Self::Close => formatter.write_str("Close"),
         }
     }
@@ -37,6 +48,7 @@ fn debug_connect_request(
         audio_capture,
         egfx,
         shared_folders,
+        relay,
         rdp,
     } = request
     else {
@@ -57,6 +69,11 @@ fn debug_connect_request(
         .field("audio_capture", audio_capture)
         .field("egfx", egfx)
         .field("shared_folder_count", &shared_folders.len())
+        .field("relay_present", &relay.is_some())
+        .field(
+            "relay_authentication_len",
+            &relay.as_ref().map(|relay| relay.authentication.len()),
+        )
         .field("rdp_admin_session", &rdp.admin_session)
         .field("rdp_gateway_mode", &rdp.gateway.mode)
         .field(

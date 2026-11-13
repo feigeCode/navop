@@ -138,7 +138,7 @@ impl RemoteDesktopSurface {
             DevicePixels(i32::from(height)),
         )));
         let full_rect = TextureRect::full(width, height);
-        let backing_bgra = Arc::new(framebuffer.as_rgba().to_vec());
+        let backing_bgra = framebuffer.shared_bytes();
         let prepared_uploads = Arc::new(vec![TextureUpload {
             rect: full_rect,
             bytes: Arc::clone(&backing_bgra),
@@ -170,7 +170,7 @@ impl RemoteDesktopSurface {
         framebuffer: &RgbaFramebuffer,
     ) -> anyhow::Result<Self> {
         self.validate_matching_framebuffer(framebuffer)?;
-        let backing_bgra = Arc::new(framebuffer.as_rgba().to_vec());
+        let backing_bgra = framebuffer.shared_bytes();
         let mut state = self
             .state
             .lock()

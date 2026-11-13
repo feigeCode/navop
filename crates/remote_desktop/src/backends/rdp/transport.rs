@@ -3,10 +3,15 @@ use std::process::{Command, Stdio};
 
 use super::*;
 
+const MAX_REQUEST_BATCH_BYTES: usize = 4 * 1024 * 1024;
+const HELPER_HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum BackendSignal {
+    ServerHello(crate::helper_protocol::HelperServerHello),
     Connected,
     Disconnected(HelperDisconnect),
+    Pong(u64),
     OutputEnded,
 }
 
@@ -22,6 +27,7 @@ pub(super) fn start_helper_session(
         std::process::Child,
         std::process::ChildStdin,
         std::sync::mpsc::Receiver<BackendSignal>,
+        crate::helper_protocol::HelperServerHello,
     ),
     (),
 > {
@@ -47,16 +53,83 @@ pub(super) fn start_helper_session(
     };
     let (signal_tx, signal_rx) = std::sync::mpsc::channel();
     spawn_output_reader(stdout, output_tx.clone(), signal_tx, protocol);
-    if write_request(&mut stdin, connect, output_tx, protocol).is_err() {
+    if write_request(
+        &mut stdin,
+        &HelperRequest::ClientHello {
+            protocol_version: crate::helper_protocol::HELPER_PROTOCOL_VERSION,
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+        output_tx,
+        protocol,
+    )
+    .is_err()
+    {
         terminate_failed_helper(&mut helper, protocol);
         return Err(());
     }
-    for request in
-        reconnect_replay_requests(latest_clipboard_text, latest_clipboard_files, protocol)
+    let Some(server_hello) = await_server_hello(&signal_rx, output_tx, protocol) else {
+        terminate_failed_helper(&mut helper, protocol);
+        return Err(());
+    };
+    let replay_requests =
+        reconnect_replay_requests(latest_clipboard_text, latest_clipboard_files, protocol);
+    if write_requests(
+        &mut stdin,
+        std::iter::once(connect).chain(replay_requests.iter()),
+        output_tx,
+        protocol,
+    )
+    .is_err()
     {
-        let _ = write_request(&mut stdin, &request, output_tx, protocol);
+        terminate_failed_helper(&mut helper, protocol);
+        return Err(());
     }
-    Ok((helper, stdin, signal_rx))
+    Ok((helper, stdin, signal_rx, server_hello))
+}
+
+fn await_server_hello(
+    signal_rx: &std::sync::mpsc::Receiver<BackendSignal>,
+    output_tx: &OutputMailboxSender,
+    protocol: RemoteDesktopProtocol,
+) -> Option<crate::helper_protocol::HelperServerHello> {
+    let deadline = std::time::Instant::now() + HELPER_HELLO_TIMEOUT;
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            send_status(
+                output_tx,
+                &format!(
+                    "{} helper did not complete the protocol handshake within {} seconds",
+                    protocol.label(),
+                    HELPER_HELLO_TIMEOUT.as_secs()
+                ),
+            );
+            return None;
+        }
+        match signal_rx.recv_timeout(remaining) {
+            Ok(BackendSignal::ServerHello(hello)) => {
+                if hello.protocol_version != crate::helper_protocol::HELPER_PROTOCOL_VERSION {
+                    send_status(
+                        output_tx,
+                        &format!(
+                            "{} helper protocol {} does not match app protocol {}; update the provider",
+                            protocol.label(),
+                            hello.protocol_version,
+                            crate::helper_protocol::HELPER_PROTOCOL_VERSION
+                        ),
+                    );
+                    return None;
+                }
+                return Some(hello);
+            }
+            Ok(BackendSignal::Pong(_)) => {}
+            Ok(BackendSignal::Connected)
+            | Ok(BackendSignal::Disconnected(_))
+            | Ok(BackendSignal::OutputEnded)
+            | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return None,
+        }
+    }
 }
 
 fn terminate_failed_helper(helper: &mut std::process::Child, protocol: RemoteDesktopProtocol) {
@@ -152,6 +225,7 @@ fn spawn_output_reader(
                         let _ = signal_tx.send(BackendSignal::Disconnected(HelperDisconnect {
                             kind: None,
                             reason,
+                            failure: None,
                         }));
                         break;
                     }
@@ -165,6 +239,8 @@ pub(super) struct HelperOutput {
     pub(super) output: Option<RemoteDesktopOutput>,
     pub(super) connected: bool,
     pub(super) disconnect: Option<HelperDisconnect>,
+    pub(super) server_hello: Option<crate::helper_protocol::HelperServerHello>,
+    pub(super) pong: Option<u64>,
 }
 
 pub(super) fn forward_helper_output(
@@ -180,7 +256,12 @@ pub(super) fn forward_helper_output(
         output,
         connected,
         disconnect,
+        server_hello,
+        pong,
     } = helper_output;
+    if let Some(server_hello) = server_hello {
+        let _ = signal_tx.send(BackendSignal::ServerHello(server_hello));
+    }
     if let Some(output) = output {
         let _ = output_tx.send(output);
     }
@@ -190,23 +271,55 @@ pub(super) fn forward_helper_output(
     if let Some(disconnect) = disconnect {
         let _ = signal_tx.send(BackendSignal::Disconnected(disconnect));
     }
+    if let Some(sequence) = pong {
+        let _ = signal_tx.send(BackendSignal::Pong(sequence));
+    }
 }
 
 pub(super) fn write_request(
     stdin: &mut std::process::ChildStdin,
     request: &HelperRequest,
+    output_tx: &OutputMailboxSender,
+    protocol: RemoteDesktopProtocol,
+) -> anyhow::Result<()> {
+    write_requests(stdin, std::iter::once(request), output_tx, protocol)
+}
+
+pub(super) fn write_requests<'a>(
+    stdin: &mut std::process::ChildStdin,
+    requests: impl IntoIterator<Item = &'a HelperRequest>,
     _output_tx: &OutputMailboxSender,
     protocol: RemoteDesktopProtocol,
 ) -> anyhow::Result<()> {
-    let line = encode_request_line(request)?;
-    if let Err(error) = stdin.write_all(line.as_bytes()).and_then(|_| stdin.flush()) {
+    if let Err(error) = encode_and_write_requests(stdin, requests) {
         tracing::warn!(
             protocol = protocol.label(),
             ?error,
-            "failed to write remote desktop helper request"
+            "failed to write remote desktop helper request batch"
         );
-        anyhow::bail!(error);
+        return Err(error);
     }
+    Ok(())
+}
+
+fn encode_and_write_requests<'a>(
+    writer: &mut impl Write,
+    requests: impl IntoIterator<Item = &'a HelperRequest>,
+) -> anyhow::Result<()> {
+    let mut batch = Vec::new();
+    for request in requests {
+        let line = encode_request_line(request)?;
+        if !batch.is_empty() && batch.len().saturating_add(line.len()) > MAX_REQUEST_BATCH_BYTES {
+            writer.write_all(&batch)?;
+            batch.clear();
+        }
+        batch.extend_from_slice(line.as_bytes());
+    }
+    if batch.is_empty() {
+        return Ok(());
+    }
+    writer.write_all(&batch)?;
+    writer.flush()?;
     Ok(())
 }
 

@@ -82,6 +82,7 @@ const RESIZE_DEBOUNCE: Duration = Duration::from_millis(800);
 const RESIZE_MIN_INTERVAL: Duration = Duration::from_millis(1200);
 const RESIZE_DELTA_THRESHOLD: u16 = 16;
 const RDP_INITIAL_LAYOUT_DEBOUNCE: Duration = Duration::from_millis(150);
+const FRAME_RECOVERY_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const REMOTE_DESKTOP_CONTEXT: &str = "RemoteDesktopView";
 const REMOTE_DESKTOP_DIAGNOSTICS_ENV: &str = "NAVOP_REMOTE_DESKTOP_DIAGNOSTICS";
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -916,6 +917,7 @@ pub struct RemoteDesktopView {
     _output_ready_task: Option<Task<()>>,
     _presentation_task: Option<Task<()>>,
     _presentation_pacing_task: Option<Task<()>>,
+    _frame_recovery_task: Option<Task<()>>,
     presentation_initialization: presentation::RemoteDesktopPresentationInitialization,
     tab_active: bool,
     presentation_obscured: bool,
@@ -1187,6 +1189,7 @@ impl RemoteDesktopView {
             _output_ready_task: None,
             _presentation_task: None,
             _presentation_pacing_task: None,
+            _frame_recovery_task: None,
             presentation_initialization,
             tab_active: standalone_window,
             presentation_obscured: false,

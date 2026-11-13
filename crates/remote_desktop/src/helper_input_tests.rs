@@ -126,6 +126,13 @@ fn input_reconnect_is_backend_control_not_helper_request() {
 }
 
 #[test]
+fn full_frame_request_is_forwarded_to_the_helper() {
+    let request = HelperRequest::from_remote_input(&RemoteDesktopInput::RequestFullFrame);
+
+    assert_eq!(Some(HelperRequest::RequestFullFrame), request);
+}
+
+#[test]
 fn clipboard_files_request_debug_does_not_leak_paths() {
     let request = HelperRequest::from_remote_input(&RemoteDesktopInput::ClipboardFiles {
         transfer_id: 42,

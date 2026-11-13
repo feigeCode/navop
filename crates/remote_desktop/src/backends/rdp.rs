@@ -6,7 +6,7 @@ use crate::{
     RemoteDesktopBackend, RemoteDesktopCapabilities, RemoteDesktopConnectionOptions,
     RemoteDesktopFailure, RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol,
     RemoteDesktopReconnect, RemoteDesktopReconnectReason, RemoteDesktopRuntime, RemoteDesktopSize,
-    helper_protocol::{HelperRequest, encode_request_line},
+    helper_protocol::{HelperRequest, RdpFailureKind, encode_request_line},
     output_mailbox::{OutputMailboxSender, output_mailbox},
 };
 
@@ -36,6 +36,7 @@ pub(super) enum HelperDisconnectKind {
 pub(super) struct HelperDisconnect {
     pub(super) kind: Option<HelperDisconnectKind>,
     pub(super) reason: String,
+    pub(super) failure: Option<RdpFailureKind>,
 }
 
 pub struct RdpBackend {
@@ -91,12 +92,13 @@ impl RemoteDesktopBackend for RdpBackend {
         self: Box<Self>,
         initial_size: RemoteDesktopSize,
     ) -> anyhow::Result<RemoteDesktopRuntime> {
-        let (options, proxy_guard) = crate::backend::resolve_proxy_options(self.options.clone())?;
+        let (options, proxy_guard, relay) =
+            crate::backend::resolve_proxy_options(self.options.clone())?;
         let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel();
         let (output_tx, output_rx) = output_mailbox();
         let helper = self.helper.clone();
         let diagnostic_tx = self.diagnostic_tx.clone();
-        let connect = HelperRequest::connect_from_options(&options, initial_size);
+        let connect = HelperRequest::connect_from_options_with_relay(&options, initial_size, relay);
         let protocol = options.protocol;
 
         std::thread::Builder::new()
@@ -131,5 +133,6 @@ pub(super) enum HelperRunResult {
         /// before dropping. `None` means it never reported a usable session.
         connected_for: Option<Duration>,
         disconnect_kind: Option<HelperDisconnectKind>,
+        failure: Option<RdpFailureKind>,
     },
 }

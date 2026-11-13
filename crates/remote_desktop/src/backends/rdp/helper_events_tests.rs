@@ -58,18 +58,22 @@ fn helper_events_identify_disconnect_signals() {
         Some(HelperDisconnect {
             kind: Some(HelperDisconnectKind::ConnectionFailure),
             reason: "network".to_string(),
+            failure: None,
         }),
         helper_disconnect(&HelperEvent::ConnectionFailure {
             message: "network".to_string(),
+            kind: None,
         })
     );
     assert_eq!(
         Some(HelperDisconnect {
             kind: Some(HelperDisconnectKind::Terminated),
             reason: "closed".to_string(),
+            failure: None,
         }),
         helper_disconnect(&HelperEvent::Terminated {
             message: "closed".to_string(),
+            kind: None,
         })
     );
     assert_eq!(
@@ -128,9 +132,11 @@ fn terminal_helper_events_do_not_create_user_visible_outputs() {
     for event in [
         HelperEvent::ConnectionFailure {
             message: "[CredSSP @ /Users/runner/connector.rs:107] CredSSP".to_string(),
+            kind: None,
         },
         HelperEvent::Terminated {
             message: "Another user connected to the server".to_string(),
+            kind: None,
         },
     ] {
         assert_eq!(

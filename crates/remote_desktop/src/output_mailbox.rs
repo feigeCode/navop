@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -54,7 +55,7 @@ impl DeltaLimits {
 pub struct OutputBatch {
     pub control: Vec<RemoteDesktopOutput>,
     pub latest_frame: Option<RemoteDesktopOutput>,
-    pub latest_delta: Option<RemoteDesktopOutput>,
+    pub deltas: Vec<RemoteDesktopOutput>,
     /// The pending dirty-rectangle chain exceeded its memory budget and was
     /// discarded before the receiver could drain it. The consumer must wait
     /// for a complete base frame (or reconnect to request one) before applying
@@ -101,7 +102,7 @@ pub struct OutputMailboxClosed;
 struct State {
     control: Vec<RemoteDesktopOutput>,
     latest_frame: Option<RemoteDesktopOutput>,
-    latest_delta: Option<RemoteDesktopOutput>,
+    pending_deltas: VecDeque<RemoteDesktopOutput>,
     pending_stats: OutputMailboxStats,
     /// Frames are accepted only while a helper session is known to be
     /// connected. A reconnect barrier flips this off so late output from the
@@ -129,7 +130,7 @@ pub fn output_mailbox() -> (OutputMailboxSender, OutputMailboxReceiver) {
     let shared = Arc::new(Mutex::new(State {
         control: Vec::new(),
         latest_frame: None,
-        latest_delta: None,
+        pending_deltas: VecDeque::new(),
         pending_stats: OutputMailboxStats::default(),
         receiver_alive: true,
         accepting_frames: true,
@@ -205,12 +206,12 @@ impl OutputMailboxSender {
                         state.pending_stats.frames_dropped =
                             state.pending_stats.frames_dropped.saturating_add(1);
                     }
-                    if state.latest_delta.is_some() {
-                        state.pending_stats.frames_dropped =
-                            state.pending_stats.frames_dropped.saturating_add(1);
-                    }
+                    state.pending_stats.frames_dropped =
+                        state.pending_stats.frames_dropped.saturating_add(
+                            u64::try_from(state.pending_deltas.len()).unwrap_or(u64::MAX),
+                        );
                     state.latest_frame = Some(frame);
-                    state.latest_delta = None;
+                    state.pending_deltas.clear();
                     state.awaiting_full_frame = false;
                     state.pending_frame_sync_lost = false;
                 } else {
@@ -224,14 +225,7 @@ impl OutputMailboxSender {
                         state.pending_stats.frames_dropped =
                             state.pending_stats.frames_dropped.saturating_add(1);
                     } else if pending_delta_fits_budget(&state, &delta) {
-                        if state.latest_delta.is_some() {
-                            state.pending_stats.delta_frames_merged =
-                                state.pending_stats.delta_frames_merged.saturating_add(1);
-                        }
-                        state.latest_delta = Some(match state.latest_delta.take() {
-                            Some(previous) => merge_deltas(previous, delta),
-                            None => delta,
-                        });
+                        state.pending_deltas.push_back(delta);
                     } else {
                         // The pending deltas no longer fit in memory. A complete frame is
                         // a snapshot of the whole desktop, so when one is already queued
@@ -245,8 +239,10 @@ impl OutputMailboxSender {
                             .pending_stats
                             .frames_dropped
                             .saturating_add(1)
-                            .saturating_add(u64::from(state.latest_delta.is_some()));
-                        state.latest_delta = None;
+                            .saturating_add(
+                                u64::try_from(state.pending_deltas.len()).unwrap_or(u64::MAX),
+                            );
+                        state.pending_deltas.clear();
                         if !has_base {
                             state.awaiting_full_frame = true;
                             state.pending_frame_sync_lost = true;
@@ -268,9 +264,9 @@ impl OutputMailboxSender {
                     .pending_stats
                     .frames_dropped
                     .saturating_add(u64::from(state.latest_frame.is_some()))
-                    .saturating_add(u64::from(state.latest_delta.is_some()));
+                    .saturating_add(u64::try_from(state.pending_deltas.len()).unwrap_or(u64::MAX));
                 state.latest_frame = None;
-                state.latest_delta = None;
+                state.pending_deltas.clear();
                 state.awaiting_full_frame = false;
                 state.pending_frame_sync_lost = false;
                 discard_pending_cursor_outputs(&mut state.control);
@@ -284,9 +280,9 @@ impl OutputMailboxSender {
                     .pending_stats
                     .frames_dropped
                     .saturating_add(u64::from(state.latest_frame.is_some()))
-                    .saturating_add(u64::from(state.latest_delta.is_some()));
+                    .saturating_add(u64::try_from(state.pending_deltas.len()).unwrap_or(u64::MAX));
                 state.latest_frame = None;
-                state.latest_delta = None;
+                state.pending_deltas.clear();
                 state.awaiting_full_frame = false;
                 state.pending_frame_sync_lost = false;
                 discard_pending_cursor_outputs(&mut state.control);
@@ -316,7 +312,7 @@ impl OutputMailboxReceiver {
         OutputBatch {
             control: std::mem::take(&mut state.control),
             latest_frame: state.latest_frame.take(),
-            latest_delta: state.latest_delta.take(),
+            deltas: state.pending_deltas.drain(..).collect(),
             frame_sync_lost: std::mem::take(&mut state.pending_frame_sync_lost),
             stats: std::mem::take(&mut state.pending_stats),
         }
@@ -354,7 +350,7 @@ impl Drop for OutputMailboxReceiver {
         state.receiver_alive = false;
         state.control.clear();
         state.latest_frame = None;
-        state.latest_delta = None;
+        state.pending_deltas.clear();
         state.awaiting_full_frame = false;
         state.pending_frame_sync_lost = false;
         state.notify_output_ready();
@@ -365,7 +361,7 @@ impl State {
     fn is_empty(&self) -> bool {
         self.control.is_empty()
             && self.latest_frame.is_none()
-            && self.latest_delta.is_none()
+            && self.pending_deltas.is_empty()
             && !self.pending_frame_sync_lost
     }
 
@@ -417,51 +413,22 @@ impl OutputMailboxStats {
     }
 }
 
-fn merge_deltas(previous: RemoteDesktopOutput, next: RemoteDesktopOutput) -> RemoteDesktopOutput {
-    match (previous, next) {
-        (
-            RemoteDesktopOutput::FrameBgraRects {
-                width,
-                height,
-                mut rects,
-                mut bgra,
-            },
-            RemoteDesktopOutput::FrameBgraRects {
-                width: next_width,
-                height: next_height,
-                rects: next_rects,
-                bgra: next_bgra,
-            },
-        ) if width == next_width && height == next_height => {
-            rects.extend(next_rects);
-            bgra.extend(next_bgra);
-            RemoteDesktopOutput::FrameBgraRects {
-                width,
-                height,
-                rects,
-                bgra,
-            }
-        }
-        (_, next) => next,
-    }
-}
-
 fn pending_delta_fits_budget(state: &State, next: &RemoteDesktopOutput) -> bool {
     let Some((next_width, next_height, next_rects, next_bytes)) = delta_metadata(next) else {
         return false;
     };
-    let (pending_rects, pending_bytes) = match state.latest_delta.as_ref() {
-        Some(previous) => {
-            let Some((width, height, rects, bytes)) = delta_metadata(previous) else {
-                return false;
-            };
-            if (width, height) != (next_width, next_height) {
-                return false;
-            }
-            (rects, bytes)
+    let mut pending_rects = 0usize;
+    let mut pending_bytes = 0usize;
+    for previous in &state.pending_deltas {
+        let Some((width, height, rects, bytes)) = delta_metadata(previous) else {
+            return false;
+        };
+        if (width, height) != (next_width, next_height) {
+            return false;
         }
-        None => (0, 0),
-    };
+        pending_rects = pending_rects.saturating_add(rects);
+        pending_bytes = pending_bytes.saturating_add(bytes);
+    }
 
     let limits = DeltaLimits::for_extent(state.frame_extent);
 

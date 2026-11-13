@@ -34,6 +34,8 @@ pub enum RemoteDesktopInput {
     CancelClipboardTransfer {
         transfer_id: u64,
     },
+    /// Ask the backend for a complete framebuffer update before falling back to a reconnect.
+    RequestFullFrame,
     Reconnect,
     Close,
 }

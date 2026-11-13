@@ -1,11 +1,12 @@
 use crate::backends::rdp::{HelperProcessConfig, RdpBackend};
+use crate::helper_protocol::HelperRelay;
 use crate::{
     RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopProviderManifest,
     RemoteDesktopProviderRegistry, RemoteDesktopRuntime, RemoteDesktopSize,
 };
 use connection_tunnel::{TunnelGuard, start_proxy_tunnel};
 
-const MIN_RDP_PROVIDER_VERSION: &str = "0.3.0";
+const MIN_RDP_PROVIDER_VERSION: &str = "0.4.0";
 const MIN_VNC_PROVIDER_VERSION: &str = "0.2.2";
 
 pub trait RemoteDesktopBackend: Send + 'static {
@@ -80,15 +81,22 @@ fn create_backend_with_registry_inner(
 
 pub(crate) fn resolve_proxy_options(
     mut options: RemoteDesktopConnectionOptions,
-) -> anyhow::Result<(RemoteDesktopConnectionOptions, Option<TunnelGuard>)> {
+) -> anyhow::Result<(
+    RemoteDesktopConnectionOptions,
+    Option<TunnelGuard>,
+    Option<HelperRelay>,
+)> {
     let Some(proxy) = options.proxy.take() else {
-        return Ok((options, None));
+        return Ok((options, None, None));
     };
     let (host, port) = parse_destination(&options.destination)?;
     let tunnel = start_proxy_tunnel(proxy, host, port)?;
     let local_addr = tunnel.local_addr();
-    options.destination = local_addr.to_string();
-    Ok((options, Some(tunnel.into())))
+    let relay = HelperRelay {
+        address: local_addr.to_string(),
+        authentication: Vec::new(),
+    };
+    Ok((options, Some(tunnel.into()), Some(relay)))
 }
 
 pub fn parse_destination(destination: &str) -> anyhow::Result<(String, u16)> {

@@ -9,7 +9,9 @@ impl RemoteDesktopView {
         if self.options.read_only
             && !matches!(
                 input,
-                RemoteDesktopInput::Resize { .. } | RemoteDesktopInput::Reconnect
+                RemoteDesktopInput::Resize { .. }
+                    | RemoteDesktopInput::RequestFullFrame
+                    | RemoteDesktopInput::Reconnect
             )
         {
             return;

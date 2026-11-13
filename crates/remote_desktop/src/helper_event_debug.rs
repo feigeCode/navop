@@ -111,10 +111,10 @@ fn debug_message_event(event: &HelperEvent, formatter: &mut fmt::Formatter<'_>) 
             message.len(),
             formatter,
         ),
-        HelperEvent::ConnectionFailure { message } => {
+        HelperEvent::ConnectionFailure { message, .. } => {
             debug_message("ConnectionFailure", None, message.len(), formatter)
         }
-        HelperEvent::Terminated { message } => {
+        HelperEvent::Terminated { message, .. } => {
             debug_message("Terminated", None, message.len(), formatter)
         }
         _ => unreachable!("message debug called for another event"),
@@ -136,6 +136,16 @@ fn debug_message(
 
 fn debug_data_event(event: &HelperEvent, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
     match event {
+        HelperEvent::ServerHello {
+            protocol_version,
+            provider_version,
+            capabilities,
+        } => formatter
+            .debug_struct("ServerHello")
+            .field("protocol_version", protocol_version)
+            .field("provider_version", provider_version)
+            .field("capabilities", capabilities)
+            .finish(),
         HelperEvent::Connected { width, height } => formatter
             .debug_struct("Connected")
             .field("width", width)
@@ -175,6 +185,10 @@ fn debug_data_event(event: &HelperEvent, formatter: &mut fmt::Formatter<'_>) -> 
             .debug_struct("Reconnecting")
             .field("reason", reason)
             .field("delay_secs", delay_secs)
+            .finish(),
+        HelperEvent::Pong { sequence } => formatter
+            .debug_struct("Pong")
+            .field("sequence", sequence)
             .finish(),
         _ => unreachable!("data debug called for another event"),
     }

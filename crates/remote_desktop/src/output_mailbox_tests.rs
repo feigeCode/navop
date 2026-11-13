@@ -102,7 +102,7 @@ fn reconnecting_event_discards_frames_from_the_previous_session() {
     let batch = rx.drain();
 
     assert_eq!(None, batch.latest_frame);
-    assert_eq!(None, batch.latest_delta);
+    assert!(batch.deltas.is_empty());
     assert_eq!(vec![reconnecting()], batch.control);
 }
 
@@ -134,7 +134,7 @@ fn drops_late_frames_until_the_next_session_connects() {
 
     let batch = rx.drain();
 
-    assert_eq!(None, batch.latest_delta);
+    assert!(batch.deltas.is_empty());
     assert_eq!(Some(frame(8)), batch.latest_frame);
     assert!(matches!(
         batch.control.as_slice(),
@@ -223,13 +223,13 @@ fn keeps_keyframe_when_coalescing_dirty_rectangles() {
         Some(RemoteDesktopOutput::FrameBgra { .. })
     ));
     assert!(matches!(
-        batch.latest_delta,
-        Some(RemoteDesktopOutput::FrameBgraRects { .. })
+        batch.deltas.as_slice(),
+        [RemoteDesktopOutput::FrameBgraRects { .. }]
     ));
 }
 
 #[test]
-fn pending_delta_chain_stays_within_the_rect_budget() {
+fn helper_delta_chunks_are_preserved_within_the_rect_budget() {
     let (tx, rx) = output_mailbox();
     tx.send(delta_with_rect_count(MIN_PENDING_DELTA_RECTS / 2))
         .unwrap();
@@ -239,12 +239,8 @@ fn pending_delta_chain_stays_within_the_rect_budget() {
     let batch = rx.drain();
 
     assert!(!batch.frame_sync_lost);
-    let Some(RemoteDesktopOutput::FrameBgraRects { rects, bgra, .. }) = batch.latest_delta else {
-        panic!("expected a bounded merged delta");
-    };
-    assert_eq!(MIN_PENDING_DELTA_RECTS, rects.len());
-    assert!(bgra.is_empty());
-    assert_eq!(1, batch.stats.delta_frames_merged);
+    assert_eq!(2, batch.deltas.len());
+    assert_eq!(0, batch.stats.delta_frames_merged);
     assert_eq!(0, batch.stats.frames_dropped);
 }
 
@@ -257,7 +253,7 @@ fn delta_overflow_discards_the_chain_and_reports_sync_loss() {
 
     let batch = rx.drain();
 
-    assert_eq!(None, batch.latest_delta);
+    assert!(batch.deltas.is_empty());
     assert!(batch.frame_sync_lost);
     assert_eq!(2, batch.stats.frames_dropped);
 }
@@ -273,7 +269,7 @@ fn delta_overflow_keeps_a_queued_base_frame_and_does_not_lose_sync() {
     let batch = rx.drain();
 
     assert_eq!(Some(frame(3)), batch.latest_frame);
-    assert_eq!(None, batch.latest_delta);
+    assert!(batch.deltas.is_empty());
     assert!(!batch.frame_sync_lost);
     assert_eq!(2, batch.stats.frames_dropped);
 
@@ -283,8 +279,8 @@ fn delta_overflow_keeps_a_queued_base_frame_and_does_not_lose_sync() {
     let recovered = rx.drain();
 
     assert!(matches!(
-        recovered.latest_delta,
-        Some(RemoteDesktopOutput::FrameBgraRects { .. })
+        recovered.deltas.as_slice(),
+        [RemoteDesktopOutput::FrameBgraRects { .. }]
     ));
     assert!(!recovered.frame_sync_lost);
     assert_eq!(0, recovered.stats.frames_dropped);
@@ -320,8 +316,8 @@ fn delta_budget_scales_with_the_desktop_it_describes() {
 
     assert!(!batch.frame_sync_lost);
     assert!(matches!(
-        batch.latest_delta,
-        Some(RemoteDesktopOutput::FrameBgraRects { .. })
+        batch.deltas.as_slice(),
+        [RemoteDesktopOutput::FrameBgraRects { .. }]
     ));
     assert_eq!(0, batch.stats.frames_dropped);
 }
@@ -345,7 +341,7 @@ fn oversized_delta_payload_is_rejected_without_retaining_it() {
 
     let batch = rx.drain();
 
-    assert_eq!(None, batch.latest_delta);
+    assert!(batch.deltas.is_empty());
     assert!(batch.frame_sync_lost);
     assert_eq!(1, batch.stats.frames_dropped);
 }
@@ -360,7 +356,7 @@ fn deltas_are_dropped_until_a_full_frame_recovers_sync() {
 
     tx.send(delta_with_rect_count(1)).unwrap();
     let dropped = rx.drain();
-    assert_eq!(None, dropped.latest_delta);
+    assert!(dropped.deltas.is_empty());
     assert!(!dropped.frame_sync_lost);
     assert_eq!(1, dropped.stats.frames_dropped);
 
@@ -369,8 +365,8 @@ fn deltas_are_dropped_until_a_full_frame_recovers_sync() {
     let recovered = rx.drain();
     assert_eq!(Some(frame(3)), recovered.latest_frame);
     assert!(matches!(
-        recovered.latest_delta,
-        Some(RemoteDesktopOutput::FrameBgraRects { .. })
+        recovered.deltas.as_slice(),
+        [RemoteDesktopOutput::FrameBgraRects { .. }]
     ));
     assert!(!recovered.frame_sync_lost);
 }
@@ -387,8 +383,8 @@ fn full_frame_before_drain_cancels_a_pending_sync_loss_notification() {
 
     assert_eq!(Some(frame(5)), batch.latest_frame);
     assert!(matches!(
-        batch.latest_delta,
-        Some(RemoteDesktopOutput::FrameBgraRects { .. })
+        batch.deltas.as_slice(),
+        [RemoteDesktopOutput::FrameBgraRects { .. }]
     ));
     assert!(!batch.frame_sync_lost);
 }
@@ -407,7 +403,7 @@ async fn frame_sync_loss_wakes_an_otherwise_empty_mailbox() {
         .unwrap();
     let batch = rx.drain();
     assert!(batch.frame_sync_lost);
-    assert_eq!(None, batch.latest_delta);
+    assert!(batch.deltas.is_empty());
     assert_eq!(1, batch.stats.wakeups);
 }
 

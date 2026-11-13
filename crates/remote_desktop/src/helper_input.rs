@@ -43,6 +43,7 @@ impl HelperRequest {
             RemoteDesktopInput::CancelClipboardTransfer { transfer_id } => {
                 cancel_clipboard_request(protocol, *transfer_id)?
             }
+            RemoteDesktopInput::RequestFullFrame => Self::RequestFullFrame,
             RemoteDesktopInput::Reconnect => return None,
             RemoteDesktopInput::Close => Self::Close,
         })

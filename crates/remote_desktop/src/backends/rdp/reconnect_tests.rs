@@ -24,6 +24,7 @@ fn reconnect_event_classifies_fast_path_without_exposing_internal_details() {
         "[Fast-Path @ /Users/hufei/.cargo/git/checkouts/ironrdp/src/lib.rs:98] custom error",
         true,
         None,
+        None,
     );
     let ReconnectDecision::Retry(reason) = decision else {
         panic!("fast-path failure should remain retryable");
@@ -63,6 +64,7 @@ fn another_user_disconnect_is_a_terminal_session_takeover() {
          forcing the disconnection of the current connection",
         true,
         Some(HelperDisconnectKind::Terminated),
+        None,
     );
 
     assert_eq!(
@@ -77,6 +79,7 @@ fn credssp_failure_is_a_terminal_authentication_failure_without_internal_details
         "[CredSSP @ /Users/runner/.cargo/git/checkouts/ironrdp/src/connector.rs:107] CredSSP",
         false,
         Some(HelperDisconnectKind::ConnectionFailure),
+        None,
     );
 
     assert_eq!(
@@ -98,6 +101,7 @@ fn initial_connection_refused_is_a_terminal_host_failure() {
             "connection refused",
             false,
             Some(HelperDisconnectKind::ConnectionFailure),
+            None,
         )
     );
 }
@@ -106,7 +110,7 @@ fn initial_connection_refused_is_a_terminal_host_failure() {
 fn established_socket_disconnect_remains_retryable() {
     assert_eq!(
         ReconnectDecision::Retry(RemoteDesktopReconnectReason::ConnectionLost),
-        reconnect_decision("socket closed", true, None)
+        reconnect_decision("socket closed", true, None, None)
     );
 }
 
@@ -118,6 +122,29 @@ fn explicit_server_termination_does_not_retry() {
             "remote session terminated",
             true,
             Some(HelperDisconnectKind::Terminated),
+            None,
+        )
+    );
+}
+
+#[test]
+fn typed_helper_failure_overrides_ambiguous_error_text() {
+    assert_eq!(
+        ReconnectDecision::ConnectionFailure(RemoteDesktopFailure::AuthenticationFailed),
+        reconnect_decision(
+            "connection reset by peer",
+            false,
+            Some(HelperDisconnectKind::ConnectionFailure),
+            Some(crate::helper_protocol::RdpFailureKind::Authentication),
+        )
+    );
+    assert_eq!(
+        ReconnectDecision::Terminated(RemoteDesktopFailure::SessionTakenOver),
+        reconnect_decision(
+            "network error",
+            true,
+            Some(HelperDisconnectKind::Terminated),
+            Some(crate::helper_protocol::RdpFailureKind::SessionTakenOver),
         )
     );
 }
@@ -181,6 +208,7 @@ fn connect_request() -> HelperRequest {
         audio_capture: false,
         egfx: Default::default(),
         shared_folders: Vec::new(),
-        rdp: Default::default(),
+        relay: None,
+        rdp: Box::default(),
     }
 }

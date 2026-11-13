@@ -23,6 +23,31 @@ fn reads_binary_frame_event_from_helper_stream() {
 }
 
 #[test]
+fn reads_protocol_handshake_without_turning_it_into_user_output() {
+    let mut input = std::io::Cursor::new(
+        b"{\"type\":\"ServerHello\",\"protocol_version\":2,\"provider_version\":\"0.4.0\",\"capabilities\":{\"heartbeat\":true,\"typed_errors\":true}}\n"
+            .to_vec(),
+    );
+
+    let helper_output = read_helper_output(&mut input, RemoteDesktopProtocol::Rdp)
+        .expect("helper output reads")
+        .expect("helper output exists");
+
+    assert_eq!(None, helper_output.output);
+    assert_eq!(
+        Some(crate::helper_protocol::HelperServerHello {
+            protocol_version: 2,
+            provider_version: "0.4.0".to_string(),
+            capabilities: crate::helper_protocol::HelperServerCapabilities {
+                heartbeat: true,
+                typed_errors: true,
+            },
+        }),
+        helper_output.server_hello
+    );
+}
+
+#[test]
 fn reads_bgra_frame_event_from_helper_stream() {
     let mut input = std::io::Cursor::new(
         b"{\"type\":\"FrameBgraBytes\",\"width\":2,\"height\":1,\"bgra_len\":8}\n\
@@ -147,6 +172,29 @@ fn rejects_binary_cursor_with_out_of_bounds_hotspot() {
 }
 
 #[test]
+fn rejects_oversized_frame_dimensions_before_allocating_payload() {
+    let error = read_error(
+        b"{\"type\":\"FrameBgraBytes\",\"width\":8193,\"height\":1,\"bgra_len\":32772}\n",
+    );
+
+    assert!(error.contains("frame dimensions"));
+}
+
+#[test]
+fn rejects_oversized_helper_event_header() {
+    let mut input = vec![b' '; MAX_EVENT_HEADER_BYTES + 1];
+    input.push(b'\n');
+    let mut input = std::io::Cursor::new(input);
+
+    let error = match read_helper_output(&mut input, RemoteDesktopProtocol::Rdp) {
+        Err(error) => error,
+        Ok(_) => panic!("oversized helper header must be rejected"),
+    };
+
+    assert!(error.to_string().contains("header exceeds"));
+}
+
+#[test]
 fn rejects_truncated_binary_cursor_payload() {
     let mut input = std::io::Cursor::new(
         b"{\"type\":\"CursorRgbaBytes\",\"width\":2,\"height\":1,\"hotspot_x\":1,\"hotspot_y\":0,\"rgba_len\":8}\n\
@@ -174,8 +222,29 @@ fn terminal_helper_event_keeps_raw_diagnostics_out_of_user_output() {
             kind: Some(HelperDisconnectKind::ConnectionFailure),
             reason: "[CredSSP @ /Users/runner/.cargo/git/checkouts/ironrdp/src/connector.rs:107] CredSSP"
                 .to_string(),
+            failure: None,
         }),
         helper_output.disconnect
+    );
+}
+
+#[test]
+fn typed_terminal_failure_survives_the_ipc_boundary() {
+    let mut input = std::io::Cursor::new(
+        b"{\"type\":\"ConnectionFailure\",\"message\":\"ambiguous text\",\"kind\":\"authentication\"}\n"
+            .to_vec(),
+    );
+
+    let helper_output = read_helper_output(&mut input, RemoteDesktopProtocol::Rdp)
+        .expect("helper output reads")
+        .expect("helper output exists");
+
+    assert_eq!(
+        Some(crate::helper_protocol::RdpFailureKind::Authentication),
+        helper_output
+            .disconnect
+            .as_ref()
+            .and_then(|disconnect| disconnect.failure)
     );
 }
 
