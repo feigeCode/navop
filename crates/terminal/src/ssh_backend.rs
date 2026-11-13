@@ -1112,44 +1112,6 @@ impl SshBackend {
                                             }
                                         }
                                     }
-                                    TerminalControlAction::Reintegrate => {
-                                        // 嵌套 shell（sudo -i / su）丢失 integration 后，
-                                        // readiness 卡死在瞬态。注入运行时集成脚本：
-                                        // 新提示符的 OSC InputStart 会无条件把 readiness
-                                        // 翻回 Ready，supervisor 状态自愈。
-                                        match exec_supervisor.reintegrate_shell() {
-                                            Ok(()) => {
-                                                let command = crate::ssh_shell_integration::
-                                                    runtime_shell_integration_command();
-                                                match send_terminal_data(&mut channel, &command)
-                                                    .await
-                                                    .context(
-                                                        "failed to inject shell integration over SSH",
-                                                    )
-                                                {
-                                                    Ok(()) => {
-                                                        let _ = result.send(
-                                                            Ok(TerminalControlOutput {
-                                                                action: request.action,
-                                                                sent: true,
-                                                                readiness_before: None,
-                                                            }),
-                                                        );
-                                                    }
-                                                    Err(error) => {
-                                                        let _ = result.send(
-                                                            Err(TerminalControlError::Disconnected),
-                                                        );
-                                                        disconnect_error = Some(error);
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                            Err(error) => {
-                                                let _ = result.send(Err(error));
-                                            }
-                                        }
-                                    }
                                 }
                             }
                             SshCommand::StartExec {

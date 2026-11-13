@@ -768,7 +768,6 @@ impl Render for PopupWindowContent {
             .justify_center()
             .size_full()
             .bg(cx.theme().background)
-            .opacity(crate::settings::AppSettings::global(cx).window_opacity)
             .when(!auto_hide_titlebar, |this| {
                 this.child(render_popup_titlebar(self.title.clone()))
             })
@@ -913,6 +912,22 @@ mod reuse_contract_tests {
             after_save.contains("push_notification"),
             "close_window_after_save must tell the user when the window could not be closed"
         );
+    }
+
+    #[test]
+    fn popup_transparency_does_not_fade_its_content() {
+        let render = body(POPUP_SOURCE, "impl Render for PopupWindowContent");
+        let whole_tree_opacity = [
+            ".opacity(crate::settings::AppSettings::global(cx).",
+            "window_opacity)",
+        ]
+        .concat();
+
+        assert!(
+            !render.contains(&whole_tree_opacity),
+            "window opacity must only affect the background; applying it to the popup root also fades text and controls"
+        );
+        assert!(render.contains(".bg(cx.theme().background)"));
     }
 
     /// 重新显示时用**本次调用**的 factory 重建 view（经由 `replace_session`）。

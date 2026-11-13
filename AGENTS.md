@@ -467,19 +467,19 @@
 - **验证方式**：覆盖空提示符直接提交且零 ETX、半行输入与 insert-only 输入才清理、busy/unknown 零写入、fresh prompt 握手、`wait_for_output=false` 立即 busy、预取消不排队、取消后不发送控制字符、detached output 不增长、background/nohup 不等 EOF、`terminal.read` 行数/字符上限与滚屏 tail、旧 turn 不清理或污染新 turn；再运行 terminal/tool-runtime/agent-runtime/UI 的定向测试、check 与 clippy。
 - **适用范围**：`crates/terminal/src/exec_supervisor/*`、SSH terminal actor、`terminal.exec` Public MCP/Agent adapter、`agent_runtime` turn cancellation 与 `ai_chat_view` 终态处理。
 
-- **标题**：显式终端 Ctrl+C 必须走 supervisor control，不能复用 Agent 取消或任意输入接口
-- **触发信号**：AI 需要停止当前可见终端的前台任务；有人考虑把 Agent 的 × 映射成 Ctrl+C、把 `"\\u0003"` 当作 `terminal.exec.command`，或直接向 Agent 暴露任意 PTY 字节写入。
-- **根因 / 约束**：Agent turn 取消只表达“停止当前对话等待”，不拥有终端进程；`terminal.exec` 的 safe-replace 只允许在可信 `Ready` prompt 上清理半行并提交命令，而真正需要 Ctrl+C 时通常处于 `SubmissionPending` / `CommandRunning`。任意字节输入会绕过 readiness、审批和自动化 lease，产生竞态或误中断。
-- **正确做法**：使用独立高风险 `terminal.control(action=interrupt)`。由 terminal actor 内的 supervisor 原子检查 readiness，仅在明确的前台运行状态写入一次 ETX (`0x03`)；其他状态全部 fail closed、零写入。control 不移除 exec observer、不伪造 exit code，真实完成仍由 OSC `CommandFinished` / prompt epoch 收口。
-- **验证方式**：覆盖 running/submission-pending 允许、ready/awaiting-prompt not-running、busy/unknown/disconnected 零写入、预取消零入队、control 后 observer 仍由真实终态完成；验证 Agent prompt 区分 `terminal_exec`、`terminal_control` 与取消按钮。
+- **标题**：显式终端 Ctrl+C 必须走 supervisor control，普通命令降级走 write_command + read
+- **触发信号**：AI 需要停止当前可见终端的前台任务；有人考虑把 Agent 的 × 映射成 Ctrl+C、把 `"\\u0003"` 当作 `terminal.exec.command`，或把普通 shell 命令塞进 raw-key 接口。
+- **根因 / 约束**：Agent turn 取消只表达“停止当前对话等待”，不拥有终端进程；`terminal.exec` 的 safe-replace 只允许在可信 `Ready` prompt 上清理半行并提交命令，而真正需要 Ctrl+C 时通常处于 `SubmissionPending` / `CommandRunning`。普通命令也不应伪装成 TUI 原始按键；control 字符会绕过 readiness 和审批语义，产生竞态或误中断。
+- **正确做法**：Ctrl+C 使用独立高风险 `terminal.control(action=interrupt)`，由 terminal actor 内的 supervisor 原子检查 readiness，仅在明确的前台运行状态写入一次 ETX (`0x03`)，其他状态 fail closed、零写入。嵌套 shell/缺少 OSC integration 时，普通单行命令改用 `terminal.write_command` 直接写 PTY，再用 `terminal.read` 观察结果；前台 TUI 的原始按键仍只用 `terminal.write_keys`。control 不移除 exec observer、不伪造 exit code，真实完成仍由 OSC `CommandFinished` / prompt epoch 收口。
+- **验证方式**：覆盖 running/submission-pending 允许、ready/awaiting-prompt not-running、busy/unknown/disconnected 零写入、预取消零入队、control 后 observer 仍由真实终态完成；验证 `terminal.write_command` 拒绝多行/control 字符、默认追加回车、可 stage 不提交，且 Agent prompt 区分 `terminal_exec`、`terminal_write_command`、`terminal_write_keys`、`terminal_control` 与取消按钮。
 - **适用范围**：`crates/terminal/src/exec_supervisor/*`、`crates/terminal/src/ssh_backend.rs`、`crates/terminal_view/src/public_mcp.rs`、Public MCP terminal control 工具与 Agent prompt。
 
-- **标题**：嵌套 shell 卡死 terminal_busy 用 reintegrate 注入恢复，不要尝试 Ctrl+C
-- **触发信号**：用户在可见 SSH 终端里进入 `sudo -i`、`su` 等嵌套 shell 后，`terminal.exec` 持续报 busy，且 `terminal.control action=interrupt` 发过 ETX 仍不恢复；滚屏看是空闲 root 提示符，session state 正常 connected。
-- **根因 / 约束**：shell integration 是登录时一次 eval 注入，不写 rc 文件，嵌套 shell 不继承；root shell 的提示符不再发 OSC 133/OSC 7，supervisor readiness 卡死在 `SubmissionPending`/`CommandRunning` 瞬态（cwd 也停在上报值）。ETX 对无集成 shell 无意义——空提示符上只回显 `^C` 重画提示符，不产生 OSC 事件，readiness 不会翻转；`on_input` 只在 `Ready` 态处理用户回车，手动按回车也救不回来。
-- **正确做法**：`terminal.control action=reintegrate`（High 风险显式动作）：actor 校验无 exec 在途且未断连（`ExecSupervisor::reintegrate_shell`，卡在瞬态 readiness 时放行），向 PTY 写 `runtime_shell_integration_command()`（幂等守卫已剥，root login shell 重置了环境变量，eval 必然生效）。注入后新提示符的 OSC `InputStart` 无条件把 readiness 翻回 Ready，状态机零改动自愈；Agent 等 1-2 秒后重试 exec。Busy 错误必须带 `BusyContext{readiness}` 富化文案引导 Agent 走 read→reintegrate→retry 链路，不要裸字符串。本地终端 reintegrate 返回 `terminal_control_unsupported`（本地集成形态不同，POSIX eval 注入体不适用），未来支持时在 local actor 接对应注入体。
-- **验证方式**：`cargo test -p terminal --lib reintegrate`（门控 fail-closed、瞬态放行、端到端自愈、SSH actor 注入 contract、local Unsupported contract）+ `cargo test -p public_mcp --test terminal_control`（schema enum、parse、reintegrate 结果 readiness_before=null、未知 action 拒绝）+ 三 crate 全量回归与 clippy。
-- **适用范围**：`crates/terminal/src/exec_supervisor/*`、`crates/terminal/src/ssh_backend.rs`、`crates/terminal/src/pty_backend.rs`、`crates/public_mcp/src/tools/terminal_control.rs`、Agent terminal 工具 prompt 与错误文案。
+- **标题**：嵌套 shell 不再重新注入 shell integration，终端出现整段 `_ONETCLI_RUNTIME_SETUP` 就是 reintegrate 回显（Issue #547）
+- **触发信号**：用户在 `sudo -i` / `su` 后的可见终端里看到一整段 `_ONETCLI_RUNTIME_SETUP=1; ... eval $'...'`、`ShellIntegrationReady=1` 脚本；或 Agent 为恢复 `terminal.exec` readiness 触发脚本重新注入。
+- **根因 / 约束**：运行时集成命令约 4KB；`reintegrate` 直接把该命令写入交互 PTY，没有首次注入的 `Injecting` 回显抑制状态，因此命令本体必然显示。重新注入还会依赖远端 shell 解析、OSC marker 和超时兜底，链路比“执行一条用户命令”复杂得多，且失败时容易再次污染终端。
+- **正确做法**：删除 `terminal.control(action=reintegrate)` 及 `ExecSupervisor::reintegrate_shell` 路径。缺少 shell integration 时不要修复 integration，也不要声称能拿到 exit code；用 `terminal.write_command` 将一条命令直接写入可见 PTY（默认追加 `\r`，`submit=false` 可只暂存），随后用只读的 `terminal.read` 查看屏幕/滚动缓冲。该接口不依赖 readiness、OSC 或脚本注入，但必须要求用户明确要在可见终端执行、提示符空闲，并拒绝换行/control 字符；TUI 原始按键仍用 `terminal.write_keys`，Ctrl+C 仍用 `terminal.control(action=interrupt)`。
+- **验证方式**：`cargo test -p public_mcp --test terminal_write_command`（注册、描述、TERMINAL_INPUT capability、默认回车、stage-only、拒绝空/多行/control 输入）+ `cargo test -p public_mcp --test terminal_control`（schema 只剩 interrupt、reintegrate/未知 action 被拒绝）+ `cargo test -p agent_runtime --test integration system_prompt_guides_visible_terminal_requests_to_terminal_exec`（提示词引导 write_command + read）+ `cargo check -p navop_app --no-default-features --features wasm-components,windows-native-rdp,database,shell`。变异验证：把 write_command 改成依赖 `terminal_exec`、忘记追加 `\r` 或让 schema 重新接受 `reintegrate`，对应测试必须转红。
+- **适用范围**：`crates/public_mcp/src/tools/terminal_write_command.rs`、`crates/public_mcp/src/tools/terminal_control.rs`、`crates/terminal/src/exec_supervisor/*`、SSH/local terminal control actor、`crates/agent_runtime/src/tasks/agent_prompt.rs`、终端侧栏 AI 指令。
 
 - **标题**：Agent Auto 模式不进行工具审批，High/Critical 也直接执行
 - **触发信号**：Auto 模式下出现 `NeedUserInput` 工具确认卡，或 Agent→tool_runtime 映射仍把 high-risk policy 设为 `Ask`。

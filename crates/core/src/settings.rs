@@ -1343,6 +1343,7 @@ pub struct AppSettings {
     pub dark_theme: String,
     #[serde(default)]
     pub navop_theme_migrated: bool,
+    /// 窗口背景不透明度；文字、图标和控件保持不透明。
     #[serde(default = "default_window_opacity")]
     pub window_opacity: f32,
     #[serde(default)]

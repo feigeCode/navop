@@ -135,7 +135,7 @@ shell 输出继续分析。
   `~` / `$` 开头保持未引用以便 shell 展开。
 - **可省略 target 的执行入口**：`terminal.exec` 与 `terminal.read` 一样允许省略 `target`，
   由会话的默认终端兜底；多个终端而又没有当前终端时仍然报错，不猜。
-  `terminal.control` / `terminal.write_keys` 继续保持必须显式 target。
+  `terminal.control` / `terminal.write_command` / `terminal.write_keys` 继续保持必须显式 target。
 - **侧栏系统指令**：`terminal_ai_system_instruction` 增加「作用域即现场」「路径工作走
   `terminal_exec`」「`ssh_exec` 显式覆盖 cwd」「没有 cwd 先确认」四条规则，让模型不依赖
   用户每轮重复贴自定义指令。

@@ -86,6 +86,8 @@ fn terminal_tool_selection_rules(tools: &[ToolSpec]) -> String {
     let terminal_exec = find_tool_name(tools, &["terminal_exec", "terminal.exec"]);
     let terminal_read = find_tool_name(tools, &["terminal_read", "terminal.read"]);
     let terminal_control = find_tool_name(tools, &["terminal_control", "terminal.control"]);
+    let terminal_write_command =
+        find_tool_name(tools, &["terminal_write_command", "terminal.write_command"]);
     let terminal_write_keys =
         find_tool_name(tools, &["terminal_write_keys", "terminal.write_keys"]);
     let ssh_exec = find_tool_name(tools, &["ssh_exec", "ssh.exec", "ssh_remote_exec"]);
@@ -104,6 +106,16 @@ fn terminal_tool_selection_rules(tools: &[ToolSpec]) -> String {
     }
     if let Some(name) = terminal_read {
         body.push_str(&t!("AgentRuntime.tool_rule_terminal_read", name = name));
+    }
+    if let Some(name) = terminal_write_command {
+        let exec_name = terminal_exec.unwrap_or("terminal.exec");
+        let read_name = terminal_read.unwrap_or("terminal.read");
+        body.push_str(&t!(
+            "AgentRuntime.tool_rule_terminal_write_command",
+            name = name,
+            exec_name = exec_name,
+            read_name = read_name
+        ));
     }
     if let Some(name) = terminal_control {
         body.push_str(&t!("AgentRuntime.tool_rule_terminal_control", name = name));
@@ -295,5 +307,23 @@ mod tests {
         assert!(prompt.contains("plan_context"));
         assert!(prompt.contains("ssh_exec"));
         assert!(prompt.contains("terminal_exec"));
+    }
+
+    #[test]
+    fn system_prompt_explains_direct_pty_command_fallback() {
+        let tools = tool_specs(&["terminal.exec", "terminal.read", "terminal.write_command"]);
+        let prompt = build_system_prompt(
+            &tools,
+            &ResourceContext::new(),
+            &SkillContext::new(),
+            None,
+            None,
+        );
+
+        assert!(prompt.contains("terminal_write_command"));
+        assert!(prompt.contains("terminal_read"));
+        assert!(prompt.contains("shell integration"));
+        assert!(prompt.contains("nested"));
+        assert!(prompt.contains("Ctrl+C"));
     }
 }

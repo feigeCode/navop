@@ -17,8 +17,9 @@ use std::sync::Arc;
 /// 允许模型省略 `target` 的工具，及其需要的资源类型。
 ///
 /// 省略时由本适配器补上会话的默认资源；显式传 `target` 的行为不变。
-/// 只收可省略且不增加风险的读/执行入口：`terminal.control` 与
-/// `terminal.write_keys` 要求显式 target，因为它们是可控到单个前台程序的危险动作。
+/// 只收可省略且不增加风险的读/执行入口：`terminal.control`、
+/// `terminal.write_command` 与 `terminal.write_keys` 要求显式 target，
+/// 因为它们是可控到单个前台程序的危险动作。
 const DEFAULT_TARGET_TOOLS: [(&str, ResourceKind); 2] = [
     ("terminal.read", ResourceKind::Terminal),
     ("terminal.exec", ResourceKind::Terminal),

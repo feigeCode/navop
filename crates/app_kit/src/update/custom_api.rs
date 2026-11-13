@@ -23,6 +23,26 @@ pub(crate) struct UpdateResponse {
     pub(crate) sha256: Option<String>,
     #[serde(default)]
     sha256s: Option<HashMap<String, String>>,
+    #[serde(default)]
+    packages: Vec<UpdatePackage>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct UpdatePackage {
+    target: String,
+    file: String,
+    url: String,
+    #[serde(default)]
+    github_url: Option<String>,
+    #[serde(default)]
+    sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AppImagePackage {
+    pub(crate) url: String,
+    pub(crate) fallback_url: Option<String>,
+    pub(crate) sha256: Option<String>,
 }
 
 /// 拉取一份更新清单。`Ok(None)` 表示清单不存在（HTTP 404）：测试通道在首个 beta
@@ -85,6 +105,25 @@ pub(crate) fn select_sha256(response: &UpdateResponse) -> Option<String> {
 
 pub(crate) fn select_fallback_download_url(response: &UpdateResponse) -> Option<String> {
     select_fallback_download_url_for_keys(response, platform_download_keys())
+}
+
+pub(crate) fn select_appimage_package(response: &UpdateResponse) -> Option<AppImagePackage> {
+    select_appimage_package_for_target(response, platform_download_keys().first()?)
+}
+
+fn select_appimage_package_for_target(
+    response: &UpdateResponse,
+    target: &str,
+) -> Option<AppImagePackage> {
+    let package = response.packages.iter().find(|package| {
+        package.file.to_ascii_lowercase().ends_with(".appimage") && package.target == target
+    });
+
+    package.map(|package| AppImagePackage {
+        url: package.url.clone(),
+        fallback_url: package.github_url.clone(),
+        sha256: package.sha256.clone(),
+    })
 }
 
 pub(crate) fn platform_download_keys_for(os: &str, arch: &str) -> &'static [&'static str] {
@@ -349,6 +388,43 @@ mod tests {
         assert_eq!(
             Some("i686-sha".to_string()),
             select_sha256_for_keys(&response, keys)
+        );
+    }
+
+    #[test]
+    fn appimage_package_is_selected_from_the_full_installer_assets() {
+        let response = serde_json::from_str::<UpdateResponse>(
+            r#"{
+                "version": "0.23.1",
+                "packages": [
+                    {
+                        "target": "x86_64-unknown-linux-gnu",
+                        "file": "navop-0.23.1-linux-x64.tar.gz",
+                        "url": "https://cdn.example.test/navop-0.23.1-linux-x64.tar.gz",
+                        "github_url": "https://github.example.test/navop-0.23.1-linux-x64.tar.gz",
+                        "sha256": "tar-sha"
+                    },
+                    {
+                        "target": "x86_64-unknown-linux-gnu",
+                        "file": "navop_0.23.1_amd64.AppImage",
+                        "url": "https://cdn.example.test/navop_0.23.1_amd64.AppImage",
+                        "github_url": "https://github.example.test/navop_0.23.1_amd64.AppImage",
+                        "sha256": "appimage-sha"
+                    }
+                ]
+            }"#,
+        )
+        .expect("解析更新清单失败");
+
+        assert_eq!(
+            Some(AppImagePackage {
+                url: "https://cdn.example.test/navop_0.23.1_amd64.AppImage".to_string(),
+                fallback_url: Some(
+                    "https://github.example.test/navop_0.23.1_amd64.AppImage".to_string()
+                ),
+                sha256: Some("appimage-sha".to_string()),
+            }),
+            select_appimage_package_for_target(&response, "x86_64-unknown-linux-gnu")
         );
     }
 }

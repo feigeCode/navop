@@ -86,6 +86,13 @@ pub(crate) fn select_github_asset(release: &GithubRelease) -> Option<&GithubRele
         .find(|asset| asset.name == EXPECTED_ARCHIVE_NAME)
 }
 
+pub(crate) fn select_github_appimage_asset(release: &GithubRelease) -> Option<&GithubReleaseAsset> {
+    release
+        .assets
+        .iter()
+        .find(|asset| asset.name.to_ascii_lowercase().ends_with(".appimage"))
+}
+
 pub(crate) fn github_release_to_dialog_info(
     release: &GithubRelease,
     current_version: &str,
@@ -93,6 +100,26 @@ pub(crate) fn github_release_to_dialog_info(
 ) -> Result<UpdateDialogInfo, String> {
     let asset = select_github_asset(release)
         .ok_or_else(|| format!("未找到当前平台的发布资产: {}", EXPECTED_ARCHIVE_NAME))?;
+
+    Ok(UpdateDialogInfo {
+        current_version: current_version.to_string(),
+        latest_version: release.tag_name.clone(),
+        release_notes: release.body.clone(),
+        download_url: Some(asset.browser_download_url.clone()),
+        fallback_download_url: None,
+        expected_sha256: None,
+        is_local_simulation: false,
+        is_prerelease,
+    })
+}
+
+pub(crate) fn github_release_to_appimage_dialog_info(
+    release: &GithubRelease,
+    current_version: &str,
+    is_prerelease: bool,
+) -> Result<UpdateDialogInfo, String> {
+    let asset = select_github_appimage_asset(release)
+        .ok_or_else(|| format!("未找到当前平台的 AppImage 发布资产: {}", release.tag_name))?;
 
     Ok(UpdateDialogInfo {
         current_version: current_version.to_string(),
@@ -169,6 +196,29 @@ mod tests {
         assert_eq!(
             info.download_url.as_deref(),
             Some("https://example.com/update")
+        );
+    }
+
+    #[test]
+    fn github_release_appimage_selection_ignores_updater_archives() {
+        let release = GithubRelease {
+            tag_name: "v1.2.3".to_string(),
+            body: None,
+            assets: vec![
+                GithubReleaseAsset {
+                    name: "navop-x86_64-unknown-linux-gnu.tar.gz".to_string(),
+                    browser_download_url: "https://github.example.test/updater.tar.gz".to_string(),
+                },
+                GithubReleaseAsset {
+                    name: "navop_1.2.3_amd64.AppImage".to_string(),
+                    browser_download_url: "https://github.example.test/navop.AppImage".to_string(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            Some("https://github.example.test/navop.AppImage"),
+            select_github_appimage_asset(&release).map(|asset| asset.browser_download_url.as_str())
         );
     }
 

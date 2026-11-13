@@ -68,10 +68,10 @@ impl AppearanceSettingsState {
             slider.set_value(value, window, cx);
         });
         AppSettings::update(cx, |settings| settings.window_opacity = value / 100.0);
+        themes::apply_window_opacity(&AppSettings::current(cx), cx);
         if save {
             AppSettings::global(cx).save();
         }
-        window.refresh();
     }
 }
 
@@ -84,11 +84,9 @@ fn subscribe_opacity(
             SliderEvent::Change(value) | SliderEvent::Release(value) => value.start() / 100.0,
         };
         AppSettings::update(cx, |settings| settings.window_opacity = value);
+        themes::apply_window_opacity(&AppSettings::current(cx), cx);
         if matches!(event, SliderEvent::Release(_)) {
             AppSettings::global(cx).save();
-        }
-        if matches!(event, SliderEvent::Release(_)) {
-            cx.refresh_windows();
         }
     })
 }

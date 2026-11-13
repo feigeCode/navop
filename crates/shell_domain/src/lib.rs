@@ -62,6 +62,9 @@ fn register_mcp_toolsets() {
                 mcp_host::runtime_provider(public_mcp::tools::terminal_control_tool_registry(
                     registry.clone(),
                 )),
+                mcp_host::runtime_provider(
+                    public_mcp::tools::terminal_write_command_tool_registry(registry.clone()),
+                ),
                 mcp_host::runtime_provider(public_mcp::tools::terminal_write_keys_tool_registry(
                     registry.clone(),
                 )),

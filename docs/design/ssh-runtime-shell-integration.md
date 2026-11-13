@@ -59,9 +59,12 @@ OSC 133 A/B/C/D + OSC 7 + OSC 1337 协议与旧版完全一致
 " : __ONETCLI_RUNTIME_SETUP_1; eval $'<脚本体>'\r"
 ```
 
-- **前导空格**：`HISTCONTROL=ignorespace`（多数发行版默认）使该行不进 shell history；
+- **前导空格**：`HISTCONTROL=ignorespace`（部分发行版默认）使该行不进 shell history；服务器未配置时不生效，只能依赖下面的清理/拦截兜底（issue #547）；
 - **`eval $'...'`（ANSI-C quoting）**：把 99 行脚本压成单行。单引号内的 `'` 转义为 `\'`，换行转义为 `\n`。bash/zsh 都支持；
-- **bash 历史兜底清理**：脚本尾部用 `history -d` 删除本条目（防 `ignorespace` 未生效）；
+- **bash 历史兜底清理**：脚本尾部用 `history -d` 倒序删除 bootstrap 行与注入行（防 `ignorespace` 未生效）。两个硬约束（issue #547 踩坑）：
+  - 必须按**倒序**（`sort -rn`）删除：每删一条后续条目都会重编号，升序会让第二个序号失效；
+  - 匹配必须用 `if [[ == ]]` 而不是 `case`：bash 解析「双引号内的 `$()`」时，`case` 模式的右括号会被误判为命令替换结束符，整个清理赋值静默断裂（错误被 `2>/dev/null` 吞掉），注入行残留 history；
+- **zsh 历史拦截**：zsh 的 history 关联数组只读，事后无法删除条目。改为在 bootstrap 行里注册 `zshaddhistory` 钩子（`[[ $1 == *__ONETCLI_RUNTIME_SETUP_1* ]] && return 1`），在**入史前**拦下注入大行。钩子必须放在 bootstrap 行而非注入行内：zsh 在「接受该行」时就做入史决策，注入行 eval 体内注册的钩子来不及拦自己。bootstrap 短行（注册钩子的行）自身无法拦自己是已知可接受残留；
 - **`\r` 结尾**：模拟终端 Enter（网络设备 CLI 也只认 CR）。
 
 ### 2. 脚本体来源（`shell_integration.sh`）

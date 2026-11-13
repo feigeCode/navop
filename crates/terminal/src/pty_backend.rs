@@ -635,8 +635,8 @@ fn run_local_exec_supervisor(
                                         }));
                                         true
                                     } else {
-                                        let _ = result
-                                            .send(Err(TerminalControlError::Disconnected));
+                                        let _ =
+                                            result.send(Err(TerminalControlError::Disconnected));
                                         false
                                     }
                                 }
@@ -645,12 +645,6 @@ fn run_local_exec_supervisor(
                                     true
                                 }
                             }
-                        }
-                        // 本地终端集成形态不同（Windows profile 文件 / 未来 Unix
-                        // local 注入），POSIX eval 注入体不适用；fail closed 拒绝。
-                        crate::TerminalControlAction::Reintegrate => {
-                            let _ = result.send(Err(TerminalControlError::Unsupported));
-                            true
                         }
                     }
                 }
