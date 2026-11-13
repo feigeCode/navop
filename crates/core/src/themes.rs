@@ -160,7 +160,29 @@ pub fn apply_appearance(settings: &AppSettings, cx: &mut App) {
     // Theme::change 会通过主题配置的 typography 重置 font_family，这里重新应用
     // 用户配置的通用字体（字号 + 字体族），确保主题切换后字体设置仍生效。
     settings.apply_font_size(cx);
+    apply_window_opacity(settings, cx);
     cx.refresh_windows();
+}
+
+/// Applies the window transparency setting to the background surface only.
+///
+/// GPUI's element-level `opacity` also fades text, icons, borders and controls,
+/// which reads as a brightness control rather than window transparency. The
+/// window itself is already created with a transparent platform background, so
+/// lowering the theme background alpha lets the desktop show through while
+/// keeping content fully opaque.
+pub fn apply_window_opacity(settings: &AppSettings, cx: &mut App) {
+    let opacity = settings.window_opacity.clamp(
+        AppSettings::MIN_WINDOW_OPACITY,
+        AppSettings::MAX_WINDOW_OPACITY,
+    );
+    if (Theme::global(cx).background.a - opacity).abs() <= f32::EPSILON {
+        return;
+    }
+
+    Theme::update(cx, |theme| {
+        theme.background = theme.background.alpha(opacity);
+    });
 }
 
 fn resolve_theme_pair(settings: &AppSettings, cx: &App) -> (Rc<ThemeConfig>, Rc<ThemeConfig>) {
@@ -294,6 +316,26 @@ mod tests {
             super::apply_appearance(&crate::settings::AppSettings::default(), cx);
 
             assert!(!gpui_component::Theme::global(cx).focus_ring);
+        });
+    }
+
+    #[gpui::test]
+    fn window_transparency_changes_background_without_fading_content(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            super::load_bundled(cx);
+            let settings = crate::settings::AppSettings {
+                window_opacity: 0.6,
+                ..Default::default()
+            };
+
+            super::apply_appearance(&settings, cx);
+
+            let theme = gpui_component::Theme::global(cx);
+            assert!((theme.background.a - 0.6).abs() <= f32::EPSILON);
+            assert_eq!(1.0, theme.foreground.a);
         });
     }
 

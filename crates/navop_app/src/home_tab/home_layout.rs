@@ -59,7 +59,10 @@ impl HomePage {
                             .w_full()
                             .min_w_0()
                             .overflow_hidden()
-                            .bg(cx.theme().muted)
+                            .bg(cx
+                                .theme()
+                                .muted
+                                .alpha(AppSettings::global(cx).window_opacity))
                             .child(self.render_content_area(window, cx)),
                     ),
             )

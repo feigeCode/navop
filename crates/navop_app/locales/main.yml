@@ -3027,9 +3027,9 @@ Settings:
         zh-CN: 窗口透明度
         zh-HK: 視窗透明度
       window_opacity_desc:
-        en: Adjust the opacity of the entire application window. Lower values make the background more transparent.
-        zh-CN: 调整整个应用窗口的不透明度，数值越低背景越透明。
-        zh-HK: 調整整個應用視窗的不透明度，數值越低背景越透明。
+        en: Adjust the window background opacity. Lower values let more of the desktop show through while keeping text and controls clear.
+        zh-CN: 调整窗口背景的透明度，数值越低越能透出桌面内容，文字和控件保持清晰。
+        zh-HK: 調整視窗背景的透明度，數值越低越能透出桌面內容，文字和控件保持清晰。
       custom_accent:
         en: Custom Accent Color
         zh-CN: 自定义强调色

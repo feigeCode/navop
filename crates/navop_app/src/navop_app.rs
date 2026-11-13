@@ -2481,6 +2481,17 @@ mod tests {
     }
 
     #[test]
+    fn window_transparency_does_not_fade_the_main_window_content() {
+        let source = include_str!("navop_app.rs");
+        let whole_tree_opacity = [".opacity(AppSettings::global(cx).", "window_opacity)"].concat();
+
+        assert!(
+            !contains_code(source, &whole_tree_opacity),
+            "window opacity must only affect the background; applying it to the main window root also fades text and controls"
+        );
+    }
+
+    #[test]
     fn quit_state_opens_prompt_for_first_request() {
         let mut state = super::QuitRequestState::default();
 
@@ -2845,7 +2856,6 @@ impl Render for NavopApp {
         div()
             .size_full()
             .relative()
-            .opacity(AppSettings::global(cx).window_opacity)
             .drag_over::<ExternalPaths>(|element, _, _, cx| {
                 element.bg(cx.theme().primary.opacity(0.08))
             })
