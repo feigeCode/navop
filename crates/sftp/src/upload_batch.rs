@@ -1,6 +1,6 @@
-//! 目录上传的受限并发调度。
+//! 目录传输的受限并发调度。
 //!
-//! `upload_dir_with_progress` 里每个文件都要付固定的控制往返
+//! `upload_dir_with_progress` / `download_dir_with_progress` 里每个文件都要付固定的控制往返
 //! （`stat` 探测属主 → `open` 暂存文件 → `flush`(含 fsync) → `fstat` 校验 →
 //! `close` → `rename` 发布）。串行执行时，小文件吞吐由「单文件大小 ÷ 往返次数 × RTT」
 //! 决定而不是带宽：30 ms 延迟链路上一个文件就要 180 ms，1000 个小文件跑到 3 分钟以上。
@@ -8,9 +8,8 @@
 //! 这个模块提供两件东西：
 //!
 //! 1. [`run_bounded`]：把多个「每文件」的未来重叠起来，让控制往返互相掩盖；
-//! 2. [`ConcurrencyBudget`]：给大文件留出让步 —— 它们的写入段本来就会填满 SFTP 写窗口
-//!    （`max_concurrent_writes` × `max_write_packet_len`），并发只会成倍放大缓冲字节数，
-//!    换不到额外吞吐。
+//! 2. [`ConcurrencyBudget`]：给大文件留出让步 —— 它们的传输段本来就会填满 SFTP
+//!    窗口，并发只会成倍放大缓冲字节数，换不到额外吞吐。
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -18,8 +17,8 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// 允许同时上传的小文件数量。
-pub(crate) const MAX_CONCURRENT_SMALL_FILE_UPLOADS: usize = 6;
+/// 允许同时传输的小文件数量。
+pub(crate) const MAX_CONCURRENT_SMALL_FILE_TRANSFERS: usize = 6;
 
 /// 超过该大小的文件独占整个并发预算，行为与串行上传完全一致。
 ///
@@ -152,7 +151,7 @@ impl ProgressHighWater {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConcurrencyBudget, MAX_CONCURRENT_SMALL_FILE_UPLOADS, ProgressHighWater,
+        ConcurrencyBudget, MAX_CONCURRENT_SMALL_FILE_TRANSFERS, ProgressHighWater,
         SMALL_FILE_MAX_BYTES, job_weight, run_bounded,
     };
     use std::sync::Arc;
@@ -331,7 +330,7 @@ mod tests {
 
     #[test]
     fn default_concurrency_is_above_one_and_bounded() {
-        assert!(MAX_CONCURRENT_SMALL_FILE_UPLOADS > 1);
-        assert!(MAX_CONCURRENT_SMALL_FILE_UPLOADS <= 16);
+        assert!(MAX_CONCURRENT_SMALL_FILE_TRANSFERS > 1);
+        assert!(MAX_CONCURRENT_SMALL_FILE_TRANSFERS <= 16);
     }
 }
