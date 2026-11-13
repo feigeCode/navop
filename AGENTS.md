@@ -474,12 +474,12 @@
 - **验证方式**：覆盖 running/submission-pending 允许、ready/awaiting-prompt not-running、busy/unknown/disconnected 零写入、预取消零入队、control 后 observer 仍由真实终态完成；验证 `terminal.write_command` 拒绝多行/control 字符、默认追加回车、可 stage 不提交，且 Agent prompt 区分 `terminal_exec`、`terminal_write_command`、`terminal_write_keys`、`terminal_control` 与取消按钮。
 - **适用范围**：`crates/terminal/src/exec_supervisor/*`、`crates/terminal/src/ssh_backend.rs`、`crates/terminal_view/src/public_mcp.rs`、Public MCP terminal control 工具与 Agent prompt。
 
-- **标题**：嵌套 shell 不再重新注入 shell integration，终端出现整段 `_ONETCLI_RUNTIME_SETUP` 就是 reintegrate 回显（Issue #547）
-- **触发信号**：用户在 `sudo -i` / `su` 后的可见终端里看到一整段 `_ONETCLI_RUNTIME_SETUP=1; ... eval $'...'`、`ShellIntegrationReady=1` 脚本；或 Agent 为恢复 `terminal.exec` readiness 触发脚本重新注入。
-- **根因 / 约束**：运行时集成命令约 4KB；`reintegrate` 直接把该命令写入交互 PTY，没有首次注入的 `Injecting` 回显抑制状态，因此命令本体必然显示。重新注入还会依赖远端 shell 解析、OSC marker 和超时兜底，链路比“执行一条用户命令”复杂得多，且失败时容易再次污染终端。
-- **正确做法**：删除 `terminal.control(action=reintegrate)` 及 `ExecSupervisor::reintegrate_shell` 路径。缺少 shell integration 时不要修复 integration，也不要声称能拿到 exit code；用 `terminal.write_command` 将一条命令直接写入可见 PTY（默认追加 `\r`，`submit=false` 可只暂存），随后用只读的 `terminal.read` 查看屏幕/滚动缓冲。该接口不依赖 readiness、OSC 或脚本注入，但必须要求用户明确要在可见终端执行、提示符空闲，并拒绝换行/control 字符；TUI 原始按键仍用 `terminal.write_keys`，Ctrl+C 仍用 `terminal.control(action=interrupt)`。
-- **验证方式**：`cargo test -p public_mcp --test terminal_write_command`（注册、描述、TERMINAL_INPUT capability、默认回车、stage-only、拒绝空/多行/control 输入）+ `cargo test -p public_mcp --test terminal_control`（schema 只剩 interrupt、reintegrate/未知 action 被拒绝）+ `cargo test -p agent_runtime --test integration system_prompt_guides_visible_terminal_requests_to_terminal_exec`（提示词引导 write_command + read）+ `cargo check -p navop_app --no-default-features --features wasm-components,windows-native-rdp,database,shell`。变异验证：把 write_command 改成依赖 `terminal_exec`、忘记追加 `\r` 或让 schema 重新接受 `reintegrate`，对应测试必须转红。
-- **适用范围**：`crates/public_mcp/src/tools/terminal_write_command.rs`、`crates/public_mcp/src/tools/terminal_control.rs`、`crates/terminal/src/exec_supervisor/*`、SSH/local terminal control actor、`crates/agent_runtime/src/tasks/agent_prompt.rs`、终端侧栏 AI 指令。
+- **标题**：运行时 Shell Integration 注入必须同时清理 bash/zsh history（Issue #547）
+- **触发信号**：创建 SSH 连接后，用户按上箭头或用 `history` 能看到整段 `_ONETCLI_RUNTIME_SETUP=1; ... eval $'...'`；用户通常以为前置空格已经让该命令被 history 忽略。
+- **根因 / 约束**：前置空格只有在 bash `HISTCONTROL` 含 `ignorespace`、zsh 开启 `HIST_IGNORE_SPACE` 时才生效，并非所有环境默认开启。Bootstrap 与完整注入两条命令都含 `__ONETCLI_RUNTIME_SETUP_1`，bash 旧清理按 history 编号升序删除：删除第一条后后续编号前移，于是另一条被留下；zsh 没有 `history -d`，旧实现甚至没有清理分支。
+- **正确做法**：在完整注入脚本末尾、ready marker 之前清理。bash 先收集所有匹配编号，再从数组末尾向前 `history -d`，避免编号移位；zsh 使用 `fc -p "${HISTFILE:-/dev/null}"` 重新读取磁盘历史上下文，从而丢弃当前会话刚写入的 bootstrap/完整注入；若原本没有 `HISTFILE`，随后继续 `unset HISTFILE`。不要为清理写临时历史文件，运行时注入仍保持远端零写入。前置空格继续保留，但不能把它当唯一保护；该 issue 与 `terminal.write_command` / 已删除的 `reintegrate` 是两条不同链路。
+- **验证方式**：`cargo test -p terminal --lib runtime_command_` 必须覆盖命令长度、bash 逆序删除与 zsh `fc -p` 清理；手工用真实交互 bash（先执行一条 bootstrap 和一条完整 marker 命令）确认 `history` 两条都消失；用真实 zsh 的 `HISTFILE` 有值/无值两种场景确认 `history` 不再显示注入且 `HISTSIZE`/`SAVEHIST` 不变。变异验证：把 bash 改回升序删除，或去掉 zsh `fc -p`，真实 `history` 必须重新出现注入。
+- **适用范围**：`crates/terminal/src/ssh_shell_integration.rs`、SSH 运行时 Shell Integration 注入、bash/zsh history 清理与相关设计文档。
 
 - **标题**：Agent Auto 模式不进行工具审批，High/Critical 也直接执行
 - **触发信号**：Auto 模式下出现 `NeedUserInput` 工具确认卡，或 Agent→tool_runtime 映射仍把 high-risk policy 设为 `Ask`。
