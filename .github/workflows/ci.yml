@@ -146,10 +146,13 @@ jobs:
       - name: Test release packaging
         if: ${{ matrix.run_on == 'ubuntu-latest' }}
         run: node --test script/test-release-packaging.mjs
+      # 固定 1.99.1：cargo 1.100 的新构建布局在 Windows 上把 rustc 命令行撑到
+      # 4.4 万字符，超过 CreateProcess 上限，sccache 无法 spawn。
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
+          toolchain: 1.99.1
           cache: false
       # sccache 只是构建加速器：GitHub Release CDN 偶发 504 会让下载安装失败，
       # 此时必须退化成无缓存构建，而不是让整个测试 job 失败。
@@ -166,9 +169,21 @@ jobs:
             echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
             exit 0
           fi
-          sccache --start-server
+          # GHA cache 后端偶发 ServerBusy（例如 "Egress is over the account
+          # limit."），sccache 启动失败时降级为无缓存构建，避免 job 直接挂掉。
+          sccache_started=0
+          for attempt in 1 2 3; do
+            if sccache --start-server; then sccache_started=1; break; fi
+            echo "::warning::sccache 启动失败（第 $attempt 次），10 秒后重试"
+            sleep 10
+          done
+          if [ "$sccache_started" != "1" ]; then
+            echo "::warning::sccache 缓存后端不可用，本次构建退化为无编译器缓存"
+            echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+            exit 0
+          fi
           sccache --zero-stats
-          sccache --show-stats
+          sccache --show-stats || true
       - name: Restore shared Cargo inputs
         uses: actions/cache@v6
         with:
@@ -241,9 +256,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # 固定 1.99.1：cargo 1.100 的新构建布局在 Windows 上把 rustc 命令行撑到
+      # 4.4 万字符，超过 CreateProcess 上限，sccache 无法 spawn。
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: 1.99.1
           cache: false
       - name: Setup sccache
         id: sccache
@@ -258,7 +276,19 @@ jobs:
             echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
             exit 0
           fi
-          sccache --start-server
+          # GHA cache 后端偶发 ServerBusy（例如 "Egress is over the account
+          # limit."），sccache 启动失败时降级为无缓存构建，避免 job 直接挂掉。
+          sccache_started=0
+          for attempt in 1 2 3; do
+            if sccache --start-server; then sccache_started=1; break; fi
+            echo "::warning::sccache 启动失败（第 $attempt 次），10 秒后重试"
+            sleep 10
+          done
+          if [ "$sccache_started" != "1" ]; then
+            echo "::warning::sccache 缓存后端不可用，本次构建退化为无编译器缓存"
+            echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+            exit 0
+          fi
           sccache --zero-stats
       - name: Restore shared Cargo inputs
         uses: actions/cache@v6
@@ -326,10 +356,13 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ contains(matrix.target, 'i686') && 'x86' || 'x64' }}
+      # 固定 1.99.1：cargo 1.100 的新构建布局在 Windows 上把 rustc 命令行撑到
+      # 4.4 万字符，超过 CreateProcess 上限，sccache 无法 spawn。
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
+          toolchain: 1.99.1
           cache: false
       - name: Setup sccache
         id: sccache
@@ -344,8 +377,20 @@ jobs:
             echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
             exit 0
           fi
-          sccache --start-server
-          sccache --show-stats
+          # GHA cache 后端偶发 ServerBusy（例如 "Egress is over the account
+          # limit."），sccache 启动失败时降级为无缓存构建，避免 job 直接挂掉。
+          sccache_started=0
+          for attempt in 1 2 3; do
+            if sccache --start-server; then sccache_started=1; break; fi
+            echo "::warning::sccache 启动失败（第 $attempt 次），10 秒后重试"
+            sleep 10
+          done
+          if [ "$sccache_started" != "1" ]; then
+            echo "::warning::sccache 缓存后端不可用，本次构建退化为无编译器缓存"
+            echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          sccache --show-stats || true
       - name: Restore shared Cargo inputs
         uses: actions/cache@v6
         with:
@@ -410,10 +455,13 @@ jobs:
           $env:Path = "$nasmDir;$env:Path"
           $nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           nasm -v
+      # 固定 1.99.1：cargo 1.100 的新构建布局在 Windows 上把 rustc 命令行撑到
+      # 4.4 万字符，超过 CreateProcess 上限，sccache 无法 spawn。
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
+          toolchain: 1.99.1
           cache: false
       - name: Build ATL/MSVC probe
         shell: pwsh
