@@ -66,11 +66,11 @@ impl TerminalExecError {
         let hint = format!(
             "terminal_busy (readiness={readiness}): the visible terminal is not at an \
              idle integrated prompt. If the user entered a nested shell (sudo -i, su) or a \
-             TUI is occupying the prompt, run terminal.read to inspect the live prompt, then \
-             call terminal.control action=reintegrate at an idle prompt to restore shell \
-             integration, wait one prompt cycle, and retry; or ask the user to exit the \
-             nested shell. To run one-off commands without readiness, use \
-             terminal.write_keys + terminal.read."
+             TUI is occupying the prompt, call terminal.read to inspect the live prompt. When \
+             shell integration is unavailable but the prompt is idle, use terminal.write_command \
+             to write one command directly to the PTY, then call terminal.read to inspect its \
+             visible output; or ask the user to exit the nested shell. To interact with a TUI, \
+             use terminal.write_keys."
         );
         hint
     }
@@ -79,9 +79,7 @@ impl TerminalExecError {
 impl fmt::Display for TerminalExecError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BusyContext { readiness } => {
-                formatter.write_str(&Self::recovery_hint(readiness))
-            }
+            Self::BusyContext { readiness } => formatter.write_str(&Self::recovery_hint(readiness)),
             Self::Busy => formatter.write_str("terminal_busy"),
             Self::ReadinessUnknown => formatter.write_str("readiness_unknown"),
             Self::Disconnected => formatter.write_str("terminal_disconnected"),

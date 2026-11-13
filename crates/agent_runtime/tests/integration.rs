@@ -1718,6 +1718,11 @@ async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
                     RiskLevel::High,
                 )))
                 .with_tool(Arc::new(PromptOnlyTool::new(
+                    "terminal.write_command",
+                    "Write a command directly to a visible terminal.",
+                    RiskLevel::High,
+                )))
+                .with_tool(Arc::new(PromptOnlyTool::new(
                     "terminal.write_keys",
                     "Write raw key bytes to a visible terminal.",
                     RiskLevel::High,
@@ -1748,6 +1753,7 @@ async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
     let system = requests[0].messages[0].content_as_text();
     assert!(system.contains("terminal_exec"));
     assert!(system.contains("terminal_control"));
+    assert!(system.contains("terminal_write_command"));
     assert!(system.contains("terminal_write_keys"));
     assert!(system.contains("[58,119,113,13]"));
     assert!(system.contains("PTY"));

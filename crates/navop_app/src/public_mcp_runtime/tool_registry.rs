@@ -9,7 +9,8 @@ use public_mcp::tools::{
 #[cfg(feature = "shell")]
 use public_mcp::tools::{
     remote_ops_tool_registry, terminal_control_tool_registry, terminal_exec_tool_registry,
-    terminal_read_tool_registry, terminal_write_keys_tool_registry,
+    terminal_read_tool_registry, terminal_write_command_tool_registry,
+    terminal_write_keys_tool_registry,
 };
 use std::sync::Arc;
 
@@ -116,6 +117,7 @@ fn build_tool_registry_for_surface(
                 runtime_registries.push(terminal_exec_tool_registry(registry.clone()));
                 runtime_registries.push(terminal_read_tool_registry(registry.clone()));
                 runtime_registries.push(terminal_control_tool_registry(registry.clone()));
+                runtime_registries.push(terminal_write_command_tool_registry(registry.clone()));
                 runtime_registries.push(terminal_write_keys_tool_registry(registry));
             }
         } else {
@@ -585,6 +587,11 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.name == "ssh.exec"));
         assert!(tools.iter().any(|tool| tool.name == "terminal.exec"));
         assert!(tools.iter().any(|tool| tool.name == "terminal.control"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "terminal.write_command")
+        );
     }
 
     #[gpui::test]
@@ -608,6 +615,11 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.name == "ssh.exec"));
         assert!(!tools.iter().any(|tool| tool.name == "terminal.exec"));
         assert!(!tools.iter().any(|tool| tool.name == "terminal.control"));
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.name == "terminal.write_command")
+        );
     }
 
     #[gpui::test]
@@ -632,6 +644,11 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.name == "terminal.exec"));
         assert!(tools.iter().any(|tool| tool.name == "terminal.read"));
         assert!(tools.iter().any(|tool| tool.name == "terminal.control"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "terminal.write_command")
+        );
     }
 
     #[gpui::test]

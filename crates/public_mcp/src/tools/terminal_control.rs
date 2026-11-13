@@ -82,8 +82,8 @@ fn control_schema() -> Value {
             },
             "action": {
                 "type": "string",
-                "enum": ["interrupt", "reintegrate"],
-                "description": "Explicit terminal control action. `interrupt` sends Ctrl-C to the foreground command in the integrated shell. `reintegrate` re-injects the runtime shell integration script to restore OSC prompt events lost after entering a nested shell (sudo -i, su); use it when terminal.exec keeps returning terminal_busy at an idle prompt, and only when the prompt is idle — the injected bytes would be consumed by a running TUI program. After reintegrate, wait for the next prompt, then retry terminal.exec."
+                "enum": ["interrupt"],
+                "description": "Explicit terminal control action. `interrupt` sends Ctrl-C only when the visible terminal is in a known foreground-running state."
             }
         },
         "required": ["target", "action"]
@@ -94,7 +94,6 @@ fn parse_control_request(input: Value) -> Result<TerminalControlRequest, ToolErr
     let target = required_str(&input, "target")?.to_string();
     let action = match required_str(&input, "action")? {
         "interrupt" => TerminalControlAction::Interrupt,
-        "reintegrate" => TerminalControlAction::Reintegrate,
         action => {
             return Err(ToolError::Failed {
                 message: format!("unsupported terminal control action `{action}`"),

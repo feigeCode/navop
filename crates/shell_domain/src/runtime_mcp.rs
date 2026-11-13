@@ -5,7 +5,8 @@ use gpui::App;
 use one_core::storage::{ConnectionRepository, GlobalStorageState};
 use public_mcp::tools::{
     remote_ops_tool_registry, terminal_control_tool_registry, terminal_exec_tool_registry,
-    terminal_read_tool_registry, terminal_write_keys_tool_registry,
+    terminal_read_tool_registry, terminal_write_command_tool_registry,
+    terminal_write_keys_tool_registry,
 };
 use tool_runtime::ToolRegistry;
 
@@ -45,6 +46,7 @@ impl RuntimeMcpProviders for ShellRuntimeMcp {
                         registries.push(terminal_exec_tool_registry(registry.clone()));
                         registries.push(terminal_read_tool_registry(registry.clone()));
                         registries.push(terminal_control_tool_registry(registry.clone()));
+                        registries.push(terminal_write_command_tool_registry(registry.clone()));
                         registries.push(terminal_write_keys_tool_registry(registry));
                     }
                 }

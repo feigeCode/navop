@@ -564,7 +564,6 @@ fn map_exec_completion(completion: CoreTerminalExecCompletion) -> TerminalExecCo
 fn map_control_action(action: TerminalControlAction) -> CoreTerminalControlAction {
     match action {
         TerminalControlAction::Interrupt => CoreTerminalControlAction::Interrupt,
-        TerminalControlAction::Reintegrate => CoreTerminalControlAction::Reintegrate,
     }
 }
 

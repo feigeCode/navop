@@ -156,6 +156,33 @@ fn terminal_control_target_requires_control_capability() {
 }
 
 #[test]
+fn terminal_write_command_target_requires_input_capability() {
+    let pool = ResourcePool::new()
+        .with_resource(
+            ResourceRef::new("terminal-exec", ResourceKind::Terminal, "prod-a")
+                .with_alias("21")
+                .with_capability(ResourceCapability::TerminalExec),
+        )
+        .with_resource(
+            ResourceRef::new("terminal-input", ResourceKind::Terminal, "prod-a")
+                .with_alias("21")
+                .with_capability(ResourceCapability::TerminalInput),
+        );
+
+    let target = pool
+        .resolve_target_for_spec(
+            "21",
+            &ToolTargetSpec::required_with_capabilities(
+                vec![ResourceKind::Terminal],
+                vec![ResourceCapability::TerminalInput],
+            ),
+        )
+        .expect("terminal.write_command should resolve to input-capable terminal");
+
+    assert_eq!(ResourceId::new("terminal-input"), target.id);
+}
+
+#[test]
 fn target_spec_reports_matched_target_without_required_capability() {
     let pool = ResourcePool::new()
         .with_resource(
