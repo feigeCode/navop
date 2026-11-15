@@ -7,7 +7,7 @@ use crate::{
 use connection_tunnel::{TunnelGuard, start_proxy_tunnel};
 
 const MIN_RDP_PROVIDER_VERSION: &str = "0.4.0";
-const MIN_VNC_PROVIDER_VERSION: &str = "0.3.0";
+const MIN_VNC_PROVIDER_VERSION: &str = "0.3.1";
 
 pub trait RemoteDesktopBackend: Send + 'static {
     fn name(&self) -> &'static str {

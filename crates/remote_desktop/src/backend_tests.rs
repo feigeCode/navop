@@ -93,7 +93,7 @@ fn create_backend_with_registry_rejects_outdated_vnc_provider() {
         .expect("version error");
     assert_eq!(RemoteDesktopProtocol::Vnc, version_error.protocol);
     assert_eq!("0.2.1", version_error.installed);
-    assert_eq!("0.3.0", version_error.required);
+    assert_eq!("0.3.1", version_error.required);
     assert!(!version_error.invalid);
 }
 
