@@ -1098,12 +1098,11 @@ fn should_apply_local_listing(
 }
 
 fn is_valid_entry_name(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.contains('\0')
+    sftp::is_valid_remote_entry_name(name)
+}
+
+fn safe_local_download_path(local_root: &std::path::Path, remote_name: &str) -> Option<PathBuf> {
+    is_valid_entry_name(remote_name).then(|| local_root.join(remote_name))
 }
 
 fn breadcrumb_item_min_width(label: &str) -> f32 {
@@ -4867,6 +4866,10 @@ impl SftpView {
         let mut has_conflict = false;
 
         for entry in &selected_entries {
+            let Some(local_path) = safe_local_download_path(&local_path, &entry.name) else {
+                window.push_notification(Notification::error(t!("Error.invalid_name")), cx);
+                return;
+            };
             let conflict = local_names.contains(&entry.name);
             if conflict {
                 has_conflict = true;
@@ -4874,7 +4877,7 @@ impl SftpView {
 
             pending_transfers.push(PendingTransfer {
                 name: entry.name.clone(),
-                local_path: local_path.join(&entry.name),
+                local_path,
                 remote_path: join_remote_path(&remote_path, &entry.name),
                 is_dir: entry.is_dir,
                 has_conflict: conflict,
@@ -6054,6 +6057,10 @@ impl SftpView {
         let mut has_conflict = false;
 
         for item in &dragged.items {
+            let Some(download_path) = safe_local_download_path(&local_path, &item.name) else {
+                window.push_notification(Notification::error(t!("Error.invalid_name")), cx);
+                return;
+            };
             let conflict = local_names.contains(&item.name);
             if conflict {
                 has_conflict = true;
@@ -6061,7 +6068,7 @@ impl SftpView {
 
             pending_transfers.push(PendingTransfer {
                 name: item.name.clone(),
-                local_path: local_path.join(&item.name),
+                local_path: download_path,
                 remote_path: item.full_path.clone(),
                 is_dir: item.is_dir,
                 has_conflict: conflict,
@@ -7859,9 +7866,10 @@ mod tests {
         mark_server_copy_directory_replacements, prepare_global_download,
         prepare_global_remote_delete, prepare_global_upload, reconcile_global_transfer_snapshot,
         release_transfer_client, remote_path_parent, resolve_upload_conflict,
-        resolve_upload_conflicts, server_copy_conflict_flags, should_apply_local_listing,
-        should_apply_remote_listing, should_refresh_transfer_target, tab_connection_status,
-        transfer_error_summary, transfer_task_state_from_global, upload_directory_conflict_policy,
+        resolve_upload_conflicts, safe_local_download_path, server_copy_conflict_flags,
+        should_apply_local_listing, should_apply_remote_listing, should_refresh_transfer_target,
+        tab_connection_status, transfer_error_summary, transfer_task_state_from_global,
+        upload_directory_conflict_policy,
     };
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
@@ -9522,6 +9530,18 @@ mod tests {
         assert!(!is_valid_entry_name("../notes.txt"));
         assert!(!is_valid_entry_name("."));
         assert!(!is_valid_entry_name(""));
+    }
+
+    #[test]
+    fn remote_download_targets_reject_traversal_and_absolute_names() {
+        let root = std::path::Path::new("/chosen-download");
+        assert_eq!(
+            Some(root.join("notes.txt")),
+            safe_local_download_path(root, "notes.txt")
+        );
+        assert_eq!(None, safe_local_download_path(root, "../outside.txt"));
+        assert_eq!(None, safe_local_download_path(root, "/tmp/outside.txt"));
+        assert_eq!(None, safe_local_download_path(root, "..\\outside.txt"));
     }
 
     #[test]

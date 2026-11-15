@@ -13,6 +13,7 @@ mod upload_batch;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use ssh::SshConnectConfig;
+use std::path::{Component, Path};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::SystemTime;
@@ -101,6 +102,30 @@ impl std::fmt::Display for TransferCancelled {
 impl std::error::Error for TransferCancelled {}
 
 pub type ProgressCallback = Box<dyn Fn(TransferProgress) + Send + Sync + 'static>;
+
+/// Whether a server-provided directory entry can be used as one local path
+/// component without escaping its parent directory.
+///
+/// SFTP servers control the raw `filename` bytes in `SSH_FXP_NAME`. Even
+/// though a normal POSIX server cannot put `/` in a filename, a malicious
+/// server can return values such as `../outside.txt`. Validate every entry
+/// before path construction; components are deliberately rejected on every
+/// platform so a listing cannot become traversal after transferring between
+/// Unix and Windows.
+pub fn is_valid_remote_entry_name(name: &str) -> bool {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0')
+    {
+        return false;
+    }
+
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
 
 pub(crate) fn validate_read_size(file_size: usize, max_bytes: usize) -> Result<()> {
     if file_size > max_bytes {
@@ -319,7 +344,7 @@ impl<T: RemoteFileClient + ?Sized + Send + Sync> RemoteFileClient for Box<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileEntry, validate_read_size};
+    use super::{FileEntry, is_valid_remote_entry_name, validate_read_size};
     use std::time::SystemTime;
 
     fn file_entry(user: Option<&str>, uid: Option<u32>) -> FileEntry {
@@ -347,6 +372,44 @@ mod tests {
     fn validate_read_size_rejects_files_larger_than_limit() {
         let error = validate_read_size(1025, 1024).expect_err("应拒绝超限文件");
         assert!(error.to_string().contains("exceeds max readable size"));
+    }
+
+    #[test]
+    fn remote_entry_name_validation_accepts_one_normal_component() {
+        for name in ["notes.txt", "folder", "archive.tar.gz", "文件名.txt"] {
+            assert!(
+                is_valid_remote_entry_name(name),
+                "{name:?} should be a safe single path component"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_entry_name_validation_rejects_path_traversal_and_separators() {
+        for name in [
+            "",
+            ".",
+            "..",
+            "../outside.txt",
+            "folder/../../outside.txt",
+            "/tmp/outside.txt",
+            "..\\outside.txt",
+            "folder\\outside.txt",
+            "nul\0byte",
+        ] {
+            assert!(
+                !is_valid_remote_entry_name(name),
+                "{name:?} must be rejected as a server-controlled path component"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn remote_entry_name_validation_rejects_windows_prefixes() {
+        assert!(!is_valid_remote_entry_name("C:outside.txt"));
+        assert!(!is_valid_remote_entry_name(r"C:\outside.txt"));
+        assert!(!is_valid_remote_entry_name(r"\\server\share\outside.txt"));
     }
 
     #[test]

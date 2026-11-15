@@ -1284,6 +1284,9 @@ fn download_targets_for_selection(
         .filter_map(|filtered_ix| {
             let real_ix = *filtered_indices.get(filtered_ix)?;
             let item = items.get(real_ix)?;
+            if !sftp::is_valid_remote_entry_name(&item.name) {
+                return None;
+            }
             Some(DownloadTarget {
                 name: item.name.clone(),
                 path: join_remote_path(current_path, &item.name),
@@ -4263,6 +4266,10 @@ impl FileManagerPanel {
             .next()
             .unwrap_or(&remote_path)
             .to_string();
+        if !sftp::is_valid_remote_entry_name(&remote_name) {
+            window.push_notification(Notification::error(t!("Error.invalid_name")), cx);
+            return;
+        }
 
         self.download_targets(
             vec![DownloadTarget {
@@ -8057,6 +8064,41 @@ mod tests {
             ],
             targets
         );
+    }
+
+    #[test]
+    fn download_targets_skip_server_names_that_are_not_single_components() {
+        let items = vec![
+            super::RemoteFileItem {
+                name: "../outside.txt".to_string(),
+                size: 10,
+                modified: std::time::UNIX_EPOCH,
+                is_dir: false,
+                permissions: String::new(),
+                owner: None,
+                directory_size: super::DirectorySizeState::Unknown,
+            },
+            super::RemoteFileItem {
+                name: "safe.txt".to_string(),
+                size: 10,
+                modified: std::time::UNIX_EPOCH,
+                is_dir: false,
+                permissions: String::new(),
+                owner: None,
+                directory_size: super::DirectorySizeState::Unknown,
+            },
+        ];
+
+        let targets = super::download_targets_for_selection(
+            "/srv/app",
+            &items,
+            &[0, 1],
+            &HashSet::from([0usize, 1usize]),
+        );
+
+        assert_eq!(1, targets.len());
+        assert_eq!("safe.txt", targets[0].name);
+        assert_eq!("/srv/app/safe.txt", targets[0].path);
     }
 
     #[test]

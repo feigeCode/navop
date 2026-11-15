@@ -27,14 +27,9 @@ pub(super) enum ListLine {
 
 /// LIST 返回的名称只接受单层名称。
 ///
-/// 拒绝：空名、`.`、`..`、包含 `/`、`\`、NUL 的名称。
+/// 拒绝：空名、`.`、`..`、包含 `/`、`\`、NUL，以及平台路径前缀。
 pub(super) fn is_valid_remote_name(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.contains('\0')
+    sftp::is_valid_remote_entry_name(name)
 }
 
 /// 解析一行 Unix 风格 `ls -l` 输出。

@@ -4,7 +4,8 @@ use crate::upload_batch::{
 };
 use crate::{
     DirectoryConflictPolicy, FileEntry, PathMetadata, ProgressCallback, RemoteFileClient,
-    SftpClient, TransferCancelled, TransferProgress, validate_read_size,
+    SftpClient, TransferCancelled, TransferProgress, is_valid_remote_entry_name,
+    validate_read_size,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -26,7 +27,7 @@ use ssh::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -181,6 +182,147 @@ impl Drop for LocalDownloadTemp {
             let _ = std::fs::remove_file(&self.path);
         }
     }
+}
+
+fn remote_download_root(remote_path: &str) -> &str {
+    let trimmed = remote_path.trim_end_matches('/');
+    if trimmed.is_empty() && remote_path.starts_with('/') {
+        "/"
+    } else {
+        trimmed
+    }
+}
+
+/// Convert an SFTP entry path into a relative local path made only from
+/// validated single-component names. `strip_prefix` is deliberately followed
+/// by a component check because it is lexical and does not resolve `..`.
+fn remote_download_relative_path(base_remote: &str, entry_path: &str) -> Result<PathBuf> {
+    let relative = strip_remote_download_root(base_remote, entry_path)?;
+    if relative.is_empty() {
+        return Ok(PathBuf::new());
+    }
+
+    let mut safe_path = PathBuf::new();
+    for component in relative.split('/') {
+        if component.is_empty() || !is_valid_remote_entry_name(component) {
+            return Err(anyhow!(
+                "Refusing unsafe remote entry path: {:?}",
+                entry_path
+            ));
+        }
+        safe_path.push(component);
+    }
+    Ok(safe_path)
+}
+
+fn strip_remote_download_root<'a>(base_remote: &str, entry_path: &'a str) -> Result<&'a str> {
+    let relative = if base_remote == "/" {
+        entry_path.strip_prefix('/').ok_or_else(|| {
+            anyhow!(
+                "Refusing remote path outside the download root: {:?}",
+                entry_path
+            )
+        })?
+    } else if base_remote.is_empty() {
+        entry_path
+    } else {
+        let relative = entry_path.strip_prefix(base_remote).ok_or_else(|| {
+            anyhow!(
+                "Refusing remote path outside the download root: {:?}",
+                entry_path
+            )
+        })?;
+        if !relative.is_empty() && !relative.starts_with('/') {
+            return Err(anyhow!(
+                "Refusing remote path outside the download root: {:?}",
+                entry_path
+            ));
+        }
+        relative
+    };
+
+    Ok(relative.trim_start_matches('/'))
+}
+
+/// Create the requested relative directory below `root` without following
+/// symlinks (or Windows junctions) that resolve outside the chosen root.
+async fn ensure_safe_local_directory(root: &Path, relative: &Path) -> Result<PathBuf> {
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            return Err(anyhow!(
+                "Refusing unsafe local download path component: {:?}",
+                relative
+            ));
+        };
+        current.push(name);
+        let metadata = local_download_directory_metadata(&current).await?;
+        validate_local_download_directory(&current, &metadata)?;
+        current = canonical_local_download_directory(&current, root).await?;
+    }
+    Ok(current)
+}
+
+async fn local_download_directory_metadata(path: &Path) -> Result<std::fs::Metadata> {
+    match fs::symlink_metadata(path).await {
+        Ok(metadata) => Ok(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            create_local_download_directory(path).await?;
+            fs::symlink_metadata(path)
+                .await
+                .map_err(|error| anyhow!("Failed to inspect local directory {:?}: {}", path, error))
+        }
+        Err(error) => Err(anyhow!(
+            "Failed to inspect local directory {:?}: {}",
+            path,
+            error
+        )),
+    }
+}
+
+async fn create_local_download_directory(path: &Path) -> Result<()> {
+    match fs::create_dir(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(anyhow!(
+            "Failed to create local directory {:?}: {}",
+            path,
+            error
+        )),
+    }
+}
+
+fn validate_local_download_directory(path: &Path, metadata: &std::fs::Metadata) -> Result<()> {
+    if metadata.file_type().is_symlink() {
+        return Err(anyhow!(
+            "Refusing to traverse local symlink: {}",
+            path.display()
+        ));
+    }
+    if !metadata.is_dir() {
+        return Err(anyhow!(
+            "Local download path is not a directory: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+async fn canonical_local_download_directory(path: &Path, root: &Path) -> Result<PathBuf> {
+    let canonical = fs::canonicalize(path).await.map_err(|error| {
+        anyhow!(
+            "Failed to resolve local download directory {:?}: {}",
+            path,
+            error
+        )
+    })?;
+    if !canonical.starts_with(root) {
+        return Err(anyhow!(
+            "Refusing local directory outside download root: {}",
+            canonical.display()
+        ));
+    }
+    Ok(canonical)
 }
 
 /// A remote upload is staged beside its destination and published with one
@@ -2367,6 +2509,13 @@ impl RemoteFileClient for RusshSftpClient {
             if file_name == "." || file_name == ".." {
                 continue;
             }
+            if !is_valid_remote_entry_name(&file_name) {
+                return Err(anyhow!(
+                    "Refusing unsafe SFTP directory entry name in {}: {:?}",
+                    path,
+                    file_name
+                ));
+            }
 
             let metadata = entry.metadata();
             let size = metadata.size.unwrap_or(0);
@@ -2828,6 +2977,13 @@ impl RemoteFileClient for RusshSftpClient {
 
             for entry in entries {
                 ensure_not_cancelled(&cancelled)?;
+                if !is_valid_remote_entry_name(&entry.name) {
+                    return Err(anyhow!(
+                        "Refusing unsafe SFTP directory entry name in {}: {:?}",
+                        current_dir,
+                        entry.name
+                    ));
+                }
                 let full_path = if current_dir == "/" {
                     format!("/{}", entry.name)
                 } else {
@@ -2869,27 +3025,25 @@ impl RemoteFileClient for RusshSftpClient {
 
         let total_size: u64 = entries.iter().filter(|e| !e.is_dir).map(|e| e.size).sum();
 
-        let base_remote = remote_path.trim_end_matches('/');
+        let base_remote = remote_download_root(remote_path);
         let base_local = std::path::Path::new(local_path);
 
-        std::fs::create_dir_all(base_local)
+        fs::create_dir_all(base_local)
+            .await
             .map_err(|e| anyhow!("Failed to create local directory {}: {}", local_path, e))?;
+        let base_local = fs::canonicalize(base_local)
+            .await
+            .map_err(|e| anyhow!("Failed to resolve local directory {}: {}", local_path, e))?;
 
         let mut dirs: Vec<&FileEntry> = entries.iter().filter(|e| e.is_dir).collect();
         dirs.sort_by_key(|dir| dir.path.len());
         for dir_entry in dirs {
             ensure_not_cancelled(&cancelled)?;
-            let relative = dir_entry
-                .path
-                .strip_prefix(base_remote)
-                .unwrap_or(&dir_entry.path);
-            let relative = relative.trim_start_matches('/');
-            if relative.is_empty() {
+            let relative = remote_download_relative_path(base_remote, &dir_entry.path)?;
+            if relative.as_os_str().is_empty() {
                 continue;
             }
-            let local_dir = base_local.join(relative);
-            std::fs::create_dir_all(&local_dir)
-                .map_err(|e| anyhow!("Failed to create directory {:?}: {}", local_dir, e))?;
+            ensure_safe_local_directory(&base_local, &relative).await?;
         }
 
         let files: Vec<&FileEntry> = entries.iter().filter(|e| !e.is_dir).collect();
@@ -2926,6 +3080,7 @@ impl RemoteFileClient for RusshSftpClient {
         let published_ref = &published;
         let raw_session_ref = &raw_session;
         let raw_session_failed_ref = &raw_session_failed;
+        let base_local_ref = &base_local;
 
         let result: Result<(), anyhow::Error> = run_bounded(
             files,
@@ -2935,22 +3090,18 @@ impl RemoteFileClient for RusshSftpClient {
                 let raw_session = raw_session_ref.clone();
                 async move {
                     ensure_not_cancelled(cancelled_ref)?;
-                    let relative = file_entry
-                        .path
-                        .strip_prefix(base_remote)
-                        .unwrap_or(&file_entry.path);
-                    let relative = relative.trim_start_matches('/');
-                    let local_file = base_local.join(relative);
-
-                    if let Some(parent) = local_file.parent() {
-                        std::fs::create_dir_all(parent).map_err(|error| {
-                            anyhow!(
-                                "Failed to create parent directory {:?}: {}",
-                                parent,
-                                error
-                            )
-                        })?;
-                    }
+                    let relative =
+                        remote_download_relative_path(base_remote, &file_entry.path)?;
+                    let parent_relative = relative.parent().unwrap_or_else(|| Path::new(""));
+                    let local_parent =
+                        ensure_safe_local_directory(base_local_ref, parent_relative).await?;
+                    let file_name = relative.file_name().ok_or_else(|| {
+                        anyhow!(
+                            "Refusing empty remote file path for {:?}",
+                            file_entry.path
+                        )
+                    })?;
+                    let local_file = local_parent.join(file_name);
 
                     let local_file_str = local_file.to_string_lossy().to_string();
                     let current_file_name = file_entry.name.clone();
@@ -4476,6 +4627,54 @@ mod tests {
             .expect("aborting must remove the complete staging tree");
 
         assert!(operations.entries().is_empty());
+    }
+
+    #[test]
+    fn remote_download_relative_path_rejects_parent_components() {
+        assert_eq!(
+            PathBuf::from("nested/file.txt"),
+            remote_download_relative_path("/root", "/root/nested/file.txt")
+                .expect("normal descendants must remain accepted")
+        );
+        assert_eq!(
+            PathBuf::from("file.txt"),
+            remote_download_relative_path("/", "/file.txt")
+                .expect("entries under a root download must remain accepted")
+        );
+        assert!(
+            remote_download_relative_path("/root", "/root/../outside.txt").is_err(),
+            "parent components must be rejected even if caller validation regresses"
+        );
+        assert!(
+            remote_download_relative_path("/root", "/other/file.txt").is_err(),
+            "paths outside the selected remote root must be rejected"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn safe_local_directory_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory must be created");
+        let root = directory.path().join("chosen");
+        let outside = directory.path().join("outside");
+        fs::create_dir(&root)
+            .await
+            .expect("download root must be created");
+        fs::create_dir(&outside)
+            .await
+            .expect("outside directory must be created");
+        symlink(&outside, root.join("link")).expect("escape symlink must be created");
+        let canonical_root = fs::canonicalize(&root)
+            .await
+            .expect("download root must resolve");
+
+        let error = ensure_safe_local_directory(&canonical_root, Path::new("link/nested"))
+            .await
+            .expect_err("a symlink under the chosen root must not be traversed");
+
+        assert!(error.to_string().contains("symlink"));
     }
 
     #[tokio::test]
