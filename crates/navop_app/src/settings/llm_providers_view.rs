@@ -350,7 +350,8 @@ impl LlmProvidersView {
         let provider_for_toggle = provider.clone();
 
         let info = v_flex()
-            .flex_1()
+            .w_full()
+            .min_w_0()
             .gap_2()
             .child(self.render_provider_header(provider, cx))
             .child(self.render_provider_details(provider, cx));
@@ -359,10 +360,10 @@ impl LlmProvidersView {
             .render_custom_actions(provider_id, &provider_for_toggle, &provider_for_default, cx)
             .into_any_element();
 
-        div()
-            .flex()
+        v_flex()
+            .w_full()
             .p_4()
-            .gap_4()
+            .gap_3()
             .rounded_lg()
             .border_1()
             .border_color(cx.theme().border)
@@ -379,6 +380,7 @@ impl LlmProvidersView {
         h_flex()
             .gap_2()
             .items_center()
+            .flex_wrap()
             .child(
                 div()
                     .text_lg()
@@ -495,6 +497,9 @@ impl LlmProvidersView {
         h_flex()
             .gap_2()
             .items_center()
+            .w_full()
+            .flex_wrap()
+            .justify_end()
             .child(
                 Button::new(SharedString::from(format!("default-{}", provider_id)))
                     .with_variant(if is_default {
@@ -554,3 +559,38 @@ impl Focusable for LlmProvidersView {
 }
 
 impl EventEmitter<()> for LlmProvidersView {}
+
+#[cfg(test)]
+mod tests {
+    fn body_before<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        source
+            .split(start)
+            .nth(1)
+            .and_then(|source| source.split(end).next())
+            .unwrap_or_else(|| panic!("missing {start} before {end}"))
+    }
+
+    #[test]
+    fn provider_card_actions_wrap_instead_of_clipping() {
+        let source = include_str!("llm_providers_view.rs");
+        let card = body_before(
+            source,
+            "fn render_provider_card(",
+            "fn render_provider_header(",
+        );
+        let actions = body_before(
+            source,
+            "fn render_custom_actions(",
+            "impl Focusable for LlmProvidersView",
+        );
+
+        assert!(
+            card.contains("v_flex()") && card.contains(".w_full()"),
+            "provider 卡片必须采用可收缩的纵向布局"
+        );
+        assert!(
+            actions.contains(".flex_wrap()") && actions.contains(".justify_end()"),
+            "provider 操作按钮必须在窄宽度下换行，不能裁切最后一个按钮"
+        );
+    }
+}

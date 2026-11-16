@@ -1193,6 +1193,8 @@ mod tests {
                     b"331 need password\r\n"
                 } else if command.starts_with("PASS") {
                     b"230 logged in\r\n"
+                } else if command.starts_with("OPTS UTF8 ON") {
+                    b"200 UTF8 enabled\r\n"
                 } else if command.starts_with("TYPE") {
                     b"200 type set\r\n"
                 } else if command.starts_with("PWD") {
@@ -1256,6 +1258,19 @@ mod tests {
 
     fn recorded_commands(recorded: &Mutex<Vec<String>>) -> Vec<String> {
         recorded.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn connect_prefers_utf8_file_names() {
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let addr = spawn_fake_ftp_server(recorded.clone(), "", &[]).await;
+        let _client = connect_to_fake_server(addr.port()).await;
+
+        let commands = recorded_commands(&recorded);
+        assert!(
+            commands.iter().any(|command| command == "OPTS UTF8 ON"),
+            "FTP 登录后应优先协商 UTF-8 文件名"
+        );
     }
 
     /// 回归：根目录绝对路径文件的 stat 兼容回退必须显式 `LIST /`，
@@ -1409,6 +1424,8 @@ mod tests {
                     writer.write_all(b"331 ok\r\n").await.unwrap();
                 } else if line.starts_with("PASS") {
                     writer.write_all(b"230 ok\r\n").await.unwrap();
+                } else if line.starts_with("OPTS UTF8 ON") {
+                    writer.write_all(b"200 ok\r\n").await.unwrap();
                 } else if line.starts_with("TYPE") {
                     writer.write_all(b"200 ok\r\n").await.unwrap();
                 }

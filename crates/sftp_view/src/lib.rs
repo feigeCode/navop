@@ -32,7 +32,7 @@ use gpui::{
     Render, SharedString, Styled, WeakEntity, Window, actions, div, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt,
+    ActiveTheme, Disableable, Icon, Selectable, Sizable, Size, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants},
     dialog::{DialogButtonProps, DialogFooter},
@@ -1098,12 +1098,11 @@ fn should_apply_local_listing(
 }
 
 fn is_valid_entry_name(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.contains('\0')
+    sftp::is_valid_remote_entry_name(name)
+}
+
+fn safe_local_download_path(local_root: &std::path::Path, remote_name: &str) -> Option<PathBuf> {
+    is_valid_entry_name(remote_name).then(|| local_root.join(remote_name))
 }
 
 fn breadcrumb_item_min_width(label: &str) -> f32 {
@@ -3145,6 +3144,11 @@ impl SftpView {
             ),
             view: cx.entity().clone(),
         };
+        let trigger_label = menu
+            .current_index
+            .and_then(|index| menu.volumes.get(index))
+            .map(|volume| volume.label().to_string())
+            .unwrap_or_else(|| t!("Volume.open").to_string());
 
         Popover::new("local_volume_popover")
             .open(open)
@@ -3159,13 +3163,16 @@ impl SftpView {
             .trigger(
                 Button::new("local_volume_button")
                     .icon(IconName::HardDrive)
+                    .label(trigger_label)
                     .ghost()
-                    .xsmall()
+                    .small()
                     .compact()
+                    .flex_shrink_0()
+                    .selected(open)
                     .dropdown_caret(true)
                     .tooltip(t!("Volume.open").to_string())
                     .on_click(cx.listener(|_, _, _, cx| {
-                        // 地址栏整条是「点击进入编辑」，这里不能被它接管。
+                        // 盘符菜单是独立控件，不能再触发路径编辑。
                         cx.stop_propagation();
                     })),
             )
@@ -4867,6 +4874,10 @@ impl SftpView {
         let mut has_conflict = false;
 
         for entry in &selected_entries {
+            let Some(local_path) = safe_local_download_path(&local_path, &entry.name) else {
+                window.push_notification(Notification::error(t!("Error.invalid_name")), cx);
+                return;
+            };
             let conflict = local_names.contains(&entry.name);
             if conflict {
                 has_conflict = true;
@@ -4874,7 +4885,7 @@ impl SftpView {
 
             pending_transfers.push(PendingTransfer {
                 name: entry.name.clone(),
-                local_path: local_path.join(&entry.name),
+                local_path,
                 remote_path: join_remote_path(&remote_path, &entry.name),
                 is_dir: entry.is_dir,
                 has_conflict: conflict,
@@ -6054,6 +6065,10 @@ impl SftpView {
         let mut has_conflict = false;
 
         for item in &dragged.items {
+            let Some(download_path) = safe_local_download_path(&local_path, &item.name) else {
+                window.push_notification(Notification::error(t!("Error.invalid_name")), cx);
+                return;
+            };
             let conflict = local_names.contains(&item.name);
             if conflict {
                 has_conflict = true;
@@ -6061,7 +6076,7 @@ impl SftpView {
 
             pending_transfers.push(PendingTransfer {
                 name: item.name.clone(),
-                local_path: local_path.join(&item.name),
+                local_path: download_path,
                 remote_path: item.full_path.clone(),
                 is_dir: item.is_dir,
                 has_conflict: conflict,
@@ -6891,6 +6906,10 @@ impl SftpView {
                                     })),
                             ),
                     )
+                    .when(
+                        !is_left_remote && local_volume::volume_menu_enabled(),
+                        |bar| bar.child(self.render_local_volume_menu(cx)),
+                    )
                     .child(if is_editing {
                         h_flex()
                             .flex_1()
@@ -6922,10 +6941,6 @@ impl SftpView {
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.start_local_path_editing(window, cx);
                             }))
-                            .when(
-                                !is_left_remote && local_volume::volume_menu_enabled(),
-                                |bar| bar.child(self.render_local_volume_menu(cx)),
-                            )
                             .child(breadcrumb.flex_1().min_w(px(0.)).overflow_hidden())
                             .into_any_element()
                     })
@@ -7859,9 +7874,10 @@ mod tests {
         mark_server_copy_directory_replacements, prepare_global_download,
         prepare_global_remote_delete, prepare_global_upload, reconcile_global_transfer_snapshot,
         release_transfer_client, remote_path_parent, resolve_upload_conflict,
-        resolve_upload_conflicts, server_copy_conflict_flags, should_apply_local_listing,
-        should_apply_remote_listing, should_refresh_transfer_target, tab_connection_status,
-        transfer_error_summary, transfer_task_state_from_global, upload_directory_conflict_policy,
+        resolve_upload_conflicts, safe_local_download_path, server_copy_conflict_flags,
+        should_apply_local_listing, should_apply_remote_listing, should_refresh_transfer_target,
+        tab_connection_status, transfer_error_summary, transfer_task_state_from_global,
+        upload_directory_conflict_policy,
     };
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
@@ -9525,6 +9541,18 @@ mod tests {
     }
 
     #[test]
+    fn remote_download_targets_reject_traversal_and_absolute_names() {
+        let root = std::path::Path::new("/chosen-download");
+        assert_eq!(
+            Some(root.join("notes.txt")),
+            safe_local_download_path(root, "notes.txt")
+        );
+        assert_eq!(None, safe_local_download_path(root, "../outside.txt"));
+        assert_eq!(None, safe_local_download_path(root, "/tmp/outside.txt"));
+        assert_eq!(None, safe_local_download_path(root, "..\\outside.txt"));
+    }
+
+    #[test]
     fn archive_kind_detects_supported_remote_archives() {
         assert_eq!(
             Some(super::ArchiveKind::Zip),
@@ -9887,9 +9915,24 @@ mod local_volume_wiring_tests {
             body.contains("local_volume::local_volumes()"),
             "打开下拉时重新枚举卷，插拔磁盘要能看到"
         );
+        assert!(body.contains("dropdown_caret"), "触发按钮要带下拉指示");
         assert!(
-            body.contains("dropdown_caret"),
-            "触发按钮要带下拉指示"
+            body.contains("current_index")
+                && body.contains("volume.label()")
+                && body.contains(".label(trigger_label)"),
+            "触发按钮必须显示当前盘符，不能只显示一个硬盘图标"
+        );
+    }
+
+    #[test]
+    fn local_volume_menu_is_a_separate_toolbar_control() {
+        let source = include_str!("lib.rs");
+        let body = method_body(source, "render_local_panel");
+        let volume_menu = body.find("render_local_volume_menu").expect("volume menu");
+        let path_bar = body.find("\"local-path-bar\"").expect("path bar");
+        assert!(
+            volume_menu < path_bar,
+            "盘符切换器必须放在地址栏外，不能藏在点击即编辑的路径框里"
         );
     }
 

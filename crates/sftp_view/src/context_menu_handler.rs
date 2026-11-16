@@ -177,12 +177,7 @@ impl SftpView {
 }
 
 fn is_valid_entry_name(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.contains('\0')
+    sftp::is_valid_remote_entry_name(name)
 }
 
 /// 右键菜单处理 trait

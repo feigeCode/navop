@@ -3544,6 +3544,7 @@ fn set_current_system_hotkey(spec: String, cx: &mut App) {
         }
     });
     crate::app_init::refresh_system_hotkey(cx);
+    cx.refresh_windows();
 }
 
 fn clear_current_system_hotkey(cx: &mut App) {
@@ -3565,6 +3566,7 @@ fn set_custom_keybinding(action_id: &str, spec: String, cx: &mut App) {
             .insert(action_id.to_string(), vec![spec]);
     });
     crate::navop_app::refresh_keybindings(cx);
+    cx.refresh_windows();
 }
 
 fn reset_custom_keybinding(action_id: &str, cx: &mut App) {
@@ -3572,6 +3574,7 @@ fn reset_custom_keybinding(action_id: &str, cx: &mut App) {
         settings.custom_keybindings.remove(action_id);
     });
     crate::navop_app::refresh_keybindings(cx);
+    cx.refresh_windows();
 }
 
 fn clear_custom_keybinding(action_id: &str, cx: &mut App) {
@@ -3581,6 +3584,7 @@ fn clear_custom_keybinding(action_id: &str, cx: &mut App) {
             .insert(action_id.to_string(), Vec::new());
     });
     crate::navop_app::refresh_keybindings(cx);
+    cx.refresh_windows();
 }
 
 fn shortcut_spec_from_keystroke(keystroke: &Keystroke) -> Option<String> {
@@ -4019,6 +4023,23 @@ mod tests {
         assert!(!shortcut.keys_other.contains(&"ctrl-w"));
         assert!(!shortcut.keys_macos.contains(&"ctrl-d"));
         assert!(!shortcut.keys_other.contains(&"ctrl-d"));
+    }
+
+    #[test]
+    fn shortcut_mutations_refresh_the_settings_rows_immediately() {
+        let source = implementation_source();
+        for (function, refresh_call) in [
+            ("fn set_current_system_hotkey(", "refresh_system_hotkey(cx)"),
+            ("fn set_custom_keybinding(", "refresh_keybindings(cx)"),
+            ("fn reset_custom_keybinding(", "refresh_keybindings(cx)"),
+            ("fn clear_custom_keybinding(", "refresh_keybindings(cx)"),
+        ] {
+            let body = method_source(source, function);
+            assert!(
+                body.contains(refresh_call) && body.contains("cx.refresh_windows()"),
+                "{function} 必须同时刷新运行时绑定和当前设置页"
+            );
+        }
     }
 
     #[test]

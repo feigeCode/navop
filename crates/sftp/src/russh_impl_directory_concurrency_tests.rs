@@ -215,3 +215,53 @@ async fn directory_download_overlaps_small_files_and_keeps_progress_monotonic() 
         "final progress must include every downloaded byte"
     );
 }
+
+#[tokio::test]
+async fn directory_download_rejects_server_names_that_escape_the_local_root() {
+    let files = vec![(
+        "../outside.txt".to_string(),
+        b"malicious remote content".to_vec(),
+    )];
+    let (metadata_server, _) = FakeDirectoryServer::new(files.clone());
+    let (metadata_client, metadata_server_stream) = tokio::io::duplex(1024 * 1024);
+    russh_sftp::server::run(metadata_server_stream, metadata_server).await;
+
+    let (data_server, _) = FakeDirectoryServer::new(files);
+    let (data_client, data_server_stream) = tokio::io::duplex(1024 * 1024);
+    russh_sftp::server::run(data_server_stream, data_server).await;
+
+    let sftp =
+        SftpSession::new_with_config(metadata_client, sftp_session_config(SftpTransport::Owned))
+            .await
+            .expect("fake SFTP session must initialize");
+    let raw = RawSftpSession::new(data_client);
+    raw.init()
+        .await
+        .expect("fake raw SFTP session must initialize");
+    let mut client = RusshSftpClient::for_test(sftp, Some(Arc::new(raw)));
+
+    let sandbox = tempfile::tempdir().expect("temporary directory");
+    let chosen = sandbox.path().join("chosen-download");
+    std::fs::create_dir(&chosen).expect("create chosen download directory");
+    let outside = sandbox.path().join("outside.txt");
+    std::fs::write(&outside, b"original local content").expect("write outside sentinel");
+
+    let result = client
+        .download_dir_with_progress(
+            "/root",
+            chosen.to_str().expect("UTF-8 temporary path"),
+            Arc::new(AtomicBool::new(false)),
+            Box::new(|_| {}),
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "a server-controlled parent component must abort the download"
+    );
+    assert_eq!(
+        b"original local content".as_slice(),
+        std::fs::read(&outside).expect("outside sentinel must still exist"),
+        "the download must never write outside the selected local directory"
+    );
+}

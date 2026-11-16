@@ -59,6 +59,11 @@ impl FtpClient {
                 stream = stream.into_secure(tls, &config.host).await?;
             }
             stream.login(&config.username, &config.password).await?;
+            // Windows FTP servers commonly default LIST to the system code page.
+            // Prefer UTF-8 when supported; unsupported servers keep their default.
+            if let Err(error) = stream.opts("UTF8", Some("ON")).await {
+                tracing::debug!(%error, "FTP server did not enable UTF-8 file names");
+            }
             stream.transfer_type(FileType::Binary).await?;
             Ok::<_, anyhow::Error>(stream)
         };
