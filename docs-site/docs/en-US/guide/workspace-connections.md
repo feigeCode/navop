@@ -4,9 +4,6 @@ The home screen is the entry point for every saved resource. Workspaces group co
 
 ![Recent connections dashboard](/images/app1.png)
 
-> [!NOTE]
-> All three apps have a home screen. Available connection types depend on the product: Navop covers everything, Navop Shell focuses on remote operations, and Navop Data focuses on data work.
-
 ## Organize the home screen
 
 The home dashboard keeps recent connections beside New Connection, Terminal, Quick Open, sync, import, Notes, AI workbench, and extension shortcuts. Search by connection name or type and switch between grid and tree layouts. Create workspaces for production, staging, local development, customers, or projects; edit their names, drag to reorder (order persists across reloads), filter the visible connections, and use batch mode to move or delete multiple connections at once. Use unmistakable names and visual cues for production resources.

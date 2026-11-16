@@ -366,7 +366,13 @@ impl ConnectionFormDialog {
 
     /// 类目下的条目：真实种类按旧版顺序排列，空类目补「+」入口，最后放「更多连接」。
     fn entries_in(&self, category: WizardCategory) -> Vec<WizardEntry> {
-        category_entries(&self.kinds, category)
+        let mut entries = category_entries(&self.kinds, category);
+        // 没有扩展管理器时（32 位 Windows 不带 nsh 宿主），「安装扩展 / 更多连接」
+        // 点了只会弹“扩展管理页不可用”，入口直接不展示。
+        if !crate::host::extensions_available() {
+            entries.retain(|entry| !entry.opens_extensions());
+        }
+        entries
     }
 
     fn select_category(&mut self, category: WizardCategory, cx: &mut Context<Self>) {

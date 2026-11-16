@@ -63,6 +63,11 @@ pub fn set_extensions_host(host: Arc<dyn ExtensionsHost>) {
     let _ = EXTENSIONS_HOST.set(host);
 }
 
+/// 扩展管理器是否可用：应用壳注册了宿主才展示「安装扩展 / 更多连接」入口。
+pub fn extensions_available() -> bool {
+    EXTENSIONS_HOST.get().is_some()
+}
+
 pub fn extensions_host() -> Option<Arc<dyn ExtensionsHost>> {
     EXTENSIONS_HOST.get().cloned()
 }

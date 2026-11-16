@@ -37,9 +37,10 @@ pub use extension_wasm::{DocumentRenderArtifact, DocumentRenderRequest, Document
 pub use global::{GlobalExtensionRuntimeCatalog, global_catalog, refresh_global_runtime_catalog};
 pub use mirror::{extension_mirror, set_extension_mirror};
 pub use types::{
-    RegisteredDocumentExporter, RegisteredIpcRuntimeBinding, RegisteredRemoteFileEditorCommand,
-    RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
-    RegisteredShellAppContribution, RegisteredToolContribution,
+    RegisteredDocumentExporter, RegisteredIpcRuntimeBinding, RegisteredPanelContribution,
+    RegisteredRemoteFileEditorCommand, RegisteredRemoteFileEditorContribution,
+    RegisteredResourceConnectionContribution, RegisteredShellAppContribution,
+    RegisteredToolContribution,
 };
 
 #[cfg(all(test, feature = "wasm-components"))]

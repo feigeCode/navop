@@ -33,6 +33,10 @@ pub(crate) fn home_applications(show_team: bool) -> Vec<NavigationApplication> {
     if !crate::product::supports_shell_domain() {
         applications.retain(|app| !matches!(app, KnownHosts | SessionLogs));
     }
+    // 扩展页依赖 nsh 扩展宿主；没有宿主（32 位 Windows）时整块入口不展示。
+    if !crate::nsh_ui_available() {
+        applications.retain(|app| !matches!(app, Extensions));
+    }
     applications
 }
 
@@ -78,31 +82,32 @@ mod tests {
     #[test]
     fn home_application_order_and_team_gate_are_stable() {
         use NavigationApplication::*;
-        assert_eq!(
-            home_applications(true),
-            vec![
-                AiWorkbench,
-                Team,
-                Notes,
-                Extensions,
-                Toolbox,
-                CredentialVault,
-                KnownHosts,
-                SessionLogs
-            ]
-        );
-        assert_eq!(
-            home_applications(false),
-            vec![
-                AiWorkbench,
-                Notes,
-                Extensions,
-                Toolbox,
-                CredentialVault,
-                KnownHosts,
-                SessionLogs
-            ]
-        );
+        let mut with_team = vec![
+            AiWorkbench,
+            Team,
+            Notes,
+            Extensions,
+            Toolbox,
+            CredentialVault,
+            KnownHosts,
+            SessionLogs,
+        ];
+        let mut without_team = vec![
+            AiWorkbench,
+            Notes,
+            Extensions,
+            Toolbox,
+            CredentialVault,
+            KnownHosts,
+            SessionLogs,
+        ];
+        // 无 nsh 宿主的构建（32 位 Windows）不展示扩展入口。
+        if !crate::nsh_ui_available() {
+            with_team.retain(|app| *app != Extensions);
+            without_team.retain(|app| *app != Extensions);
+        }
+        assert_eq!(home_applications(true), with_team);
+        assert_eq!(home_applications(false), without_team);
         assert!(!home_applications(true).contains(&JsonFormatter));
     }
 }

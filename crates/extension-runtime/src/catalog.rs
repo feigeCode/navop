@@ -19,8 +19,9 @@ use super::registration::load_installed_composite_manifests;
 use super::types::{
     ExtensionRuntimeError, RegisteredDocumentExporter, RegisteredDocumentRenderer,
     RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding, RegisteredKeybindingContribution,
-    RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
-    RegisteredShellAppContribution, RegisteredToolContribution, WasmRuntimeBinding,
+    RegisteredPanelContribution, RegisteredRemoteFileEditorContribution,
+    RegisteredResourceConnectionContribution, RegisteredShellAppContribution,
+    RegisteredToolContribution, WasmRuntimeBinding,
 };
 
 static WASM_CATALOG_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -47,6 +48,8 @@ pub struct ExtensionRuntimeCatalog {
     pub(super) remote_file_editors: Vec<RegisteredRemoteFileEditorContribution>,
     /// 扩展 id → nsh app（一个扩展最多一个）。
     pub(super) shell_apps: BTreeMap<String, RegisteredShellAppContribution>,
+    /// 全部已注册面板（`contributes.panels`），按 (anchor, order, id) 排序。
+    pub(super) panels: Vec<RegisteredPanelContribution>,
     pub(super) resource_connections: BTreeMap<String, RegisteredResourceConnectionContribution>,
     /// `{extension}::{tool_id}` → 已注册扩展工具。
     pub(super) tools: BTreeMap<String, RegisteredToolContribution>,
@@ -87,6 +90,7 @@ impl ExtensionRuntimeCatalog {
             document_exporter_runtimes: Mutex::new(HashMap::new()),
             remote_file_editors: Vec::new(),
             shell_apps: BTreeMap::new(),
+            panels: Vec::new(),
             resource_connections: BTreeMap::new(),
             tools: BTreeMap::new(),
         }
@@ -200,6 +204,29 @@ impl ExtensionRuntimeCatalog {
         self.shell_apps.get(extension_id)
     }
 
+    /// 指定锚点的全部面板，按 (order, extension_id, id) 排序。
+    pub fn panels_for_anchor(&self, anchor: &str) -> Vec<&RegisteredPanelContribution> {
+        let mut panels: Vec<_> = self
+            .panels
+            .iter()
+            .filter(|panel| panel.anchor == anchor)
+            .collect();
+        panels.sort_by(|a, b| {
+            a.order
+                .cmp(&b.order)
+                .then_with(|| a.extension_id.cmp(&b.extension_id))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        panels
+    }
+
+    /// 找一个已注册面板（extension_id + panel id）。
+    pub fn panel(&self, extension_id: &str, panel_id: &str) -> Option<&RegisteredPanelContribution> {
+        self.panels
+            .iter()
+            .find(|panel| panel.extension_id == extension_id && panel.id == panel_id)
+    }
+
     pub fn resource_connections(
         &self,
     ) -> impl Iterator<Item = &RegisteredResourceConnectionContribution> {
@@ -220,11 +247,7 @@ impl ExtensionRuntimeCatalog {
         self.tools.values()
     }
 
-    pub fn tool(
-        &self,
-        extension_id: &str,
-        tool_id: &str,
-    ) -> Option<&RegisteredToolContribution> {
+    pub fn tool(&self, extension_id: &str, tool_id: &str) -> Option<&RegisteredToolContribution> {
         self.tools.get(&format!("{extension_id}::{tool_id}"))
     }
 
@@ -405,6 +428,17 @@ impl ExtensionRuntimeCatalog {
         _html: &str,
     ) -> Result<Option<html_preview::HtmlPreviewTransformOutput>, ExtensionRuntimeError> {
         Ok(None)
+    }
+
+    /// 查询一个命令是否是 `kind == "nsh"` 的 shell app 打开型命令。
+    /// 返回 (extension_id, route)。
+    pub fn nsh_command(&self, command_id: &str) -> Option<(String, Option<String>)> {
+        let command = self.commands.get(command_id)?;
+        let CommandHandler::Nsh { route } = &command.handler else {
+            return None;
+        };
+        let extension_id = command.extension_id.clone()?;
+        Some((extension_id, route.clone()))
     }
 
     pub(super) fn component_binding_for_command(

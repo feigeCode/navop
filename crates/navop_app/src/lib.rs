@@ -5,6 +5,13 @@
 
 rust_i18n::i18n!("locales", fallback = "en");
 
+/// 扩展 UI 依赖 nsh 扩展宿主（`nsh-host` feature）。没有宿主时（32 位 Windows
+/// 构建不带该 feature），侧栏、工具箱、新建连接向导、工具暴露设置里的扩展入口
+/// 统一隐藏，而不是留一个点了没反应的壳。
+pub(crate) fn nsh_ui_available() -> bool {
+    cfg!(feature = "nsh-host")
+}
+
 mod auth;
 
 mod ai_chat_acp;
@@ -20,6 +27,7 @@ mod dev_extension_registry;
 #[cfg(feature = "shell")]
 mod dev_host_ops;
 mod env_file;
+#[cfg(feature = "nsh-host")]
 mod extension_update;
 mod file_association;
 mod file_open;
@@ -46,6 +54,10 @@ mod settings;
 mod sync_conflict_dialog;
 mod system_tray;
 mod team_tab;
+#[cfg(all(feature = "nsh-db", feature = "database"))]
+mod db_extension_panels;
+#[cfg(all(feature = "nsh-terminal", feature = "shell"))]
+mod terminal_extension_panels;
 mod toolbox_tab;
 mod update;
 mod window_visibility;
@@ -577,12 +589,37 @@ where
             AppSettings::current(cx).update_mirror.unwrap_or_default(),
         );
         universal_plugins::init(cx);
+        // 能力面（navop.db / terminal / app / ui）注册成 nsh 的 nativeModule：
+        // UI set 是进程级整表替换，必须在任何 `AppView` 创建之前装好
+        // （连同 `nsh/base`，否则页面连 `View` 都没有）。
+        #[cfg(feature = "nsh-host")]
+        universal_plugins::install_native_api();
+        // navop.db 能力面：把数据库状态交给 nsh 宿主（tokio 线程上的
+        // 扩展页面 SQL 调用经它执行；DataDomain::init 已装好 global）。
+        // `db` 依赖只在 `database` feature 下存在；navop-shell 这类
+        // `nsh-host + shell`（无 database）构建不能引用它。
+        #[cfg(all(feature = "nsh-db", feature = "database"))]
+        if let Some(db_state) = cx.try_global::<db::GlobalDbState>() {
+            universal_plugins::set_nsh_db_state(db_state.clone());
+        }
+        // 页面请求刷新 DB 树时，回主线程刷新所有打开着的树（db_view 拥有
+        // 这些 Entity，nsh 宿主不依赖 db_view，所以用函数指针注入）。
+        #[cfg(all(feature = "nsh-db", feature = "database"))]
+        universal_plugins::set_nsh_db_tree_refresh(db_view::db_tree_registry::refresh_open_db_trees);
+        // 终端侧边栏的扩展面板：catalog 提供面板声明，nsh 宿主提供视图。
+        // 必须在 universal_plugins::init 之后（NshHost global 先就位）。
+        #[cfg(all(feature = "nsh-terminal", feature = "shell"))]
+        terminal_extension_panels::init_terminal_extension_panels(cx);
+        // 数据库侧栏的扩展面板（anchor = "db-sidebar"）：同一套 catalog 声明，
+        // 面板视图同样由 nsh 宿主创建。
+        #[cfg(all(feature = "nsh-db", feature = "database"))]
+        db_extension_panels::init_database_extension_panels(cx);
         // 资源工作台的 terminal 页面需要宿主提供可嵌入终端;未注册时
         // 工作台渲染「此构建不可用」而不是崩溃。
         // dev 工程注册表与 `navop.dev` 操作集：nsh 宿主接管时也要装，
         // 否则开发者工具页拿不到「加载本地工程」这套能力。
         #[cfg(feature = "shell")]
-        #[cfg(any(feature = "nsh-host", feature = "nsh-host"))]
+        #[cfg(feature = "nsh-host")]
         dev_extension_registry::install_dev_host_ops(cx);
 
         let settings = AppSettings::current(cx);
@@ -631,6 +668,8 @@ where
                 // 循环已启动（macOS 的 NSStatusItem 要求如此）。
                 system_tray::init(cx);
                 update::schedule_update_check(cx);
+                // 扩展市场与更新都跑在 nsh 宿主里；没有宿主（32 位 Windows）时不排期。
+                #[cfg(feature = "nsh-host")]
                 extension_update::schedule_plugin_update_check(window, cx);
                 let view = cx.new(|cx| NavopApp::new(window, cx));
                 let root = cx.new(|cx| Root::new(view, window, cx));

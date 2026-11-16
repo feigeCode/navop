@@ -477,7 +477,9 @@ fn manifest_rejects_unknown_shell_app_field() {
 }
 
 #[test]
-fn manifest_rejects_removed_ui_host_module() {
+fn manifest_rejects_removed_legacy_host_modules() {
+    // `ui` 在 ABI v2 早期被删过一轮；现在它作为 navop.ui 能力面重新
+    // 合法。此测试保留给真正被删除且不会再回来的模块拼写。
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_entry(tmp.path(), "ui/explorer.js");
     write_shell_manifest(
@@ -485,13 +487,13 @@ fn manifest_rejects_removed_ui_host_module() {
         serde_json::json!({
             "title": "Resources",
             "entry": "ui/explorer.js",
-            "modules": ["ui"]
+            "modules": ["not-a-module"]
         }),
     );
 
     let error = load_from_dir(tmp.path()).unwrap_err();
     assert!(
-        error.to_string().contains("unknown variant `ui`"),
+        error.to_string().contains("unknown variant `not-a-module`"),
         "{error}"
     );
 }

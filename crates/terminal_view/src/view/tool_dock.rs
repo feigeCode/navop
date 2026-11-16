@@ -1,5 +1,8 @@
 use super::*;
 use crate::sidebar::tool_dock::right_sidebar_width;
+use one_core::dock::ToolDockLayout;
+
+
 
 impl TerminalView {
     pub(super) fn send_tab(&mut self, _: &SendTab, _window: &mut Window, cx: &mut Context<Self>) {
@@ -69,6 +72,26 @@ impl TerminalView {
         TerminalToolDockLayout::from_open_panels(self.sidebar.read(cx).open_tool_panels())
     }
 
+    /// 扩展面板的停靠布局（键是 `"{extension_id}:{panel_id}"`）。
+    ///
+    /// 内建 dock 每边只放一个面板，扩展面板遵循同样的语义：内建面板
+    /// 优先占据所在边，扩展面板只在内建面板未占用的一边显示。
+    pub(super) fn extension_tool_layout(&self, cx: &App) -> ToolDockLayout<SharedString> {
+        let sidebar = self.sidebar.read(cx);
+        let builtin = self.terminal_tool_layout(cx);
+        let mut layout = ToolDockLayout::from_open_panels_cloned(sidebar.open_extension_panels());
+        if builtin.left.is_some() {
+            layout.clear_if_occupied(SidebarPlacement::Left);
+        }
+        if builtin.right.is_some() {
+            layout.clear_if_occupied(SidebarPlacement::Right);
+        }
+        if builtin.bottom.is_some() {
+            layout.clear_if_occupied(SidebarPlacement::Bottom);
+        }
+        layout
+    }
+
     pub(super) fn render_internal_tool_panel(
         &self,
         panel: SidebarPanel,
@@ -87,6 +110,27 @@ impl TerminalView {
             view,
             colors,
             panel_header,
+            cx,
+        )
+    }
+
+    /// 渲染停靠在三边的扩展面板（标题 + 移动菜单 + 关闭）。
+    pub(super) fn render_extension_tool_panel(
+        &self,
+        id: SharedString,
+        placement: SidebarPlacement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(view) = self.sidebar.read(cx).extension_panel_view(&id) else {
+            return div().into_any_element();
+        };
+        let colors = self.sidebar.read(cx).colors();
+        render_extension_tool_panel_frame(
+            self.sidebar.clone(),
+            id,
+            placement,
+            view,
+            colors,
             cx,
         )
     }

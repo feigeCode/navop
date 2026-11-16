@@ -9,6 +9,9 @@
 mod broadcast_input_panel;
 mod composer_context;
 mod connection_notes_panel;
+mod extension_panel_state;
+pub mod extension_panels;
+use extension_panel_state::ExtensionPanelEntry;
 pub mod file_manager_panel;
 mod history_command_panel;
 mod quick_command_panel;
@@ -19,6 +22,9 @@ pub(crate) mod tool_dock;
 
 use broadcast_input_panel::{BroadcastInputPanel, BroadcastInputPanelConfig};
 use connection_notes_panel::ConnectionNotesPanel;
+pub use extension_panels::{
+    ExtensionPanelSpec, TerminalExtensionPanelHost, init_terminal_extension_panels,
+};
 pub use file_manager_panel::{FileManagerPanel, FileManagerPanelEvent};
 pub use history_command_panel::{HistoryCommandPanel, HistoryCommandPanelEvent};
 pub use quick_command_panel::{QuickCommandPanel, QuickCommandPanelEvent};
@@ -39,7 +45,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, AnyView, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle,
     Focusable, IntoElement, ParentElement, Pixels, Render, SharedString, Styled, Subscription,
-    Window, div,
+    Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, Selectable, Sizable, Size, Theme,
@@ -805,6 +811,14 @@ impl PendingSshToolPanels {
     }
 }
 
+/// 扩展面板在设置里的存档键。
+///
+/// 用 `ext:` 前缀把扩展面板与内建 `SidebarPanel::local_id`（`terminal.settings`
+/// 之类）隔开，两类 id 都带点号，不加前缀会撞。
+fn extension_panel_placement_key(id: &str) -> String {
+    format!("ext:{id}")
+}
+
 /// 终端侧边栏组件
 pub struct TerminalSidebar {
     /// 终端工具面板 dock 状态
@@ -833,6 +847,8 @@ pub struct TerminalSidebar {
     stored_connection: Option<StoredConnection>,
     /// 尚未创建的 SSH 工具面板（凭据就绪后补建）
     pending_ssh_tool_panels: Option<PendingSshToolPanels>,
+    /// 扩展面板条目（宿主注入的 nsh 面板；view 惰性创建）
+    extension_panels: Vec<ExtensionPanelEntry>,
     /// 焦点句柄
     focus_handle: FocusHandle,
     /// 终端主题配色（用于侧边栏工具栏）
@@ -1041,13 +1057,28 @@ impl TerminalSidebar {
                 self.history_command_panel.is_some(),
                 self.broadcast_input_panel.is_some(),
             ));
-        if changed {
+        // 扩展面板规格可能随扩展启用/停用变化，一并同步（保留状态）。
+        let extension_changed = {
+            let specs = extension_panels::terminal_extension_panel_specs(cx);
+            let next = extension_panel_state::sync_extension_panels(
+                std::mem::take(&mut self.extension_panels),
+                specs,
+            );
+            let differs = next.len() != self.extension_panels.len()
+                || next
+                    .iter()
+                    .zip(self.extension_panels.iter())
+                    .any(|(a, b)| *a.id != *b.id);
+            self.extension_panels = next;
+            differs
+        };
+        if changed || extension_changed {
             cx.notify();
         }
         // 后补建的面板（SSH 文件管理器 / 服务器监控）落在默认右侧，
         // 这里再套一次用户上次选好的位置。
         self.restore_tool_panel_placements(cx);
-        changed
+        changed || extension_changed
     }
 
     pub(crate) fn new(
@@ -1439,6 +1470,10 @@ impl TerminalSidebar {
             stored_connection: sidebar_connection,
             pending_ssh_tool_panels: (!pending_ssh_tool_panels.is_empty())
                 .then_some(pending_ssh_tool_panels),
+            extension_panels: extension_panel_state::sync_extension_panels(
+                Vec::new(),
+                extension_panels::terminal_extension_panel_specs(cx),
+            ),
             focus_handle: cx.focus_handle(),
             colors,
             _subs: subs,
@@ -1477,7 +1512,7 @@ impl TerminalSidebar {
 
     /// 是否显示侧边栏
     pub fn is_visible(&self) -> bool {
-        !self.tool_dock.open_panels().is_empty()
+        !self.tool_dock.open_panels().is_empty() || self.extension_panels.iter().any(|p| p.open)
     }
 
     pub fn toolbar_visible(&self) -> bool {
@@ -1492,6 +1527,115 @@ impl TerminalSidebar {
         self.tool_dock.open_panels()
     }
 
+    /// 扩展面板当前打开的（键，停靠位置）列表。
+    pub fn open_extension_panels(&self) -> Vec<(SharedString, SidebarPlacement)> {
+        self.extension_panels
+            .iter()
+            .filter(|p| p.open)
+            .map(|p| (p.id.clone(), p.placement))
+            .collect()
+    }
+
+    /// 指定扩展面板是否打开。
+    pub fn is_extension_panel_open(&self, id: &str) -> bool {
+        self.extension_panels
+            .iter()
+            .any(|p| p.id.as_ref() == id && p.open)
+    }
+
+    /// 打开扩展面板（首次打开时经宿主创建视图）。
+    pub fn open_extension_panel(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.ensure_extension_panel_view(id, cx) {
+            return;
+        }
+        let Some(entry) = self
+            .extension_panels
+            .iter_mut()
+            .find(|p| p.id.as_ref() == id)
+        else {
+            return;
+        };
+        if !entry.open {
+            entry.open = true;
+            cx.emit(TerminalSidebarEvent::PanelChanged(None));
+            cx.notify();
+        }
+    }
+
+    /// 关闭扩展面板（不销毁视图，再次打开复用）。
+    pub fn close_extension_panel(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(entry) = self.extension_panels.iter_mut().find(|p| p.id.as_ref() == id) {
+            if entry.open {
+                entry.open = false;
+                cx.emit(TerminalSidebarEvent::PanelChanged(None));
+                cx.notify();
+            }
+        }
+    }
+
+    /// 切换扩展面板。
+    pub fn toggle_extension_panel(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.is_extension_panel_open(id) {
+            self.close_extension_panel(id, cx);
+        } else {
+            self.open_extension_panel(id, cx);
+        }
+    }
+
+    /// 移动扩展面板停靠边。
+    pub fn move_extension_panel(
+        &mut self,
+        id: &str,
+        placement: SidebarPlacement,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(entry) = self.extension_panels.iter_mut().find(|p| p.id.as_ref() == id) {
+            if entry.placement != placement {
+                entry.placement = placement;
+                cx.emit(TerminalSidebarEvent::PanelChanged(None));
+                cx.notify();
+            }
+        }
+    }
+
+    /// 确保扩展面板视图存在（不存在时经宿主创建），返回是否可用。
+    fn ensure_extension_panel_view(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
+        let has_view = self
+            .extension_panels
+            .iter()
+            .any(|p| p.id.as_ref() == id && p.view.is_some());
+        if has_view {
+            return true;
+        }
+        let colors = self.colors.clone();
+        let Some(view) = extension_panels::open_terminal_extension_panel(id, &colors, cx) else {
+            return false;
+        };
+        match self.extension_panels.iter_mut().find(|p| p.id.as_ref() == id) {
+            Some(entry) => {
+                entry.view = Some(view);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 扩展面板视图（未创建时 None）。
+    pub fn extension_panel_view(&self, id: &str) -> Option<AnyView> {
+        self.extension_panels
+            .iter()
+            .find(|p| p.id.as_ref() == id)
+            .and_then(|p| p.view.clone())
+    }
+
+    /// 扩展面板标题。
+    pub fn extension_panel_title(&self, id: &str) -> Option<SharedString> {
+        self.extension_panels
+            .iter()
+            .find(|p| p.id.as_ref() == id)
+            .map(|p| p.title.clone())
+    }
+
     pub fn on_host_activated(&mut self, cx: &mut Context<Self>) {
         if self.tool_dock.is_tool_open(SidebarPanel::AiChat) {
             self.ai_chat_panel.update(cx, |panel, cx| {
@@ -1504,13 +1648,57 @@ impl TerminalSidebar {
         self.tool_dock.panel_placement(panel)
     }
 
-    /// 各工具面板当前的停靠位置，键与设置里的存档一致（`SidebarPanel::local_id`）。
+    /// 各工具面板当前的停靠位置，键与设置里的存档一致（`SidebarPanel::local_id`；
+    /// 扩展面板用 `ext:{extension_id}:{panel_id}` 前缀，避免与内建 id 相撞）。
     pub fn tool_panel_placements(&self) -> BTreeMap<String, SidebarPlacement> {
-        self.tool_dock
+        let mut placements = self
+            .tool_dock
             .panel_placements()
             .into_iter()
             .map(|(panel, placement)| (panel.local_id().to_string(), placement))
+            .collect::<BTreeMap<_, _>>();
+        for (key, placement) in self.extension_panel_placements() {
+            placements.insert(key, placement);
+        }
+        placements
+    }
+
+    /// 扩展面板的（存档键，停靠位置）列表。
+    pub fn extension_panel_placements(&self) -> BTreeMap<String, SidebarPlacement> {
+        self.extension_panels
+            .iter()
+            .map(|entry| (extension_panel_placement_key(&entry.id), entry.placement))
             .collect()
+    }
+
+    /// 扩展面板当前的停靠位置。
+    pub fn extension_panel_placement(&self, id: &str) -> Option<SidebarPlacement> {
+        self.extension_panels
+            .iter()
+            .find(|entry| entry.id.as_ref() == id)
+            .map(|entry| entry.placement)
+    }
+
+    /// 按设置里记录的停靠位置复位扩展面板，返回被移动的面板 id。
+    ///
+    /// 与内建面板不同，扩展面板可能还没创建视图也能恢复位置（位置是纯状态），
+    /// 所以这里不要求 `view` 已存在。
+    pub(crate) fn apply_persisted_extension_placements(
+        &mut self,
+        persisted: &BTreeMap<String, SidebarPlacement>,
+    ) -> Vec<SharedString> {
+        let mut moved = Vec::new();
+        for entry in &mut self.extension_panels {
+            let key = extension_panel_placement_key(&entry.id);
+            let Some(placement) = persisted.get(&key) else {
+                continue;
+            };
+            if entry.placement != *placement {
+                entry.placement = *placement;
+                moved.push(entry.id.clone());
+            }
+        }
+        moved
     }
 
     /// 按设置里记录的停靠位置复位面板（只改位置，不动展开状态）。
@@ -1527,7 +1715,11 @@ impl TerminalSidebar {
             self.update_panel_frame_placement(*panel, placement, cx);
             cx.emit(TerminalSidebarEvent::PanelChanged(Some(*panel)));
         }
-        if !moved.is_empty() {
+        let moved_extensions = self.apply_persisted_extension_placements(&persisted);
+        if !moved_extensions.is_empty() {
+            cx.emit(TerminalSidebarEvent::PanelChanged(None));
+        }
+        if !moved.is_empty() || !moved_extensions.is_empty() {
             cx.notify();
         }
     }
@@ -1567,6 +1759,70 @@ impl TerminalSidebar {
         }
     }
 
+    /// 扩展面板当前激活（第一个打开的）键。
+    pub fn active_extension_panel(&self) -> Option<SharedString> {
+        self.extension_panels
+            .iter()
+            .find(|p| p.open)
+            .map(|p| p.id.clone())
+    }
+
+    /// 渲染扩展面板内容（内嵌头部 + 视图）。
+    pub fn render_extension_panel_content(
+        &self,
+        id: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(entry) = self.extension_panels.iter().find(|p| p.id == id) else {
+            return div().into_any_element();
+        };
+        let Some(view) = entry.view.clone() else {
+            return div().into_any_element();
+        };
+
+        let border = self.colors.border;
+        let header_bg = self.colors.muted;
+        let text = self.colors.foreground;
+        let title = entry.title.clone();
+        let icon = entry.icon.clone().with_size(IconSize::Small).text_color(text);
+        let close_id = entry.id.clone();
+
+        let header = PanelHeader::new(SharedString::from(format!(
+            "terminal-embedded-ext-panel-header-{id}"
+        )))
+        .variant(PanelHeaderVariant::Embedded)
+        .border_color(border)
+        .background(header_bg)
+        .leading(icon)
+        .title(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(self.colors.foreground)
+                .child(title),
+        )
+        .trailing(
+            IconButton::new(
+                SharedString::from(format!("close-terminal-sidebar-ext-panel-{id}")),
+                IconName::Close,
+            )
+            .role(IconButtonRole::Compact)
+            .custom(self.colors.icon_button_variant(text, cx))
+            .tooltip(t!("Common.close").to_string())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.close_extension_panel(&close_id, cx);
+            })),
+        )
+        .into_any_element();
+
+        v_flex()
+            .size_full()
+            .child(header)
+            .child(div().flex_1().min_h_0().overflow_hidden().child(view))
+            .into_any_element()
+    }
+
     fn toolbar_snapshot(&self) -> TerminalToolbarSnapshot {
         TerminalToolbarSnapshot {
             colors: self.colors.clone(),
@@ -1578,6 +1834,16 @@ impl TerminalSidebar {
                 .map(|panel| TerminalToolbarButtonSnapshot {
                     panel,
                     open: self.tool_dock.is_tool_open(panel),
+                })
+                .collect(),
+            extension_buttons: self
+                .extension_panels
+                .iter()
+                .map(|entry| ExtensionToolbarButtonSnapshot {
+                    id: entry.id.clone(),
+                    title: entry.title.clone(),
+                    icon: entry.icon.clone(),
+                    open: entry.open,
                 })
                 .collect(),
             save_as_connection: self.save_as_connection_available(),
@@ -1959,6 +2225,36 @@ impl TerminalSidebar {
         }))
     }
 
+    /// 渲染扩展面板的工具栏按钮
+    fn render_extension_toolbar_button(
+        &self,
+        entry: &ExtensionPanelEntry,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let is_active = entry.open;
+        let item_size = Size::Size(one_ui::theme_geometry().layout.global_rail_item);
+        let id = entry.id.clone();
+        let title = entry.title.clone();
+        let style = ButtonCustomVariant::new(cx)
+            .foreground(self.colors.foreground)
+            .hover(self.colors.muted)
+            .active(self.colors.muted);
+
+        IconButton::new(
+            SharedString::from(format!("terminal-sidebar-ext-btn-{}", entry.id)),
+            entry.icon.clone(),
+        )
+        .hit_size(item_size)
+        .glyph_size(OneIconSize::Small)
+        .custom(style)
+        .selected(is_active)
+        .tooltip(title)
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            this.toggle_extension_panel(&id, cx);
+        }))
+    }
+
     /// 渲染工具栏
     pub fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let border_color = self.colors.border;
@@ -1979,6 +2275,21 @@ impl TerminalSidebar {
                         .iter()
                         .copied()
                         .map(|panel| self.render_toolbar_button(panel, window, cx)),
+                )
+                .when(!self.extension_panels.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .w(px(16.0))
+                            .h(px(1.0))
+                            .my_1()
+                            .bg(self.colors.border),
+                    )
+                })
+                .children(
+                    self.extension_panels
+                        .iter()
+                        .map(|entry| self.render_extension_toolbar_button(entry, window, cx))
+                        .collect::<Vec<_>>(),
                 ),
             )
             .into_any_element()
@@ -2058,6 +2369,8 @@ impl TerminalSidebar {
 struct TerminalToolbarSnapshot {
     colors: TerminalColors,
     buttons: Vec<TerminalToolbarButtonSnapshot>,
+    /// 扩展面板按钮（分离式工具栏 / workspace 模式也显示）。
+    extension_buttons: Vec<ExtensionToolbarButtonSnapshot>,
     /// 当前是临时连接（无数据库 ID）时展示“保存为连接”
     save_as_connection: bool,
 }
@@ -2068,6 +2381,14 @@ struct TerminalToolbarButtonSnapshot {
     open: bool,
 }
 
+#[derive(Clone)]
+struct ExtensionToolbarButtonSnapshot {
+    id: SharedString,
+    title: SharedString,
+    icon: Icon,
+    open: bool,
+}
+
 pub(crate) struct TerminalSidebarToolbar {
     sidebar: Entity<TerminalSidebar>,
 }
@@ -2075,6 +2396,36 @@ pub(crate) struct TerminalSidebarToolbar {
 impl TerminalSidebarToolbar {
     pub(crate) fn new(sidebar: Entity<TerminalSidebar>) -> Self {
         Self { sidebar }
+    }
+
+    fn render_extension_button(
+        &self,
+        button: ExtensionToolbarButtonSnapshot,
+        item_size: Size,
+        colors: &TerminalColors,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let sidebar = self.sidebar.clone();
+        let id = button.id;
+        let style = ButtonCustomVariant::new(cx)
+            .foreground(colors.foreground)
+            .hover(colors.muted)
+            .active(colors.muted);
+
+        IconButton::new(
+            SharedString::from(format!("terminal-detached-toolbar-ext-btn-{id}")),
+            button.icon,
+        )
+        .hit_size(item_size)
+        .glyph_size(OneIconSize::Small)
+        .custom(style)
+        .selected(button.open)
+        .tooltip(button.title)
+        .on_click(move |_, _window, cx| {
+            sidebar.update(cx, |sidebar, cx| {
+                sidebar.toggle_extension_panel(&id, cx);
+            });
+        })
     }
 
     fn render_button(
@@ -2124,13 +2475,22 @@ impl Render for TerminalSidebarToolbar {
             .border_l_1()
             .border_color(snapshot.colors.border)
             .child(
-                v_flex().flex_1().items_center().py_2().gap_1().children(
-                    snapshot
-                        .buttons
-                        .iter()
-                        .copied()
-                        .map(|button| self.render_button(button, item_size, &snapshot.colors, cx)),
-                ),
+                v_flex()
+                    .flex_1()
+                    .items_center()
+                    .py_2()
+                    .gap_1()
+                    .children(
+                        snapshot.buttons.iter().copied().map(|button| {
+                            self.render_button(button, item_size, &snapshot.colors, cx)
+                        }),
+                    )
+                    .when(!snapshot.extension_buttons.is_empty(), |this| {
+                        this.child(div().w(px(16.0)).h(px(1.0)).my_1().bg(snapshot.colors.border))
+                    })
+                    .children(snapshot.extension_buttons.iter().cloned().map(|button| {
+                        self.render_extension_button(button, item_size, &snapshot.colors, cx)
+                    })),
             )
             .when_some(save_button, |this, button| {
                 this.child(v_flex().w_full().items_center().pb_2().child(button))
@@ -2172,13 +2532,19 @@ impl Render for TerminalSidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg_color = self.colors.background;
         let active_panel = self.active_panel();
+        let active_extension = self.active_extension_panel();
 
         h_flex()
             .h_full()
             .flex_shrink_0()
             .bg(bg_color)
-            .when(active_panel.is_some(), |this| this.w_full())
-            .when(active_panel.is_none(), |this| this.w(TOOLBAR_WIDTH))
+            .when(active_panel.is_some() || active_extension.is_some(), |this| {
+                this.w_full()
+            })
+            .when(
+                active_panel.is_none() && active_extension.is_none(),
+                |this| this.w(TOOLBAR_WIDTH),
+            )
             .when_some(active_panel, |this, panel| {
                 this.child(
                     v_flex()
@@ -2190,6 +2556,21 @@ impl Render for TerminalSidebar {
                         .child(self.render_panel_content(panel, window, cx)),
                 )
             })
+            .when_some(active_extension, |this, id| {
+                // 内建面板未打开时才显示扩展面板（内嵌模式每侧一个面板）。
+                if active_panel.is_some() {
+                    return this;
+                }
+                this.child(
+                    v_flex()
+                        .flex_1()
+                        .h_full()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .bg(bg_color)
+                        .child(self.render_extension_panel_content(&id, window, cx)),
+                )
+            })
             .child(self.render_toolbar(window, cx))
     }
 }
@@ -2198,6 +2579,7 @@ impl Render for TerminalSidebar {
 mod tests {
     use super::{
         SidebarPanel, TerminalToolDockState, agent_theme_from_terminal_theme,
+        extension_panel_placement_key,
         build_live_terminal_ai_context, build_terminal_ai_context, terminal_ai_system_instruction,
         terminal_sidebar_available_panels, workspace_theme_from_terminal_colors,
     };
@@ -2683,5 +3065,15 @@ mod tests {
             vec![(SidebarPanel::AiChat, SidebarPlacement::Right)],
         );
         assert!(dock.toolbar_visible());
+    }
+
+    #[test]
+    fn extension_placement_keys_do_not_collide_with_builtin_panel_ids() {
+        let key = extension_panel_placement_key("com.example.tools:demo");
+        assert_eq!(key, "ext:com.example.tools:demo");
+        for panel in SidebarPanel::ALL {
+            assert!(panel.local_id().starts_with("terminal."));
+            assert_ne!(panel.local_id(), key.as_str());
+        }
     }
 }

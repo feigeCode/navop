@@ -1,9 +1,6 @@
 # SSH 與終端工作區
 
-Navop 與 Navop Shell 將遠端 SSH 和本機 Terminal 放在統一工作區，支援標籤、分割、廣播輸入、歷史、快捷命令、自訂醒目提示和 Shell integration。命令會直接作用於本機或伺服器，必須持續確認主機與身分。
-
-> [!NOTE]
-> 本頁功能在 **Navop** 與 **Navop Shell** 中可用；**Navop Data** 不含終端機工作區。
+Navop 將遠端 SSH 和本機 Terminal 放在統一工作區，支援標籤、分割、廣播輸入、歷史、快捷命令、自訂醒目提示和 Shell integration。命令會直接作用於本機或伺服器，必須持續確認主機與身分。
 
 ## 建立 SSH 與本機終端
 

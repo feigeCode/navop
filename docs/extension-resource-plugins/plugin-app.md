@@ -57,6 +57,22 @@ nsh 扩展的 `extension.json` 用 `contributes.shellApp` 声明 app，不再用
 - `title` 缺省取 `manifest.name`；`entry`、`backends`、`modules` 语义与旧
   `shellViews` 相同（backends 引用 `runtime.ipc[].id`；别名 `host`/`navop`/`default`
   禁用；`shell:exec` 权限仍是 nsh 扩展的硬要求）。
+- `contributes.panels` 给同一 app 加宿主侧栏面板：`anchor` 取
+  `"terminal-sidebar"`（终端侧栏，默认）或 `"db-sidebar"`（数据库侧栏），
+  `order` 排序，`when` 可选过滤（数据库侧栏可写
+  `connection.type == "database"`、`connection.params.db_type == "mysql"`）。
+  入口复用 `shellApp.entry`，宿主以 `host.params.surface == "panel"` +
+  `panel: <id>` + `anchor: <锚点>` 起独立 AppView 实例。声明面板的扩展必须
+  有 `shellApp`（安装期校验）。
+- DB 树右键菜单可以开 nsh 页：`contributes.commands[].handler` 用
+  `kind: "nsh"` + `route`，`contributes.menus["db.tree.table" 等]` 引用该
+  命令；触发场景（节点/连接/命令）经 `host.params.context` 交给页面。
+- 图标（`shellApp.icon` / `panels[].icon` / `commands[].icon`）都是**相对扩展
+  根目录**的图片路径，经宿主的 `local-icon/` 资产命名空间直接读盘，SVG 以图像
+  方式解码、保留原色（所以别写死单色，也别用外部 URL）。落地位置：
+  `shellApp.icon` → 标签页图标、工具箱卡片图标；`panels[].icon` → 侧栏按钮
+  （不写则回落 `shellApp.icon`，再没有就用通用扩展图标）；`commands[].icon` →
+  DB 树右键菜单项（不写则纯文字）。推荐 24×24 viewBox 的 SVG。
 - 没有 `surface`、`singleton`、`id`：一个扩展只有一个 app，工具箱入口按
   「有连接 → 由连接打开；无连接 → 工具箱」决定，不再有 toolbox 卡片页。
 - `connections[].route` 取代 `shellViewId`：可选、非空字符串、app 自己解释。

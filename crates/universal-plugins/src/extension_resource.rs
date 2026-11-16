@@ -7,16 +7,23 @@ use crate::universal_plugins::UniversalPluginService;
 
 /// 已保存扩展连接的 resource/open 启动参数。
 /// 只携带 credential 引用，不携带明文 secret。
+///
+/// 访问方都在 `nsh-host` 路径里；`-D warnings` 的产品形状（例如 i686 的
+/// 最小构建）可能整条链都休眠，所以这里无条件允许 dead_code——字段本身
+/// 在带 nsh 宿主的构建里是活的，只在部分形状下没人读。
+#[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct ExtensionResourceLaunch {
     // 访问方都在 `nsh-host` feature 路径下;关闭 feature 时是合法的休眠字段。
     #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     connection_id: i64,
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     runtime_id: String,
     resource_type: String,
     pub(crate) config: serde_json::Value,
 }
 
+#[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
 pub(crate) struct OpenedExtensionResource {
     client: ManagedUniversalPluginClient,
     result: Option<ResourceOpenResult>,
@@ -65,6 +72,7 @@ impl ExtensionResourceLaunch {
         }
     }
 
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) async fn open(
         self,
         service: &UniversalPluginService,
@@ -91,6 +99,7 @@ impl ExtensionResourceLaunch {
     }
 }
 
+#[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
 impl OpenedExtensionResource {
     fn new(client: ManagedUniversalPluginClient, result: ResourceOpenResult) -> Self {
         Self {
@@ -191,6 +200,7 @@ fn credential_refs<'a>(
 ///
 /// 页面把它渲染成"当前连接"，宿主工作台/调试也用它 —— 只给 UI 能看的
 /// 那部分。
+#[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
 pub(crate) fn ui_connection_context(
     connection: &one_core::storage::StoredConnection,
 ) -> serde_json::Value {

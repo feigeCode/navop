@@ -681,23 +681,30 @@ jobs:
           cp dist-gpu-stack/navop-gpu-stack-linux-*.tar.gz "${PUBLIC_BASENAME}-gpu-stack.tar.gz"
 
       - name: Install Linux packaging dependencies
-        if: matrix.product == 'navop' && matrix.target == 'x86_64-unknown-linux-gnu'
+        if: matrix.product == 'navop' && runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y rpm
 
-      - name: Package Linux installers (x86_64)
-        if: matrix.product == 'navop' && matrix.target == 'x86_64-unknown-linux-gnu'
+      - name: Package Linux installers
+        if: matrix.product == 'navop' && runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
 
           PACKAGE_VERSION="${ONETCLI_VERSION//-/.}"
-          DEB_NAME="navop_${PACKAGE_VERSION}_amd64.deb"
-          RPM_NAME="navop-${PACKAGE_VERSION}-1.x86_64.rpm"
-          APPIMAGE_NAME="navop_${PACKAGE_VERSION}_amd64.AppImage"
+          # dpkg 与 rpm 的架构名不同，linuxdeploy 又要求工具本身与目标架构一致，
+          # 三者统一从 matrix.target 推导：以后新增架构只改这一处。
+          case "${{ matrix.target }}" in
+            x86_64-*) DEB_ARCH="amd64"; RPM_ARCH="x86_64"; LINUXDEPLOY_ARCH="x86_64" ;;
+            aarch64-*) DEB_ARCH="arm64"; RPM_ARCH="aarch64"; LINUXDEPLOY_ARCH="aarch64" ;;
+            *) echo "::error::Unsupported Linux installer target: ${{ matrix.target }}"; exit 1 ;;
+          esac
+          DEB_NAME="navop_${PACKAGE_VERSION}_${DEB_ARCH}.deb"
+          RPM_NAME="navop-${PACKAGE_VERSION}-1.${RPM_ARCH}.rpm"
+          APPIMAGE_NAME="navop_${PACKAGE_VERSION}_${DEB_ARCH}.AppImage"
 
-          rm -rf package-deb rpmbuild Navop.AppDir linuxdeploy-x86_64.AppImage
+          rm -rf package-deb rpmbuild Navop.AppDir "linuxdeploy-${LINUXDEPLOY_ARCH}.AppImage"
 
           mkdir -p package-deb/DEBIAN
           cp -a package/. package-deb/
@@ -706,7 +713,7 @@ jobs:
           Version: ${PACKAGE_VERSION}
           Section: utils
           Priority: optional
-          Architecture: amd64
+          Architecture: ${DEB_ARCH}
           Provides: onetcli
           Replaces: onetcli
           Conflicts: onetcli
@@ -747,7 +754,7 @@ jobs:
           Summary: Navop - Database, SSH, Terminal, AI Tools
           License: Apache-2.0
           URL: https://github.com/feigeCode/navop
-          BuildArch: x86_64
+          BuildArch: ${RPM_ARCH}
           Provides: onetcli = %{version}-%{release}
           Obsoletes: onetcli < %{version}-%{release}
           Source0: %{name}-%{version}.tar.gz
@@ -782,22 +789,22 @@ jobs:
           /usr/share/icons/hicolor/512x515/apps/navop.png
           EOF
           rpmbuild --define "_topdir ${RPM_ROOT}" -bb "${RPM_ROOT}/SPECS/navop.spec"
-          generated_rpm="$(find "${RPM_ROOT}/RPMS" -name "navop-${PACKAGE_VERSION}-1*.x86_64.rpm" -print -quit)"
+          generated_rpm="$(find "${RPM_ROOT}/RPMS" -name "navop-${PACKAGE_VERSION}-1*.${RPM_ARCH}.rpm" -print -quit)"
           test -n "${generated_rpm}"
           cp "${generated_rpm}" "${RPM_NAME}"
 
           mkdir -p Navop.AppDir
           cp -a package/. Navop.AppDir/
-          curl -L -o linuxdeploy-x86_64.AppImage \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          chmod +x linuxdeploy-x86_64.AppImage
-          VERSION="${PACKAGE_VERSION}" APPIMAGE_EXTRACT_AND_RUN=1 ./linuxdeploy-x86_64.AppImage \
+          curl -L -o "linuxdeploy-${LINUXDEPLOY_ARCH}.AppImage" \
+            "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${LINUXDEPLOY_ARCH}.AppImage"
+          chmod +x "linuxdeploy-${LINUXDEPLOY_ARCH}.AppImage"
+          VERSION="${PACKAGE_VERSION}" APPIMAGE_EXTRACT_AND_RUN=1 "./linuxdeploy-${LINUXDEPLOY_ARCH}.AppImage" \
             --appdir Navop.AppDir \
             --executable Navop.AppDir/usr/bin/navop \
             --desktop-file resources/linux/navop.desktop \
             --icon-file package/usr/share/icons/hicolor/512x515/apps/navop.png \
             --output appimage
-          generated_appimage="$(find . -maxdepth 1 -name '*.AppImage' ! -name 'linuxdeploy-x86_64.AppImage' -print -quit)"
+          generated_appimage="$(find . -maxdepth 1 -name '*.AppImage' ! -name "linuxdeploy-${LINUXDEPLOY_ARCH}.AppImage" -print -quit)"
           test -n "${generated_appimage}"
           mv "${generated_appimage}" "${APPIMAGE_NAME}"
 
@@ -906,14 +913,16 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Linux installer artifacts
-        if: matrix.product == 'navop' && matrix.target == 'x86_64-unknown-linux-gnu'
+        if: matrix.product == 'navop' && runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: navop-linux-x86_64-installers
+          # 每个架构各自一份：deb/rpm/AppImage 都在本 job 里现做。
+          name: navop-${{ matrix.public_label }}-installers
           path: |
             navop_*.deb
             navop-*.rpm
             navop_*.AppImage
+          if-no-files-found: error
 
   release:
     name: Publish Release

@@ -6,8 +6,8 @@ use crate::persistent_connection_sidebar::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyWindowHandle, App, AppContext, Context, Entity, ExternalPaths, InteractiveElement,
-    IntoElement, KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
+    App, AppContext, Context, Entity, ExternalPaths, InteractiveElement, IntoElement, KeyBinding,
+    Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{
     WindowExt,
@@ -66,10 +66,18 @@ pub struct GlobalHomePage {
 impl gpui::Global for GlobalHomePage {}
 
 /// 新建连接向导的「更多连接 / 安装扩展」入口：切到扩展管理 tab。
+/// 没有 nsh 宿主（32 位 Windows）时整个入口不注册，`app_kit` 自然不展示它。
+#[cfg(feature = "nsh-host")]
 struct NavopExtensionsHost;
 
+#[cfg(feature = "nsh-host")]
 impl app_kit::ExtensionsHost for NavopExtensionsHost {
-    fn open_extensions(&self, parent: AnyWindowHandle, _window: &mut Window, cx: &mut App) -> bool {
+    fn open_extensions(
+        &self,
+        parent: gpui::AnyWindowHandle,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
         let Some(home) = cx.try_global::<GlobalHomePage>() else {
             return false;
         };
@@ -905,6 +913,7 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     #[cfg(feature = "shell")]
     app_kit::set_shell_host(Arc::new(crate::home_tab::domain_host::NavopShellHost));
     // 新建连接向导的「更多连接 / 安装扩展」入口由应用壳实现，`app_kit` 不感知扩展运行时。
+    #[cfg(feature = "nsh-host")]
     app_kit::set_extensions_host(Arc::new(NavopExtensionsHost));
     ai_chat_view::init(cx);
     mcp_approval::init(cx);

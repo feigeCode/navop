@@ -4,12 +4,9 @@ Notes opens and edits local Markdown files through two modes: a **read-only prev
 
 ![Markdown source editor](/images/markdown.png)
 
-> [!NOTE]
-> Notes is available in all three apps and edits local Markdown files.
-
 ## Open Markdown files
 
-Choose a readable and writable local folder in Notes to browse its Markdown files. You can also use the operating-system file association to open a `.md` file directly in Navop.
+Choose a readable and writable local resource folder in Notes to browse its Markdown files. You can also use the operating-system file association to open a `.md` file directly in Navop.
 
 Changing the Notes folder does not move existing files. When the folder is managed by a cloud drive, network share, or Git repository, that system remains responsible for synchronization, locking, and conflict resolution.
 

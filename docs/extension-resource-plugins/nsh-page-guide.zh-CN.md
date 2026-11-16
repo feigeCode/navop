@@ -132,12 +132,18 @@ app 是误报；二是没有宿主的地方（`nsh test`、`nsh preview`）会�
 
 | 通道 | 名字 | 说明 |
 |---|---|---|
-| `host.params` | （对象） | 启动事实：`apiVersion` / `extension{id,viewId,viewKey,title}` / `backends` / `connection` |
+| `host.params` | （对象） | 启动事实：`apiVersion` / `extension{id,viewId,viewKey,title}` / `backends` / `connection` / `context` / `surface` / `panel` |
 | `host.call` | `navop.resource.{open,invoke,ping,close}` | 资源句柄。`invoke` 是页面读写数据的主要方式 |
 | `host.call` | `navop.job.{start,status,cancel,result,close}` | 长任务 |
 | `host.call` | `navop.blob.read` / `navop.blob.close` | 大块数据分片读 |
-| `host.call` | `navop.event.{subscribe,unsubscribe}` | 订阅事件流；随后由 `host.on("navop.event")` 推送 |
+| `host.call` | `navop.event.{subscribe,unsubscribe}` | 订阅事件流（`handle: "host"` + `kind: "db.treeChanged"` 订宿主事件）；随后由 `host.on("navop.event")` 推送 |
 | `host.call` | `navop.runtime.info` | provider 运行时信息 |
+| `nativeModule("navop")` | `App.open` | 打开本扩展或其他扩展的 app tab（`modules: ["app"]`） |
+| `nativeModule("navop")` | `Ui.notify` | 宿主 toast 通知 `{ title, message?, level? }`（`modules: ["ui"]`） |
+| `nativeModule("navop")` | `Terminal.{list,read,write,wait}` | 终端会话：列会话/读屏幕文本/写输入/等输出变化（`modules: ["terminal"]`，写入高权限） |
+| `nativeModule("navop")` | `Terminal.{exec,sshExec}` | 执行命令：`exec` 打进活动终端（走用户 shell，本地/SSH 均可）并等输出；`sshExec` 在 SSH 会话上独立执行（stdout/stderr 分开、可后台） |
+| `nativeModule("navop")` | `Db.{listConnections,openSession,execute,closeSession,refreshTree}` | 数据库会话与查询（`modules: ["db"]` + 清单 `db:*` 权限） |
+| `nativeModule("navop")` | `Db.{listDatabases,listSchemas,listTables,describeTable,listFunctions}` | 只读元数据：库 → schema → 表/视图 → 列/索引/外键/函数，`describeTable` 一次取全一张表（要 `db:schema:<conn\|*>`） |
 | `host.call` | `navop.dev.*` | 只有 navop 内置的 dev-tools 扩展能用，第三方扩展调不到 |
 | `host.on` | `navop.event` | 事件批次 `{ handle, cursor, events, done?, error? }`，单批最多 64 条，溢出时带 `EVENT_OVERFLOW` 并可用 `since` 续订 |
 | `host.post` | `navop.log` | `{ level, message, fields }`，写进宿主日志，无应答 |
@@ -198,10 +204,47 @@ try {
        alias,                 // 这个句柄在页面 backends 里的别名
        config,                // 连接的非敏感配置（secrets 不会出现）
      },
+     surface: "tab",          // "tab"（默认）或 "panel"
+     panel: null,             // surface == "panel" 时为声明的面板 id
+     anchor: null,            // surface == "panel" 时为宿主锚点：
+                              //   "terminal-sidebar"（终端侧栏）| "db-sidebar"（数据库侧栏）
    }
    ```
    不是从连接打开的页面（例如工具箱里直接打开的页面）`connection` 为 null。
    读不到 `host.params` 属于宿主 bug，不是页面要去兜底的情况。
+
+   同一扩展可以有两种 surface：**tab**（工具箱 / DB 菜单打开的整页）和
+   **panel**（`extension.json` 里 `contributes.panels` 声明的宿主侧栏面板，
+   锚点取 `terminal-sidebar` 或 `db-sidebar`）。两种 surface 跑同一份
+   bundle、各起一个 AppView 实例——页面在 `App()` 顶层用 `params.surface`
+   分流（同页面适配两个锚点时再看 `params.anchor`）：
+   ```tsx
+   import { params } from "./lib/navop";
+   import Panel from "./pages/panel/App";
+
+   export default function App() {
+     if (params.surface === "panel") return <Panel />;
+     // …tab 形态的侧栏 + 内容区
+   }
+   ```
+   面板空间有限，适合放轻量工具；完整功能用 `App.open` 跳回 tab。
+   数据库侧栏面板可以用 `when` 按连接形态过滤，例如
+   `when: "connection.type == 'database'"`。
+
+   另有一个可选键 `context`：宿主 UI 触发的打开动作（目前是 DB 树右键菜单，
+   命令 handler 声明 `kind: "nsh"`）会把触发场景作为启动事实注入：
+   ```ts
+   {
+     context: null | {
+       commandId: string,       // 触发菜单命令 id
+       connectionId: string,    // 右键所在连接
+       databaseType: string,    // "mysql" / "postgresql" / ... / "external"
+       driverId: string | null, // external 驱动的 driver id
+       node: { id, name, type } // type: "table" / "view" / "schema" / ...
+     },
+   }
+   ```
+   页面用它定位首屏（比如直接打开 `node.name` 的详情），不用它也行。
 2. `navop.resource.invoke` —— 按 provider 的方法名调一次：
    ```ts
    await host.call("navop.resource.invoke", {
@@ -220,8 +263,28 @@ const volumes = await invoke<{ volumes: Volume[] }>("docker/volume/list", {});
 ```
 
 `modules` 的合法值只有 `resource` / `job` / `event` / `blob` / `runtime` /
-`log` / `dev`；声明 `resource` / `job` / `event` / `blob` 的页面必须有
-`backends`。**声明了就代表你授权了这个命名空间**，页面没用到的不声明。
+`log` / `dev` / `app` / `ui` / `terminal` / `db`；声明 `resource` / `job` /
+`event` / `blob` 的页面必须有 `backends`。**声明了就代表你授权了这个模块**，
+页面没用到的不声明。`app`/`ui`/`terminal`/`db` 是 nativeModule 能力面，
+`resource`/`job`/`event`/`blob` 是 `host.call` 字符串通道，
+`ai` 授予 `navop.ai.*`（页面用 `nativeComponent("navop.ai")` 自己嵌 AI 聊天面板，`host.post("navop.ai.context")` 上报上下文）。
+
+`app` 模块给页面一个跨 surface 导航能力：
+
+```ts
+import { nativeModule } from "nsh";
+
+const api = nativeModule<{ App: { open: (o: object) => Promise<{ ok: boolean }> } }>("navop");
+// 打开别的扩展的 app（也可省略 extensionId 打开自己）
+await api.App.open({
+  extensionId: "com.navop.docker",
+  route: "containers",          // 可选，进目标页面的 host.params.route
+  context: { from: "explorer" } // 可选，进目标页面的 host.params.context
+});
+```
+
+目标 tab 按 `(extensionId, route)` 复用：已有同 key tab 时只激活，`context`
+不会重新注入（同一 key 视为同一页面场景）。
 
 **没有第二套"声明式 UI"机制了**：没有工作台描述、没有 operation 派发、
 没有宿主注入的 route/selection。页面要选容器/选索引/选主题，就自己拉列表、
@@ -371,6 +434,10 @@ test("列表与详情", async () => {
 - `nsh test .` 全绿（页面测试从页面目录 `open("../../App.tsx")` 并传 `route`）；
 - `extension.json`：`engines.nsh`、`shellApp.entry` 指到 `dist/bundle.js`、
   `modules` 与 app 真实用到的命名空间一致（`resource`/`job`/`event`/`blob`/
-  `runtime`/`log`/`dev`，没有 `context`/`theme`/`i18n` 了）、连接用 `route` 而不是旧 `shellViewId`；
+  `runtime`/`log`/`dev`/`app`/`ui`/`terminal`/`db`，没有 `context`/`theme`/
+  `i18n` 了）、连接用 `route` 而不是旧 `shellViewId`；
+- 声明了 `contributes.panels` 的扩展：`shellApp` 必须同时存在（安装期校验），
+  面板页按 `params.surface === "panel"` 分流，需要区分挂载点时看
+  `params.anchor`（`terminal-sidebar` / `db-sidebar`）；
 - 页面目录里没有 `nsh.json` / `tsconfig.json` / `dist/`（它们只属于 app 根）；
 - `ui/nsh.json` 的 `capabilities.host` 是 `true`（交给宿主裁决，不要列具体名字）。

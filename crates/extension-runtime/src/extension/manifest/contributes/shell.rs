@@ -21,6 +21,24 @@ pub enum ShellHostModule {
     ///
     /// 只对内置扩展开放：`validate_modules` 在安装期按 id 白名单拒绝第三方声明。
     Dev,
+    /// 跨 surface 导航（`host.call("navop.app.open")`）：打开本扩展或
+    /// 其他扩展的 shell app tab，可带 route 与参数。
+    App,
+    /// 数据库能力面（`host.call("navop.db.*")`）：列连接、开会话、执行
+    /// SQL、列库/Schema、关会话、刷新 DB 树。权限沿用清单 `db:*` 声明，
+    /// 复用 WASM 侧同一套 `ExtensionDbGateway` 校验。
+    Db,
+    /// 界面能力面（`host.call("navop.ui.*")`）：弹通知
+    /// （info/success/warning/error）。长任务进度走 `navop.job`。
+    Ui,
+    /// 终端能力面（`host.call("navop.terminal.*")`）：列终端会话、读屏幕
+    /// 文本、向会话写输入。会话与读/写句柄复用 Public MCP 终端注册表
+    /// （与 AI 工具同一通道）；写入是高权限动作，安装期能力面会提示。
+    Terminal,
+    /// 插件 AI 平面（`navop.ai.*`）：页面用 `host.post("navop.ai.context", …)`
+    /// 上报当前路由/连接的上下文，并可 `navop.ai.open` / `navop.ai.ask` 唤起
+    /// 本 tab 的 AI 侧栏。上下文只是提示，不授予任何数据权限。
+    Ai,
     /// ⚠️ ABI v2 已删除该模块：界面语言由 nsh 原生提供。
     ///
     /// 变体保留只为让老清单报安装期错误，见 [`ShellHostModule::is_supported`]。
@@ -54,6 +72,11 @@ impl ShellHostModule {
                 | Self::Log
                 | Self::Runtime
                 | Self::Dev
+                | Self::App
+                | Self::Db
+                | Self::Ui
+                | Self::Terminal
+                | Self::Ai
         )
     }
 
@@ -74,6 +97,11 @@ impl ShellHostModule {
             Self::Log => "navop.log",
             Self::Runtime => "navop.runtime",
             Self::Dev => "navop.dev",
+            Self::App => "navop.app",
+            Self::Db => "navop.db",
+            Self::Ui => "navop.ui",
+            Self::Terminal => "navop.terminal",
+            Self::Ai => "navop.ai",
             Self::I18n => "navop.i18n",
             Self::Theme => "navop.theme",
         }
@@ -93,6 +121,11 @@ impl ShellHostModule {
         Self::Log,
         Self::Runtime,
         Self::Dev,
+        Self::App,
+        Self::Db,
+        Self::Ui,
+        Self::Terminal,
+        Self::Ai,
         Self::I18n,
         Self::Theme,
     ];
@@ -154,7 +187,7 @@ mod tests {
         }
     }
 
-    /// v2 的支持面就是这七个模块，且顺序稳定（`ALL` 的声明顺序）。
+    /// v2 的支持面就是这八个模块，且顺序稳定（`ALL` 的声明顺序）。
     ///
     /// `context` / `i18n` / `theme` 是 v2 删除的旧值：枚举变体保留只为让老清单
     /// 在 `validate_modules` 里落到一句可读的「已删除」错误，它们不能算支持面，
@@ -175,6 +208,11 @@ mod tests {
                 "navop.log",
                 "navop.runtime",
                 "navop.dev",
+                "navop.app",
+                "navop.db",
+                "navop.ui",
+                "navop.terminal",
+                "navop.ai",
             ],
             supported
         );

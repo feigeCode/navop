@@ -196,6 +196,8 @@ fn tool_exposure_items(
     surface
         .visible_items()
         .iter()
+        // 没有 nsh 宿主时扩展工具集不存在，不展示只会保存无效开关的「扩展」项。
+        .filter(|item| crate::nsh_ui_available() || **item != ToolExposureItem::Extensions)
         .map(|item| tool_exposure_item(surface, *item, default_settings))
         .collect()
 }
@@ -245,47 +247,37 @@ fn agent_tool_exposure_item_ids() -> Vec<&'static str> {
 mod tests {
     use super::*;
 
+    fn expected_item_ids() -> Vec<&'static str> {
+        let mut ids = vec![
+            "terminal",
+            "terminal_ssh_exec",
+            "terminal_exec",
+            "connections",
+            "sftp",
+            "redis",
+            "mongo",
+            "database",
+            "notes",
+            "internal_functions",
+            "extensions",
+        ];
+        if !crate::nsh_ui_available() {
+            ids.pop();
+        }
+        ids
+    }
+
     #[test]
     fn mcp_tool_exposure_items_include_public_toolsets_and_terminal_flavors() {
         let ids = mcp_tool_exposure_item_ids();
 
-        assert_eq!(
-            vec![
-                "terminal",
-                "terminal_ssh_exec",
-                "terminal_exec",
-                "connections",
-                "sftp",
-                "redis",
-                "mongo",
-                "database",
-                "notes",
-                "internal_functions",
-                "extensions"
-            ],
-            ids
-        );
+        assert_eq!(expected_item_ids(), ids);
     }
 
     #[test]
     fn agent_tool_exposure_items_include_internal_agent_toolsets() {
         let ids = agent_tool_exposure_item_ids();
 
-        assert_eq!(
-            vec![
-                "terminal",
-                "terminal_ssh_exec",
-                "terminal_exec",
-                "connections",
-                "sftp",
-                "redis",
-                "mongo",
-                "database",
-                "notes",
-                "internal_functions",
-                "extensions"
-            ],
-            ids
-        );
+        assert_eq!(expected_item_ids(), ids);
     }
 }

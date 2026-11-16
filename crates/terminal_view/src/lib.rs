@@ -36,6 +36,10 @@ pub use settings::{
     TerminalHighlightRule, TerminalSettings, current_settings, init_settings, update_settings,
 };
 pub use sidebar::{SettingsPanel, SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
+pub use sidebar::{
+    ExtensionPanelSpec as SidebarExtensionPanelSpec, TerminalExtensionPanelHost,
+    init_terminal_extension_panels as init_sidebar_extension_panels,
+};
 pub use ssh_form::{SshFormPostSaveAction, SshFormWindow, SshFormWindowConfig};
 pub use telnet_form_window::{TelnetFormWindow, TelnetFormWindowConfig};
 pub use terminal::terminal::{

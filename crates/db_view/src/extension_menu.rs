@@ -8,6 +8,9 @@ pub struct DbTreeExtensionMenuItem {
     pub extension_id: String,
     pub command_id: String,
     pub label: String,
+    /// 命令声明的图标（已解析成扩展目录里的绝对路径）。
+    /// `None` 时菜单项不画图标——不猜、不塞默认图标。
+    pub icon: Option<std::path::PathBuf>,
     pub group: Option<String>,
     pub when_clause: Option<String>,
     pub requires_active: bool,
@@ -33,7 +36,15 @@ pub struct DbTreeExtensionMenuContext {
 }
 
 pub trait DbTreeExtensionActionHandler: Send + Sync {
-    fn run(&self, context: DbTreeExtensionActionContext, window: &mut Window, cx: &mut App);
+    /// `container` 是触发菜单的数据库标签页自己的页签容器：`kind: "nsh"`
+    /// 的命令要把扩展页开在这个容器里，而不是主窗口的页签栏。
+    fn run(
+        &self,
+        context: DbTreeExtensionActionContext,
+        container: Option<gpui::WeakEntity<one_core::tab_container::TabContainer>>,
+        window: &mut Window,
+        cx: &mut App,
+    );
 }
 
 #[derive(Clone)]
@@ -48,8 +59,14 @@ impl GlobalDbTreeExtensionActionHandler {
         Self { handler }
     }
 
-    pub fn run(&self, context: DbTreeExtensionActionContext, window: &mut Window, cx: &mut App) {
-        self.handler.run(context, window, cx);
+    pub fn run(
+        &self,
+        context: DbTreeExtensionActionContext,
+        container: Option<gpui::WeakEntity<one_core::tab_container::TabContainer>>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.handler.run(context, container, window, cx);
     }
 }
 
@@ -151,7 +168,8 @@ fn menu_item_visible(
     }
 }
 
-fn db_node_type_when_value(node_type: DbNodeType) -> &'static str {
+/// 节点类型的稳定字符串值（when 子句与 `host.params.context.node.type` 共用）。
+pub fn db_node_type_when_value(node_type: DbNodeType) -> &'static str {
     match node_type {
         DbNodeType::Connection => "connection",
         DbNodeType::Database => "database",
@@ -170,7 +188,8 @@ fn db_node_type_when_value(node_type: DbNodeType) -> &'static str {
     }
 }
 
-fn database_type_when_value(database_type: &DatabaseType) -> &'static str {
+/// 数据库类型驱动的稳定字符串值（when 子句与 `host.params.context` 共用）。
+pub fn database_type_when_value(database_type: &DatabaseType) -> &'static str {
     match database_type {
         DatabaseType::MySQL => "mysql",
         DatabaseType::PostgreSQL => "postgresql",
@@ -202,6 +221,7 @@ mod tests {
 
     fn item(command_id: &str, label: &str, group: &str) -> DbTreeExtensionMenuItem {
         DbTreeExtensionMenuItem {
+            icon: None,
             extension_id: "com.example.tools".to_string(),
             command_id: command_id.to_string(),
             label: label.to_string(),

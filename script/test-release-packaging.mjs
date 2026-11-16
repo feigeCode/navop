@@ -150,7 +150,11 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   );
   const packageInstallers = workflowStep(
     release,
-    "Package Linux installers (x86_64)",
+    "Package Linux installers",
+  );
+  const uploadInstallers = workflowStep(
+    release,
+    "Upload Linux installer artifacts",
   );
 
   // Linux ships exactly one build per architecture. The portable archive is an
@@ -302,7 +306,62 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
     /\$\{\{ matrix\.product \}\}-\*-\$\{\{ matrix\.public_label \}\}-gpu-stack\.tar\.gz/,
   );
 
-  assert.match(packageInstallers, /if: matrix\.product == 'navop' && matrix\.target == 'x86_64-unknown-linux-gnu'/);
+  // deb / rpm / AppImage are built for every Linux target. dpkg, rpm and
+  // linuxdeploy spell the architecture differently, so all three names are
+  // derived from the matrix target instead of being hard-coded to x86_64.
+  assert.match(
+    packageInstallers,
+    /if: matrix\.product == 'navop' && runner\.os == 'Linux'/,
+  );
+  assert.match(
+    packageInstallers,
+    /x86_64-\*\) DEB_ARCH="amd64"; RPM_ARCH="x86_64"; LINUXDEPLOY_ARCH="x86_64"/,
+  );
+  assert.match(
+    packageInstallers,
+    /aarch64-\*\) DEB_ARCH="arm64"; RPM_ARCH="aarch64"; LINUXDEPLOY_ARCH="aarch64"/,
+  );
+  assert.match(
+    packageInstallers,
+    /DEB_NAME="navop_\$\{PACKAGE_VERSION\}_\$\{DEB_ARCH\}\.deb"/,
+  );
+  assert.match(
+    packageInstallers,
+    /RPM_NAME="navop-\$\{PACKAGE_VERSION\}-1\.\$\{RPM_ARCH\}\.rpm"/,
+  );
+  assert.match(
+    packageInstallers,
+    /APPIMAGE_NAME="navop_\$\{PACKAGE_VERSION\}_\$\{DEB_ARCH\}\.AppImage"/,
+  );
+  assert.match(packageInstallers, /Architecture: \$\{DEB_ARCH\}/);
+  assert.match(packageInstallers, /BuildArch: \$\{RPM_ARCH\}/);
+  assert.match(
+    packageInstallers,
+    /"linuxdeploy-\$\{LINUXDEPLOY_ARCH\}\.AppImage"/,
+  );
+  assert.doesNotMatch(packageInstallers, /_amd64\.(?:deb|AppImage)/);
+  assert.doesNotMatch(packageInstallers, /1\.x86_64\.rpm/);
+  const installDeps = workflowStep(
+    release,
+    "Install Linux packaging dependencies",
+  );
+  assert.match(
+    installDeps,
+    /if: matrix\.product == 'navop' && runner\.os == 'Linux'/,
+  );
+  assert.match(installDeps, /sudo apt-get install -y rpm/);
+
+  // The two Linux jobs must not collide on the artifact name: upload-artifact
+  // v4 refuses two jobs writing the same artifact in one run.
+  assert.match(
+    uploadInstallers,
+    /if: matrix\.product == 'navop' && runner\.os == 'Linux'/,
+  );
+  assert.match(
+    uploadInstallers,
+    /name: navop-\$\{\{ matrix\.public_label \}\}-installers/,
+  );
+  assert.match(uploadInstallers, /if-no-files-found: error/);
 });
 
 test("the embedded webview is an opt-in feature on every platform", () => {
@@ -364,7 +423,7 @@ test("the embedded webview is an opt-in feature on every platform", () => {
   // host must ask for `default-features = false` and list the modules it wants.
   assert.match(
     mainCargo,
-    /nsh-host = \["universal-plugins\/nsh-host"\]/,
+    /nsh-host = \[\s*"universal-plugins\/nsh-host"\s*\]\s*nsh-db = \[\s*"nsh-host",\s*"universal-plugins\/nsh-db"\s*\]\s*nsh-terminal = \[\s*"nsh-host",\s*"universal-plugins\/nsh-terminal"\s*\]/,
   );
   assert.match(
     universalPluginsCargo,
@@ -372,7 +431,7 @@ test("the embedded webview is an opt-in feature on every platform", () => {
   );
   assert.match(
     universalPluginsCargo,
-    /nsh-host = \[\s*"dep:nsh-platform-gpui",\s*"dep:nsh-core",\s*"dep:nsh-engine",\s*"dep:ai_chat_view",\s*"dep:one-ui",\s*"dep:serde",\s*\]/,
+    /nsh-host = \[\s*"dep:nsh-platform-gpui",\s*"dep:nsh-core",\s*"dep:nsh-engine",\s*"dep:nsh-base",\s*"dep:ai_chat_view",\s*"dep:one-ui",\s*"dep:serde",\s*"dep:extension-component",\s*\]/,
   );
   assert.match(
     workspaceCargo,
@@ -635,7 +694,7 @@ test("Linux GPU dependency stack installer is additive and reversibly removable"
 test("Linux install guides document the GPU dependency stack and the portable archive", () => {
   const guides = [
     ["docs-site/docs/guide/install-update.md", /图形依赖包/],
-    ["docs-site/docs/en-US/guide/install-update.md", /graphics dependency package/],
+    ["docs-site/docs/en-US/guide/install-update.md", /GPU stack package/],
     ["docs-site/docs/zh-TW/guide/install-update.md", /圖形相依套件/],
   ];
 
@@ -689,6 +748,28 @@ test("Linux install guides document the GPU dependency stack and the portable ar
       guide,
       /NAVOP_PORTABLE/,
       `${guidePath} must document the NAVOP_PORTABLE environment variable`,
+    );
+    // deb / rpm / AppImage used to be documented as x86_64-only; both Linux
+    // targets ship them now, with the architecture spelled per format.
+    assert.match(
+      guide,
+      /navop_<version>_amd64\.deb/,
+      `${guidePath} must name the x86_64 deb`,
+    );
+    assert.match(
+      guide,
+      /navop_<version>_arm64\.deb/,
+      `${guidePath} must name the arm64 deb`,
+    );
+    assert.match(
+      guide,
+      /navop-<version>-1\.aarch64\.rpm/,
+      `${guidePath} must name the arm64 rpm`,
+    );
+    assert.match(
+      guide,
+      /navop_<version>_arm64\.AppImage/,
+      `${guidePath} must name the arm64 AppImage`,
     );
   }
 });
@@ -935,8 +1016,8 @@ test("Windows release keeps the legacy ZIP standard and publishes portable separ
   );
   for (const [guide, installerLabel] of [
     [installGuides[0], /EXE 安装包/],
-    [installGuides[1], /EXE installer/],
-    [installGuides[2], /EXE 安裝包/],
+    [installGuides[1], /\*\*Installer:\*\*/],
+    [installGuides[2], /EXE 安裝檔/],
   ]) {
     assert.match(guide, /navop-<version>-windows-x64\.exe/);
     assert.match(guide, installerLabel);

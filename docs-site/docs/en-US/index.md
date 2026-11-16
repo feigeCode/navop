@@ -1,60 +1,51 @@
 # Navop Usage Guide
 
-Navop now ships as three apps on one native core: the full **Navop**, **Navop Shell** for remote operations, and **Navop Data** for data work. They share the same version number, can be installed side by side, and share the AI, Notes, team sync, extension market, and theme foundation. What differs is the scope of work each app covers.
+Navop is a desktop workspace **built natively with Rust and GPUI** — no WebView, no Electron. The interface, terminals, tables, and charts are GPU-rendered. It brings databases, servers, remote desktops, and AI agents into one window, covering connection management, SQL development, file transfer, and remote troubleshooting.
 
-## The three apps
+## Why Navop
 
-| App | Who it is for | What it covers |
-| --- | --- | --- |
-| **Navop** (full edition) | People who manage both databases and servers and want one app for everything | Databases (PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, Oracle, ClickHouse, Dameng, Kingbase, OceanBase, OpenGauss, and more), Redis, MongoDB, SSH/SFTP, local and remote terminals, port forwarding, RDP/VNC remote desktop, serial/Telnet, SQL editor, ER diagrams, data transfer, monitoring, Notes, AI workbench, team sync, extension market, Public MCP |
-| **Navop Shell** (remote operations) | People who mostly sign in to servers, move files, and open remote desktops | SSH/SFTP, local and remote terminals, port forwarding, RDP/VNC remote desktop, serial/Telnet; shares the AI, Notes, team, and extension foundation |
-| **Navop Data** (data tools) | People who mostly connect to databases, write SQL, and browse Redis/MongoDB | SQL workspace, Redis, MongoDB, ER diagrams, data transfer; shares the AI, Notes, team, and extension foundation |
+- **Native performance.** GPUI paints the interface directly, so many live connections, split terminals, and large result sets stay responsive instead of waiting on browser layout.
+- **Rust end to end.** Database drivers, SSH/SFTP, terminal emulation, the AI runtime, and the UI share one Rust codebase.
+- **One window for the work.** Keep SQL workspaces, terminals, file managers, remote desktops, and the AI sidebar side by side instead of switching tools.
+- **Extensible.** Database drivers, remote desktop providers, document renderers, and resource workbenches install as WASM extensions without restarting the app.
+- **Consistent across platforms.** macOS (arm64/x64), Windows (x64/win32), and Linux (x64/arm64) share the same interface and capabilities.
 
-## Shared foundation
+## What Navop supports
 
-All three apps run on the same native core and share:
+- **Databases:** MySQL, PostgreSQL, MariaDB, SQLite, DuckDB, SQL Server, Oracle, ClickHouse, TDengine, plus extension drivers for Dameng, KingbaseES, GBase, OceanBase, openGauss, IoTDB, Oscar, and more.
+- **Data tools:** object browsing, SQL editor with execution plans, import/export, schema and data comparison, ER diagrams, batch table editing.
+- **Redis / MongoDB / MQTT:** key and value management, collection and document queries, subscribe and publish.
+- **SSH and terminals:** local and remote terminals, native split panes, broadcast input, quick commands, shell integration, session recording/replay, and searchable logs.
+- **File transfer:** SFTP, FTP, and FTPS with drag-and-drop, remote file editing, ZMODEM, and server-to-server copy.
+- **Remote access:** local/remote/SOCKS port forwarding, X11, RDP, VNC, serial, Telnet, host-key management, and SecureCRT import.
+- **AI and automation:** SQL generation and explanation, result analysis, charts, terminal assistance, ACP agents (Codex / Claude Code / OpenCode), and Agent Hub.
+- **Collaboration and extensibility:** Notes, teams and shared connections, encrypted sync, extension marketplace, Public MCP, Navop CLI, and Agent Skill.
 
-- the AI workbench, Notes, team sync, and personal sync;
-- the extension market and the installed extension system;
-- themes, keyboard shortcuts, tab restore, tray, single instance, auto-update, and Public MCP.
+## Install and versions
 
-They are released under the same version number and can be installed side by side. Each app keeps its own data directory and keychain, so installing more than one does not overwrite another app's configuration. Only the full Navop registers `.db`, `.duckdb`, `.md`, and `.cast` file associations; Scoop and Flatpak currently cover the full Navop only.
+Get the latest builds from the [official Download Center](https://navop.dev/en-US/extensions), [GitHub Releases](https://github.com/feigeCode/navop/releases), or [CNB](https://cnb.cool/navop-dev/navop/-/releases). Packages follow `navop-<version>-<label>.<ext>` and cover macOS, Windows, and Linux; every release includes checksums.
 
-## Which app should I use?
+The same source also builds two smaller editions: **Navop Shell** (SSH, terminals, and remote desktop) and **Navop Data** (databases and data browsing). They share Navop's native shell, AI, sync, and extension system and are intended for narrower workflows; most users can start with Navop itself.
 
-- **You manage both databases and servers**, or need file associations, monitoring, and data transfer: choose Navop.
-- **You do remote operations**, mostly SSH, SFTP, terminals, port forwarding, and remote desktops: choose Navop Shell.
-- **You do data work**, mostly SQL, Redis, MongoDB, ER diagrams, and transfer: choose Navop Data.
-- **Not sure**: start with Navop, the most complete of the three. You can still install a standalone app later; they coexist without conflict.
-
-## Current release: v0.23.0
-
-All three apps are currently at v0.23.0. Download builds from the [official Download Center](https://navop.dev/en-US/extensions), [GitHub Releases](https://github.com/feigeCode/navop/releases), or [CNB](https://cnb.cool/navop-dev/navop/-/releases). The main product-shape changes:
-
-- Navop grew from a single full app into three apps on one native core, sharing the AI, Notes, team, extension, and update foundation.
-- Package names are distinguished by the `navop-`, `navop-shell-`, and `navop-data-` prefixes; all three are released under the same version and can be installed side by side.
-- Database and remote-operations capabilities are scoped per app; data directories, keychains, and in-app update channels are independent.
-- Only the full Navop provides `.db`, `.duckdb`, `.md`, and `.cast` file associations, plus the Linux `.deb`, `.rpm`, AppImage, and graphics dependency package.
-
-See [Installation and updates](./guide/install-update) for the package matrix and platform differences.
+See [Installation and updates](./guide/install-update) for the package matrix, platform differences, and upgrade notes.
 
 ## Start here
 
-- [Quick start: pick an app, then finish a first task](./guide/quick-start)
-- [Installation and updates: packages, platforms, and side-by-side installs](./guide/install-update)
-- [Home, workspaces, and connections](./guide/workspace-connections) (all three apps)
+- [Quick start: finish a first connection and task](./guide/quick-start)
+- [Installation and updates: packages, platforms, and data directories](./guide/install-update)
+- [Home, workspaces, and connections](./guide/workspace-connections)
 
 ## Find a workflow
 
-- Database connections, SQL, import/export, and schema tools (Navop / Navop Data): [Database connections](./guide/database-connections)
-- SQL editor, transactions, and query results (Navop / Navop Data): [SQL editor](./guide/sql-editor)
-- SSH, SFTP, port forwarding, and Agent Hub (Navop / Navop Shell): [SSH and terminals](./guide/ssh-terminal)
-- FTP and FTPS remote files (Navop): [FTP and remote files](./guide/ftp-remote-files)
-- Remote desktop, serial, and server monitoring (remote desktop and serial: Navop / Navop Shell; monitoring: Navop): [Remote access](./guide/remote-access)
-- Native resource workbench such as Docker (Navop): [Resource workbench](./guide/resource-workbench)
-- Notes Markdown preview and source editing (all three apps): [Notes](./guide/notes)
-- AI Workbench, Navop Skill, and Public MCP (all three apps; Public MCP is discovered per app): [AI and MCP](./guide/ai-workbench)
-- Team sync and security (all three apps): [Team sync](./guide/teams-sync-security)
-- Settings and troubleshooting (all three apps): [Settings and troubleshooting](./guide/settings-shortcuts)
+- Database connections, SQL, import/export, and schema tools: [Database connections](./guide/database-connections)
+- SQL editor, transactions, and query results: [SQL editor](./guide/sql-editor)
+- SSH, SFTP, port forwarding, and Agent Hub: [SSH and terminals](./guide/ssh-terminal)
+- FTP and FTPS remote files: [FTP and remote files](./guide/ftp-remote-files)
+- Remote desktop, serial, and server monitoring: [Remote access](./guide/remote-access)
+- Native resource workbench such as Docker: [Resource workbench](./guide/resource-workbench)
+- Notes Markdown preview and source editing: [Notes](./guide/notes)
+- AI Workbench, Navop Skill, and Public MCP: [AI and MCP](./guide/ai-workbench)
+- Team sync and security: [Team sync](./guide/teams-sync-security)
+- Settings and troubleshooting: [Settings and troubleshooting](./guide/settings-shortcuts)
 
-This guide is updated as the three apps evolve. Before working with production databases, remote servers, write SQL, file overwrites, or bulk sync, confirm the current environment and scope.
+This guide is updated as Navop evolves. Before working with production databases, remote servers, write SQL, file overwrites, or bulk sync, confirm the current environment and scope.

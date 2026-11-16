@@ -43,6 +43,13 @@ impl NshHost {
                         Tracked::Page(tab) => {
                             let _ = tab.update(cx, |tab, cx| tab.runtime_changed(&event, cx));
                         }
+                        Tracked::Panel(panel) => {
+                            // 面板的重装/报错语义与 tab 一致，直接转发给
+                            // 内部 NshTab（它持有租约与页面实例）。
+                            let _ = panel.update(cx, |panel, cx| {
+                                panel.runtime_changed(&event, cx);
+                            });
+                        }
                     }
                 }
             }

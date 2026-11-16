@@ -1,11 +1,8 @@
 # SSH 与终端工作区
 
-Navop 与 Navop Shell 将远程 SSH 和本地 Terminal 放入统一的终端工作区，支持多标签、分屏、广播输入、历史、快捷命令、自定义高亮和 Shell integration。终端命令会直接作用于本机或服务器，必须持续确认当前会话身份与主机。
+Navop 将远程 SSH 和本地 Terminal 放入统一的终端工作区，支持多标签、分屏、广播输入、历史、快捷命令、自定义高亮和 Shell integration。终端命令会直接作用于本机或服务器，必须持续确认当前会话身份与主机。
 
 ![SSH 与终端工作区](/images/ssh.png)
-
-> [!NOTE]
-> 本页功能在 **Navop** 与 **Navop Shell** 中可用；**Navop Data** 不含终端工作区。
 
 ## 创建 SSH 与本地终端
 

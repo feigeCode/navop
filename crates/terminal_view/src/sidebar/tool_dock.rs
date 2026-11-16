@@ -1,8 +1,8 @@
 use super::{SidebarPanel, TerminalSidebar};
 use crate::theme::TerminalColors;
 use gpui::{
-    Anchor, AnyElement, App, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Pixels, SharedString, Styled, Window, div, prelude::FluentBuilder, px,
+    Anchor, AnyElement, AnyView, App, Context, Entity, InteractiveElement, IntoElement,
+    ParentElement, Pixels, SharedString, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     Sizable,
@@ -21,7 +21,6 @@ use rust_i18n::t;
 /// 终端侧栏的三边停靠布局。模型与几何与工作台外壳共用 [`one_core::dock`]。
 pub(crate) type TerminalToolDockLayout = ToolDockLayout<SidebarPanel>;
 
-pub(crate) use one_core::dock::dock_region_width as right_tool_region_width;
 pub(crate) use one_core::dock::right_sidebar_width;
 
 pub(crate) fn render_internal_tool_panel_frame(
@@ -238,6 +237,155 @@ fn build_options_menu(
         )
 }
 
+/// 扩展面板的外框：标题 + 移动菜单 + 关闭。
+///
+/// 内嵌模式的 `TerminalView` 与工作区模式（`WorkspacePane`）共用这一份，
+/// 后者没有 `TerminalView` 可借，所以只依赖 `sidebar` 实体。
+pub(crate) fn render_extension_tool_panel_frame(
+    sidebar: Entity<TerminalSidebar>,
+    id: SharedString,
+    placement: SidebarPlacement,
+    content: AnyView,
+    colors: TerminalColors,
+    cx: &App,
+) -> AnyElement {
+    let title = sidebar
+        .read(cx)
+        .extension_panel_title(&id)
+        .unwrap_or_else(|| id.clone());
+    let panel_header = one_ui::theme_geometry().layout.panel_header;
+
+    v_flex()
+        .size_full()
+        .min_w_0()
+        .min_h_0()
+        .child(
+            h_flex()
+                .flex_shrink_0()
+                .h(panel_header)
+                .items_center()
+                .justify_between()
+                .px_2()
+                .bg(colors.muted)
+                .border_b_1()
+                .border_color(colors.border)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(colors.foreground)
+                        .truncate()
+                        .child(title),
+                )
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .child(extension_options_button(
+                            sidebar.clone(),
+                            id.clone(),
+                            placement,
+                            &colors,
+                            cx,
+                        ))
+                        .child(extension_close_button(sidebar, id, &colors, cx)),
+                ),
+        )
+        .child(div().flex_1().min_h_0().overflow_hidden().child(content))
+        .into_any_element()
+}
+
+fn extension_options_button(
+    sidebar: Entity<TerminalSidebar>,
+    id: SharedString,
+    placement: SidebarPlacement,
+    colors: &TerminalColors,
+    cx: &App,
+) -> impl IntoElement {
+    IconButton::new(
+        SharedString::from(format!("terminal-ext-options-{id}")),
+        IconName::Ellipsis,
+    )
+    .custom(colors.icon_button_variant(colors.foreground, cx))
+    .tooltip(t!("Sidebar.panel_options").to_string())
+    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
+        build_extension_options_menu(menu, sidebar.clone(), id.clone(), placement, window, cx)
+    })
+}
+
+fn extension_close_button(
+    sidebar: Entity<TerminalSidebar>,
+    id: SharedString,
+    colors: &TerminalColors,
+    cx: &App,
+) -> IconButton {
+    IconButton::new(
+        SharedString::from(format!("terminal-ext-close-{id}")),
+        IconName::Close,
+    )
+    .custom(colors.icon_button_variant(colors.foreground, cx))
+    .tooltip(t!("Sidebar.close_panel").to_string())
+    .on_click(move |_, _window, cx| {
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.close_extension_panel(&id, cx);
+        });
+    })
+}
+
+fn build_extension_options_menu(
+    menu: PopupMenu,
+    sidebar: Entity<TerminalSidebar>,
+    id: SharedString,
+    placement: SidebarPlacement,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let move_sidebar = sidebar.clone();
+    let move_id = id.clone();
+    let remove_sidebar = sidebar.clone();
+    let remove_id = id.clone();
+
+    menu.min_w(px(220.0))
+        .submenu_with_icon(
+            Some(IconName::PanelRight.into()),
+            t!("Sidebar.move_to").to_string(),
+            window,
+            cx,
+            move |submenu, _window, _cx| {
+                [
+                    SidebarPlacement::Left,
+                    SidebarPlacement::Right,
+                    SidebarPlacement::Bottom,
+                ]
+                .into_iter()
+                .fold(submenu, |submenu, target| {
+                    let sidebar = move_sidebar.clone();
+                    let id = move_id.clone();
+                    submenu.item(
+                        PopupMenuItem::new(placement_label(target))
+                            .icon(placement_icon(target))
+                            .checked(target == placement)
+                            .disabled(target == placement)
+                            .on_click(move |_, _, cx| {
+                                sidebar.update(cx, |sidebar, cx| {
+                                    sidebar.move_extension_panel(&id, target, cx);
+                                });
+                            }),
+                    )
+                })
+            },
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new(t!("Sidebar.remove_from_sidebar").to_string())
+                .icon(IconName::Close)
+                .on_click(move |_, _, cx| {
+                    remove_sidebar.update(cx, |sidebar, cx| {
+                        sidebar.close_extension_panel(&remove_id, cx);
+                    });
+                }),
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,7 +412,10 @@ mod tests {
             SidebarPlacement::Left,
         )]);
 
-        assert_eq!(TOOLBAR_WIDTH, right_tool_region_width(&layout, px(420.0)));
+        assert_eq!(
+            TOOLBAR_WIDTH,
+            one_core::dock::dock_region_width(&layout, px(420.0))
+        );
     }
 
     #[test]
@@ -276,7 +427,7 @@ mod tests {
 
         assert_eq!(
             px(420.0) + TOOLBAR_WIDTH,
-            right_tool_region_width(&layout, px(420.0))
+            one_core::dock::dock_region_width(&layout, px(420.0))
         );
     }
 

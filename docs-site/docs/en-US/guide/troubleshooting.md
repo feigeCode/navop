@@ -2,9 +2,6 @@
 
 Change one variable at a time and classify the failure as network, authentication, authorization, driver, extension, client state, or remote service. Record platform, Navop version, connection type, time, and a minimal reproduction. Do not hide configuration errors by switching immediately to an administrator account.
 
-> [!NOTE]
-> First confirm which app is affected. All three share the same directory conventions, but their connection types and update manifests differ.
-
 ## Diagnose databases, Redis, and MongoDB
 
 For SQL databases, check DNS, host, port, firewall, account, default database/schema, TLS, proxy, SSH tunnel, driver, and server version. Reduce SQL failures to one statement and resolve commit or rollback state. Check permissions and schema filters for missing objects.

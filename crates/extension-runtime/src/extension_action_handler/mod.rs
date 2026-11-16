@@ -21,7 +21,55 @@ pub fn register_db_tree_extension_action_handler(cx: &mut App) {
 struct MainDbTreeExtensionActionHandler;
 
 impl DbTreeExtensionActionHandler for MainDbTreeExtensionActionHandler {
-    fn run(&self, context: DbTreeExtensionActionContext, window: &mut Window, cx: &mut App) {
+    fn run(
+        &self,
+        context: DbTreeExtensionActionContext,
+        container: Option<gpui::WeakEntity<one_core::tab_container::TabContainer>>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        // handler kind == "nsh" 的命令不走 wasm：直接打开扩展的 shell app tab，
+        // 把触发场景（节点/连接/命令）作为 host.params.context 交给页面。
+        if let Some((extension_id, route)) = cx
+            .try_global::<GlobalExtensionRuntimeCatalog>()
+            .and_then(|global| global.get())
+            .and_then(|catalog| catalog.nsh_command(&context.command_id))
+        {
+            let ctx = serde_json::json!({
+                "commandId": context.command_id,
+                "connectionId": context.connection_id,
+                "databaseType": db_view::extension_menu::database_type_when_value(
+                    &context.database_type
+                ),
+                "driverId": context.database_type.external_driver_id(),
+                "node": {
+                    "id": context.node_id,
+                    "name": context.node_name,
+                    "type": db_view::extension_menu::db_node_type_when_value(context.node_type),
+                },
+            });
+            // 优先开进触发菜单的数据库标签页自己的页签栏；容器已经关掉时
+            // 退回主窗口（`open_shell_app_with_context`）。
+            match container.and_then(|container| container.upgrade()) {
+                Some(container) => extension_view::open_shell_app_in_container(
+                    &extension_id,
+                    route.as_deref(),
+                    ctx,
+                    container,
+                    window,
+                    cx,
+                ),
+                None => extension_view::open_shell_app_with_context(
+                    &extension_id,
+                    route.as_deref(),
+                    ctx,
+                    window,
+                    cx,
+                ),
+            }
+            return;
+        }
+
         let Some(db_state) = cx.try_global::<GlobalDbState>().cloned() else {
             push_error(window, "数据库状态未初始化", cx);
             return;

@@ -35,7 +35,11 @@ impl HomePage {
                     cx,
                 );
             }
-            NavigationApplication::Extensions => self.add_extensions_tab(window, cx),
+            NavigationApplication::Extensions => {
+                if crate::nsh_ui_available() {
+                    self.add_extensions_tab(window, cx);
+                }
+            }
             NavigationApplication::Settings => self.add_settings_tab(window, cx),
         }
     }

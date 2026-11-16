@@ -26,7 +26,7 @@ pub use model::{
 };
 pub use shell::{
     ShellAppOpener, close_shell_extension, finish_shell_extension, open_shell_app,
-    register_shell_app_opener,
+    open_shell_app_in_container, open_shell_app_with_context, register_shell_app_opener,
 };
 pub use view::{ExtensionManagerMode, ExtensionManagerView};
 
