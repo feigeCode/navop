@@ -4,6 +4,50 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.23.3] - 2026-11-16
+
+本版本把扩展机制升级为「多界面 + 宿主能力面」：扩展不再只是标签页，还能出现在终端侧边栏、数据库侧边栏和数据库右键菜单里，并通过 `nativeModule("navop")` 使用数据库、终端、UI 与导航能力。
+
+#### 更新内容
+
+- 扩展支持多个界面：清单新增 `contributes.panels`（锚点 `terminal-sidebar` / `db-sidebar`，可声明顺序与 `when` 条件），`commands[].handler.kind: "nsh"` 可让数据库树右键菜单直接打开扩展页面，且落在数据库自己的页签栏里。
+- 新增 `nativeModule("navop")` 宿主能力面：`App.open` 跨界面导航、`Ui.notify` 通知、`Terminal.{list,read,write,wait,exec,sshExec}`、`Db.{listConnections,openSession,execute,listDatabases,listSchemas,listTables,describeTable,listFunctions,closeSession,refreshTree}`；权限仍由 `contributes.shellApp.modules` 与 `db:*` 权限声明控制，未声明直接拒绝。
+- 数据库能力面补上元数据：库 / schema / 表 / 字段 / 索引 / 外键 / 函数一目了然，扩展可以做表结构速览、生成查询等界面。
+- 插件 AI 改为「宿主右下角浮钮 + 停靠面板」，页面也可以用 `nativeComponent("navop.ai")` 自己摆放；`host.post("navop.ai.context")` 可上报当前路由与连接作为上下文。
+- 扩展图标贯通：标签页、数据库右键菜单、终端/数据库侧栏面板按钮与工具箱卡片都会显示 `shellApp.icon` / `panels[].icon` / `commands[].icon`，面板未声明图标时回落应用图标。
+- 新增三个示例扩展（终端工作台、库表速览、字段速览）与 `extension-kit` 的 nativeModule 绑定、类型与 schema 同步，模板默认演示宿主通知。
+- Linux arm64 也发布 deb / rpm / AppImage，与 x64 产物同名规则对齐。
+
+#### What's New
+
+- Extensions can now appear in more than a tab: `contributes.panels` adds panels to the terminal or database sidebar (`terminal-sidebar` / `db-sidebar`, with `order` and `when`), and `commands[].handler.kind: "nsh"` opens an extension page straight from the database tree context menu — inside the database tab's own tab bar.
+- New `nativeModule("navop")` host API: `App.open`, `Ui.notify`, `Terminal.{list,read,write,wait,exec,sshExec}` and `Db.{listConnections,openSession,execute,listDatabases,listSchemas,listTables,describeTable,listFunctions,closeSession,refreshTree}`. Access is still gated by `contributes.shellApp.modules` and `db:*` permissions.
+- Database metadata for extensions: databases, schemas, tables, columns, indexes, foreign keys and functions, so extensions can render schema explorers or generated queries.
+- Plugin AI is now a floating button plus docked panel in the bottom-right corner, and pages may embed their own with `nativeComponent("navop.ai")`; `host.post("navop.ai.context")` reports the current route and connection as context.
+- Extension icons reach tabs, database context menus, sidebar panel buttons and toolbox cards, falling back to the app icon when a panel has none.
+- Three sample extensions (terminal desk, table explorer, column inspector), `extension-kit` nativeModule bindings, updated types/schema, and a template that demonstrates host notifications.
+- Linux arm64 now ships deb / rpm / AppImage alongside x64.
+
+#### Fixes and Improvements
+
+- Fixed extension panels in the terminal sidebar rendering as a 44px strip; widths now follow the merged built-in/extension layout.
+- Fixed extension pages opened from the database tree or sidebar landing in the top-level tab bar.
+- Fixed blank extension pages caused by the missing `ai` module grant.
+- Fixed `navop-shell` / `navop-data` builds pulling in the other domain's crates by splitting `nsh-host` / `nsh-db` / `nsh-terminal` into separate features.
+- Fixed SSH host keys with a leading 0x00 in mpint, Redis workspace tab titles, and extension entry points appearing without an nsh host.
+- Upgraded to gpui-fast 0.1.14 / nsh 0.5.1.
+
+#### 修复与优化
+
+- 修复终端侧边栏扩展面板只渲染成 44px 窄条；现在按「内建面板优先、扩展补空边」的合并布局计算宽度。
+- 修复扩展页面从数据库树或侧栏打开时跑到顶层页签栏；现在跟随触发它的容器。
+- 修复 nsh 能力面 `ai` 缺失导致声明了 AI 上下文的扩展整页白屏。
+- 修复 `navop-shell` / `navop-data` 构建被另一领域 crate 污染：`nsh-host` / `nsh-db` / `nsh-terminal` 按能力面拆成三个 feature，产品依赖隔离恢复。
+- 修复老设备 SSH 主机公钥 mpint 前导 0x00 解析失败、Redis 工作区页签标题不显示连接名、无 nsh 宿主时仍显示扩展入口等问题。
+- 升级到 gpui-fast 0.1.14 / nsh 0.5.1。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.3) 下载桌面端安装包。
+
 ## [v0.23.2] - 2026-11-13
 
 本版本集中修复连接稳定性与输入体验问题，并补上 0.23.1 说明里提到的日志级别、SFTP 上传让路与提权自动填入改进。
@@ -28,7 +72,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - Hardened the Windows native RDP pipeline: the handshake with the local helper now validates protocol versions, adds heartbeat and timeout detection, batches outgoing requests, and replays clipboard state after a reconnect, so a flaky network no longer leaves a session that looks connected but is stuck.
 - SFTP directory downloads now run with bounded concurrency: files in one session share a read budget, progress stays monotonic under concurrent updates, large files keep the exclusive lane, and standalone SFTP tabs keep their throughput.
@@ -36,7 +80,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Settings → General → Log now has a log level dropdown (Error, Warning, Info, Debug, Trace) that applies immediately without a restart; the `RUST_LOG` environment variable still takes precedence at startup.
 - The SSH stack upgrades russh to upstream v0.65.1, bringing the cipher / kex / agent security fixes.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed SSH connections failing against some older devices (such as Huawei VRP): their ssh-rsa host keys carry redundant leading 0x00 bytes in e / n, and strict decoding failed the whole host key, surfacing as `Connection Lost` plus `SshKey: mpint encoding invalid`; these encodings are now accepted and normalized the way OpenSSH does it.
 - Fixed terminal input lagging while uploading from the sidebar: SFTP sessions that borrow an interactive connection now use a small write window, batch writes pause while you type, and the interactive connection enables TCP_NODELAY.
@@ -70,7 +114,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.1) 下载桌面端安装包
 
-#### What's New
+##### What's New
 
 - SSH hosts support one-time passwords (TOTP): put an `otpauth://` URI or a base32 secret in Edit Host → Advanced, or scan / paste a QR code image. The client generates the code locally and answers the prompt automatically, showing the current code and its remaining seconds inline. The secret is stored encrypted with the connection and never leaves your machine.
 - SSH sessions fill `su` / `sudo` passwords automatically: when an elevation command asks for a password the client submits it, following the login method by default (on for password logins, off for key-based ones) with an optional separate elevation password (empty falls back to the login password). After a rejected attempt the session stops filling in, so a wrong password never turns into repeated guessing.
@@ -79,7 +123,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - A standalone Notes MCP tool group lets the built-in agent and external MCP clients read and write connection notes.
 - Settings → General → Log now has a log level dropdown (Error, Warning, Info, Debug, Trace) that applies immediately without a restart, so troubleshooting can switch to Debug temporarily and stay at Info otherwise. The `RUST_LOG` environment variable still takes precedence for per-module filters.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed terminal input lagging while files upload: the sidebar file manager's SFTP borrows the terminal's SSH connection and used one large SFTP write window (256 KB × 64 in-flight requests), so keystrokes queued behind megabytes of upstream data. Transfers that borrow an interactive connection now use a small window (128 KB × 2), pause before writing when you are typing, and the interactive connection enables TCP_NODELAY; standalone SFTP tabs and bulk downloads keep the high-throughput settings.
 - Fixed SSH sessions taking 3–5 seconds before accepting input (#537): input is released as soon as the Shell Integration ready marker arrives instead of waiting for an `OSC 133;B` that may never come; injection is now two-phase (a short bootstrap command confirms the interactive shell is ready, then the full script is sent); and the injected script shrank from 6.2 KB to 3.9 KB so it no longer exceeds the 4 KiB PTY input queue, gets truncated, and stalls the shell on a continuation prompt until the 5-second fallback.
@@ -132,7 +176,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0) 下载桌面端安装包
 
-#### What's New
+##### What's New
 
 - The desktop app now ships as three products under one version: **Navop** (databases + SSH/SFTP + terminal + remote desktop + AI), **Navop Shell** (SSH/SFTP, local terminal, port forwarding, RDP/VNC) and **Navop Data** (PostgreSQL / MySQL / SQLite / SQL Server / Oracle / ClickHouse / Redis / MongoDB). Each has its own installers, data directory and keychain entry, so they install side by side without interference. Icons use an "N + domain badge" system, tray and quit prompts name the product, and each product exposes its own Public MCP host and discovery identity.
 - Updates are split into a stable channel and a beta channel with separate manifests, so stable installs are never silently moved to beta. Settings → About → Update gains a channel dropdown (switching to beta asks for confirmation and prerelease builds show a "Beta" badge). Update checks can pick a mirror (Auto / Cloudflare / CNB / GitHub) with ordered fallback, extension downloads reuse the same preference, and the extension marketplace manifest is hosted as a fixed `manifest` release asset (R2 → GitHub snapshot → CNB snapshot → raw fallback).
@@ -148,7 +192,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Remote desktop (RDP) sessions that drop can reconnect from the disconnected view instead of closing and reopening the session, and Settings → General → Startup adds a default startup page choice between Home and the AI workbench.
 - AI providers gain an "OpenCode Go" subscription type, and any OpenAI-compatible provider can carry custom request headers (one `Name: value` pair per line, overriding defaults such as User-Agent). OpenCode Go sends a stable `x-opencode-session` automatically; DeepSeek V4.1 Flash / V4 Pro require the Global region in OpenCode Console.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed the window becoming unresponsive or freezing when opening a new local terminal: local PTY creation moved off the main thread, and the AI workbench no longer creates hidden terminal panels ahead of time.
 - Fixed SSH sessions waiting roughly 30 seconds before accepting input, and dropped login banners during the handshake, under prompt frameworks such as oh-my-posh / starship.
@@ -200,7 +244,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.8) 下载桌面端安装包
 
-#### What's New
+##### What's New
 
 - AI providers gain an "OpenCode Go" subscription type, and any OpenAI-compatible provider can now carry custom request headers (one `Name: value` pair per line, overriding defaults such as User-Agent). OpenCode Go sends a stable `x-opencode-session` automatically; DeepSeek V4.1 Flash / V4 Pro require the Global region in OpenCode Console.
 - Connections can be reordered by dragging: both Home and the connection tree support dragging folders and connections, and Settings gains a sort option including "Manual (Drag to Reorder)".
@@ -215,7 +259,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Terminal tabs can be disconnected while keeping the session content, and SSH tabs can open the SFTP file view directly.
 - Terminal line timestamps are now precise to the millisecond.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed the window becoming unresponsive or freezing when opening a new local terminal: local PTY creation moved off the main thread, and the AI workbench no longer creates hidden terminal panels ahead of time.
 - Fixed SSH sessions waiting roughly 30 seconds before accepting input, and dropped login banners during the handshake, under prompt frameworks such as oh-my-posh / starship.
@@ -245,13 +289,13 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.7) 下载桌面端安装包
 
-#### What's New
+##### What's New
 
 - The extension system completed a major convergence: nsh-host pages moved fully onto host ABI v2 and extensions now build as a single nsh app. Plugins can register their own AI tools and open an in-page AI sidebar (plugin-ai-tools M0–M3).
 - Standalone product icons switched to an "N + domain badge" system: Shell and Data each get their own icon, and the three products no longer share one set.
 - Migration package import preserves the workspace hierarchy so the parent-child structure of full products is no longer flattened; the settings page is reordered with Database and Terminal first and Account / About last.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed installed composite extensions not loading in beta builds: SemVer makes pre-release versions fail plain ranges, so beta / dev hosts rejected extension manifests requiring `>=0.16.1`. A pre-release host now falls back to matching the release triple once, restoring the extension manager and marketplace (the same issue was fixed earlier for database drivers; this closes the extension side).
 - Fixed an occasional crash when opening an extension connection (home card, connection sidebar, or Public MCP): attaching the tab is deferred until the current effect flush instead of re-entering HomePage's update, avoiding the double lease panic.
@@ -274,13 +318,13 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.6) 下载桌面端安装包
 
-#### What's New
+##### What's New
 
 - Language support in extension management is now a single "language bundle" entry: the bundle card lists the supported languages (first six plus a total), and the detail dialog shows the full list. Standalone language extensions are no longer tiled as separate plugin cards, and new languages will ship inside language bundles. The installed tree-sitter parsers keep working, so syntax highlighting is unaffected.
 - The new-connection wizard follows the old layout again: the duplicate header inside the content area is gone, Cancel / Next now sit in a full-width footer so they stay visible in short windows, and the first step uses a fixed three-column card grid instead of reflowing with the number of cards.
 - Connection categories went from eight to seven: "Extensions" is no longer a separate category and extension-provided connections are grouped under "Middleware"; the "More middleware" / "More time series" entries only show in their own category, and "All" keeps a single "More connections" entry.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed installed external database drivers not loading in beta builds: a host version carrying a `-beta.N` suffix now also matches requirements such as `>=0.10.0`, so the domestic-database category and driver-provided TDengine / ClickHouse types work again.
 - The quit confirmation no longer shows a literal `{app}` and inserts the current product name; the tray close prompt names the product too, so standalone products are no longer called Navop. Also fixed the missing re-entry shortcut in the terminal vi-mode hint.
@@ -315,7 +359,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.5) 下载桌面端安装包
 
-#### What's New
+##### What's New
 
 - The plugin (extension) engine has been replaced: plugin pages moved from the old gpui-shell runtime to nsh and are written as TSX pages, with capabilities narrowed to what the extension manifest grants — a page can only call the host capabilities it was given and everything else is rejected. Install, update, uninstall and local override installs work as before.
 - The plugin host interface is now ABI v2: startup facts (extension, route, backends, connection) are readable synchronously on the first frame; resource events are pushed instead of polled; errors carry structured codes; theme and locale use nsh's own surfaces.
@@ -329,7 +373,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - The new-connection wizard is back to two steps: pick a category first (All / Databases / Domestic databases / Time series / NoSQL / Middleware / Terminal / Extensions), then a card. Empty categories offer a "More…" entry, the list always ends with "More connections", which opens extension management directly.
 - Installed external database drivers (domestic databases and others) are back in the new-connection flow: label, description and icon come from the driver manifest, the connection form carries the driver id, and each product still only offers the connection types it supports.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Importing a migration package keeps the original workspace hierarchy, so parent/child connections in the full product are no longer flattened.
 - The settings page lists database and terminal options first, with account and about at the end.
@@ -365,7 +409,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.4) 下载桌面端安装包
 
-#### What's New
+##### What's New
 
 - The desktop app is now three products shipped together under one version: **Navop** (databases + SSH/SFTP + terminal + remote desktop + AI), **Navop Shell** (SSH/SFTP, local terminal, port forwarding, RDP/VNC) and **Navop Data** (PostgreSQL / MySQL / SQLite / SQL Server / Oracle / ClickHouse / Redis / MongoDB). Each product has its own installers, data directory and keychain entry, so they can be installed side by side; tray icons carry a product badge and quit prompts name the product.
 - Updates are split into a stable channel and a beta channel. Stable builds only see stable releases and beta builds only see prereleases, with separate manifests, so existing installs are never silently moved to beta. Settings → About → Update gains a channel dropdown, switching to beta asks for confirmation, and prerelease builds show a "Beta" badge next to the version.
@@ -376,7 +420,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Standalone products got their own home pages and packaging: Navop Shell assembles the terminal/SSH home, Navop Data the database/Redis/MongoDB home, and macOS, Linux and Windows installers now use per-product identities, with parameterized Windows installer identity.
 - Navop Data checks database drivers on first launch and can install a missing driver from inside the app.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - SFTP hides "apply to all" when only one conflict is queued, and directory overwrites now use an in-dialog confirmation instead of nested modals.
 - The terminal sidebar remembers the last "move to" position across restarts and new tabs; upload/download completion notices are de-duplicated by transfer id in split views; sidebar dragging uses the workspace root bounds.
@@ -415,7 +459,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.3) 下载桌面端安装包
 
-#### What's New
+##### What's New
 
 - The desktop app is now three products shipped together under one version: **Navop** (databases + SSH/SFTP + terminal + remote desktop + AI), **Navop Shell** (SSH/SFTP, local terminal, port forwarding, RDP/VNC) and **Navop Data** (PostgreSQL / MySQL / SQLite / SQL Server / Oracle / ClickHouse / Redis / MongoDB). Each product has its own installers, data directory and keychain entry, so they can be installed side by side; tray icons carry a product badge and quit prompts name the product.
 - Updates are split into a stable channel and a beta channel. Stable builds only see stable releases and beta builds only see prereleases, with separate manifests, so existing installs are never silently moved to beta. Settings → About → Update gains a channel dropdown, switching to beta asks for confirmation, and prerelease builds show a "Beta" badge next to the version.
@@ -426,7 +470,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Standalone products got their own home pages and packaging: Navop Shell assembles the terminal/SSH home, Navop Data the database/Redis/MongoDB home, and macOS, Linux and Windows installers now use per-product identities, with parameterized Windows installer identity.
 - Navop Data checks database drivers on first launch and can install a missing driver from inside the app.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - SFTP hides "apply to all" when only one conflict is queued, and directory overwrites now use an in-dialog confirmation instead of nested modals.
 - The terminal sidebar remembers the last "move to" position across restarts and new tabs; upload/download completion notices are de-duplicated by transfer id in split views; sidebar dragging uses the workspace root bounds.
@@ -465,7 +509,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.2) 下载桌面端安装包
 
-#### What's New
+##### What's New
 
 - The desktop app is now three products shipped together under one version: **Navop** (databases + SSH/SFTP + terminal + remote desktop + AI), **Navop Shell** (SSH/SFTP, local terminal, port forwarding, RDP/VNC) and **Navop Data** (PostgreSQL / MySQL / SQLite / SQL Server / Oracle / ClickHouse / Redis / MongoDB). Each product has its own installers, data directory and keychain entry, so they can be installed side by side; tray icons carry a product badge and quit prompts name the product.
 - Updates are split into a stable channel and a beta channel. Stable builds only see stable releases and beta builds only see prereleases, with separate manifests, so existing installs are never silently moved to beta. Settings → About → Update gains a channel dropdown, switching to beta asks for confirmation, and prerelease builds show a "Beta" badge next to the version.
@@ -476,7 +520,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Standalone products got their own home pages and packaging: Navop Shell assembles the terminal/SSH home, Navop Data the database/Redis/MongoDB home, and macOS, Linux and Windows installers now use per-product identities, with parameterized Windows installer identity.
 - Navop Data checks database drivers on first launch and can install a missing driver from inside the app.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - SFTP hides "apply to all" when only one conflict is queued, and directory overwrites now use an in-dialog confirmation instead of nested modals.
 - The terminal sidebar remembers the last "move to" position across restarts and new tabs; upload/download completion notices are de-duplicated by transfer id in split views; sidebar dragging uses the workspace root bounds.
@@ -515,7 +559,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.1) 下载桌面端安装包
 
-#### What's New
+##### What's New
 
 - The desktop app is now three products shipped together under one version: **Navop** (databases + SSH/SFTP + terminal + remote desktop + AI), **Navop Shell** (SSH/SFTP, local terminal, port forwarding, RDP/VNC) and **Navop Data** (PostgreSQL / MySQL / SQLite / SQL Server / Oracle / ClickHouse / Redis / MongoDB). Each product has its own installers, data directory and keychain entry, so they can be installed side by side; tray icons carry a product badge and quit prompts name the product.
 - Updates are split into a stable channel and a beta channel. Stable builds only see stable releases and beta builds only see prereleases, with separate manifests, so existing installs are never silently moved to beta. Settings → About → Update gains a channel dropdown, switching to beta asks for confirmation, and prerelease builds show a "Beta" badge next to the version.
@@ -526,7 +570,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Standalone products got their own home pages and packaging: Navop Shell assembles the terminal/SSH home, Navop Data the database/Redis/MongoDB home, and macOS, Linux and Windows installers now use per-product identities, with parameterized Windows installer identity.
 - Navop Data checks database drivers on first launch and can install a missing driver from inside the app.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - SFTP hides "apply to all" when only one conflict is queued, and directory overwrites now use an in-dialog confirmation instead of nested modals.
 - The terminal sidebar remembers the last "move to" position across restarts and new tabs; upload/download completion notices are de-duplicated by transfer id in split views; sidebar dragging uses the workspace root bounds.
@@ -571,7 +615,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - Team management now lives in a native desktop "Team" page: create teams, edit profiles, invite members, change roles, remove members and manage team keys inside the app instead of opening the browser with access_token / refresh_token in the URL (the website dashboard can be retired). Permissions mirror the online RPC layer, and an owner can no longer be removed directly.
 - The sidebar AI re-reads the terminal on every turn: current directory, whether a full-screen program like vim is running, the current selection, window size and foreground process all travel with the message, so the model no longer has to call `terminal.read` first. SSH terminals keep the connection as their default target, so connection-scoped tools behave as before.
@@ -581,7 +625,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - The AI composer was re-laid out: capability entries (plan / subagents / context / skills) sit on a row at the top of the card, the bottom row is only about sending (model, mode / permission, attachment, send), labels no longer collapse into ellipses in narrow sidebars, and the ACP and built-in agent composers share one set of measurements.
 - The ACP client catalog now covers the official registry: 27 built-in presets with only Claude Code, Codex, OpenCode, DeepSeek Harness and Pi enabled by default; the rest can be turned on in Settings > ACP clients, so a fresh machine no longer spawns a dozen CLIs just to probe them.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed the missing branch and Worktree controls in the sidebar ACP footer: the terminal sidebar now injects workspace, branches and Worktree just like the workbench, so switching branches and enabling Worktree work there, and the chip always matches the real working directory.
 - The ACP switcher closes as soon as a client is picked instead of covering the new view, and its list scrolls inside a fixed height so entries near the bottom stay reachable.
@@ -616,7 +660,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Personal sync: fixed constantly recurring false conflicts for connections that reference keychain credentials. The exported payload kept the source device's local integer credential ID, which differs on every device, so the same logical connection never produced an equal checksum across devices and was repeatedly flagged as "modified on both sides", overwriting back and forth. Exports now carry only the device-stable `credential_cloud_id` with the integer ID zeroed (downloads still map the cloud ID back to the local row, unchanged behavior).
 - Security: the personal master key is now derived with Argon2id and a random salt (64 MiB / 3 iterations) instead of SHA-256 with a fixed salt, and its verification data uses a versioned `NAVOPKDF2:` envelope. Legacy installs are migrated on unlock: local connections, credentials, team key caches and conflict snapshots are re-encrypted, cloud records are re-encrypted through the existing pending mechanism, interrupted migrations resume, and old ciphertext stays readable throughout (#460).
@@ -639,7 +683,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Connection forms: the "AI Access" row in the SSH, MySQL, Redis and MongoDB forms no longer renders as a raw key such as `ConnectionForm.ai_access`. Each of those four crates assembled the i18n key by itself while only the crate that provides the widget defines it, so rust-i18n returned the key verbatim; the row now uses the shared text from `connection_form`, and a repository-wide contract test guards against the same class of miss (16 other broken keys are fixed as well, including the save-failure notice, file actions, the session lock banners and the FTP dialog titles).
 - Database: Auto (sticky) sessions now self-heal by probing the connection before running instead of replaying the batch after a `connection closed`. That single message can mean either "the request never left the client" or "the statement already ran on the server", so replaying risked duplicate writes. A pooled connection is now checked locally (PostgreSQL) or with a bounded `ping` (MySQL uses the driver-level `COM_PING`) and replaced in place when dead, so the statement goes out exactly once on the new connection; the connect timeout is also clamped to 10 seconds while the server stays down, instead of letting every run wait out the default timeout (#433, #447).
@@ -678,7 +722,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - Connections now carry an "AI Access" policy (Allowed / Read only / Denied) that decides whether AI may operate them. It applies in three layers: denied connections stay out of the AI resource catalog and are not returned by `connections.list` / `find`; read-only connections keep only read tools; and one guard re-checks `connection`, `connection_id`, `target` and `session_id` at execution time, shared by the built-in chat and external MCP clients, so writes are rejected outright instead of silently allowed. The policy is part of the connection, so it syncs to the cloud with the connection and still holds on another machine; the sidebar badge and context menu switch it directly (#437).
 - Extension connections support custom icons: the connection form offers built-in icons or a local image, falling back to the icon declared in the extension manifest, and forms and manifests gain an `Icon` field type so extensions can ship their own picker. Connection lists, cards and terminal tabs now share one resolution path, so tabs no longer always show the generic icon — an SSH connection's custom icon now appears on its tab as well (#438).
@@ -687,7 +731,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - SQL results can now fill in column comments from their sources: with "show column comments in header" enabled, the query's base tables, joins and aliases are analyzed and source comments are mapped onto the result columns; when the analysis is incomplete it degrades to the conservative "column name is unique across the candidate tables" match and shows nothing rather than a comment it cannot attribute correctly (#428).
 - SQL execution now has a clear running state: the result panel switches to running and stays visible, the toolbar shows a spinner and "Running...", and the elapsed time starts ticking immediately, so a long query no longer looks like it was ignored. Establishing an Auto session or a manual transaction counts as running too, and cancelling during that phase really aborts the run (#427).
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - ClickHouse now runs on an extension driver, and upgrading requires installing that driver: the built-in plugin is gone, so connecting, opening and forms go through the clickhouse driver from the extension market. Existing connection records are kept but need the driver installed before they can open; when it is missing the app offers to install it, following the same policy as DuckDB / TDengine, and the new-connection entry only appears once the driver is installed (#436).
 - Database: an Auto (sticky) session dropped while idle by the server or a firewall no longer requires closing and reopening the connection. The drivers report a disconnect as an ordinary result, the lost-connection signal was only raised on errors, and the editor kept reusing the dead connection so every statement failed within milliseconds. When an entire batch shows the statement never left the client, the session's physical connection is now replaced in place and the run retried once, keeping the session id, tab state and remembered schema; mid-flight disconnects (broken pipe / unexpected EOF) and manual transactions are not retried, so statements cannot be replayed into duplicate writes (#447).
@@ -723,12 +767,12 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - Extension connections can now declare a terminal instead of a provider runtime: a connection contribution in `extension.json` may specify `terminal` (command, args, env, title), and Navop resolves the templates against the saved non-secret form values and opens a regular local terminal tab — external CLI tools such as `tsh-ssh` need nothing but an `extension.json`. As a safety guard, an argument whose template does not start with `-` is rejected when the substituted value does, so shared or synced connection data cannot inject command-line options; empty optional arguments and env entries are dropped, and control characters are rejected.
 - Those terminal tabs get a fixed tab title, can be duplicated, and restart on Enter after the child process exits. The connection form hides its Test button for terminal connections.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Redis cluster: single-key commands sent to a master that does not own the key now follow the `MOVED` redirection to the right node and retry once (`GET` / `SET` / `DEL` / `EXPIRE` / `PERSIST` / `RENAME` / `HSET` / `HDEL` / `LPUSH` / `RPUSH` / `LSET` / `SADD` / `SREM` / `ZADD` / `ZREM`, plus key detail lookup). Raw commands typed in the console stay direct so write commands are never replayed (#414 follow-up).
 - Redis: refreshing a loaded database no longer crashes (#424). The conditionally inserted loading / error icons shifted the layout index of the sibling text containers, so the measurement cache missed and prepaint crashed; those containers now carry stable IDs.
@@ -759,7 +803,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - Terminals can scroll back with the keyboard: `Ctrl+Shift+Up/Down` moves one line, `Shift+PageUp/PageDown` moves a screen, and both are rebindable in Settings (#409).
 - The Auto-mode SQL editor now keeps a sticky session per tab: repeated runs reuse one database connection, so session state such as `SET @var` survives across executions (issue #312).
@@ -767,7 +811,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - The SFTP local pane restores the disk dropdown on Windows, and the address bar accepts bare drive letters such as `C:` (issues #276, #375).
 - File transfers on a single SSH connection now use three concurrent lanes, so one stalled upload no longer blocks the others to the same server (#418).
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Redis: "Enable TLS" used to fail unconditionally — the client was built without TLS support at all, so it errored while parsing the URL before any network request, regardless of server, certificate or network; TLS servers now connect. Cluster mode aggregates every master node (SCAN / TYPE / DEL and key counts span nodes, with MOVED redirection handled, issue #414). Also fixed the crash when switching to an empty database and the same crash triggered when the zset type badge appears (issue #416).
 - SFTP: an upload stuck on an unresponsive server can be cancelled immediately and fails fast, and the single-request timeout drops from 300s to 60s; directory uploads containing symlinks no longer fail as a whole — file links upload at their real size while directory links and broken links are skipped (#417).
@@ -787,7 +831,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed the Windows build failing to start after installation (issue #397): the v0.20.1 Windows artifacts shipped without an application manifest, so the executable exited before `main` with "the procedure entry point TaskDialogIndirect could not be located" — the exe, MSI and portable packages were all affected. navop.exe now embeds its own Common-Controls v6 manifest (asInvoker, Windows 10 compatibility, PerMonitorV2 DPI awareness), and the release pipeline validates the manifest so it cannot go missing silently again.
 - "Check for updates" no longer appears to do nothing: the button shows a loading state while checking (which also prevents duplicate clicks), the whole check is bounded by a 20-second timeout that reports a clear message instead of spinning forever, and a persistent line reports when the last check ran and what it found (up to date / new version available / failed / timed out). This also fixes a latent case where closing the main window mid-check discarded the future and left the button spinning forever.
@@ -819,7 +863,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - The Windows native RDP session is presented through composition (issue #310): GPUI overlays (tab menus, popovers, dropdowns) used to be swallowed by the airspace hole of the native RDP surface, leaving controls beneath it invisible and unclickable. Overlays now draw above the RDP content, with an automatic fallback to the plain child-window presentation when attaching fails. The floating sidebar and dialogs are adapted accordingly.
 - New SQL Library (issue #313): SQL files no longer live inside individual connections — they form a standalone library reusable across connections, with dbx-style monochrome bookmark icons in the sidebar.
@@ -831,7 +875,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - FTP / Telnet port fields become plain inputs instead of a preset dropdown.
 - Language-extension WASM compilation moves to a dedicated large-stack thread, fixing a crash when opening highlighted files.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Table operations no longer land on the wrong row or column while column filters or hidden columns are active: with a filter on, "delete record" deleted a different row — reported success while the selected row survived the refresh; with a column hidden or moved, the large-text editor showed another column's content (issue #387). Display-to-data coordinate translation is now centralized in the delegate layer: delete, batch delete, add row, clone row and large-text editing are all corrected, newly added rows stay visible under active filters, and an empty filter selection now clears that column's filter.
 - Copying SQL quotes each table reference segment individually instead of wrapping the whole statement's identifiers at once.
@@ -863,7 +907,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - The Windows native RDP session is now presented through window composition (issue #310): GPUI overlays (tab menus, popovers, dropdowns) used to be covered by the airspace hole of the native RDP surface, so controls underneath were neither visible nor clickable. The ActiveX host window is attached as a composition surface so overlays draw above the RDP content; a failed attach falls back to the previous plain child-window presentation and never leaves a cloaked window behind. Internal dependencies were synced to gpui-pre fork-0.3.126 (fork-0.3.125 did not compile on Linux: the upstream Wayland recomposition path called renderer methods on the fork's optional renderer without unwrapping it).
 - Added support for the Gbase 8a database.
@@ -880,7 +924,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - The connection-name label in the terminal file sidebar shows only its first two characters with `...` for the rest, with the full name still available in the tooltip: the target picker and the SFTP endpoint switcher used to tune their own width caps, and a long connection name still squeezed the path bar on the right.
 - The file transfer panel's "follow terminal directory" and "hidden files" toggles are now obviously on or off (accent color when on, secondary foreground when off), and a "locate terminal directory" button was added (panel directory → terminal `cd`, the reverse direction of the existing "sync terminal directory") (issue #359).
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - On macOS, copying files out of a remote desktop session and pasting them in Finder produced an "already pasted <date>" text file instead of the real file: the clipboard writer left only plain-text types, and GPUI's pasteboard reader restores file paths only from `NSFilenamesPboardType` — so the 500ms local clipboard sync echo-pushed the "file" back to the remote as text (rdpclip churn). The writer now uses the classic `declareTypes` plus `setPropertyList(NSFilenamesPboardType)` sequence and ignores late remote text announcements while installed files remain authoritative.
 - The desktop shortcut icon degraded to a generic blank page after installing on Windows (issue #325): the MSI `<Shortcut>` elements referenced the Icon table, and MSI saves that icon as a separate file which, once cleaned up or once the icon cache goes stale, leaves only the blank icon. Shortcuts no longer reference the Icon table; the icon comes from the embedded resource in `navop.exe`.
@@ -925,7 +969,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - Personal sync gains a WebDAV backend next to "Folder" and "Git": enter the server URL, user name and password and it works. The password is sealed before it is written to disk. The protocol implementation deliberately uses only GET / PUT / DELETE plus Basic auth and never probes with PROPFIND / MKCOL, to avoid the WebDAV dialect differences between Jianguoyun, Synology, Nextcloud and self-hosted servers; a collection is created with MKCOL before the first write, and a 409 from the server is now correctly recognized as "directory unavailable" with a hint to create the directory or check write permissions instead of being misreported as a version conflict that ends in a paused sync. The settings page only shows the items of the selected backend (no sync path for WebDAV, no WebDAV fields for Folder / Git), the three inputs share one width, and the password field can be revealed. WebDAV has no local directory to watch, so a 60-second scan drives syncing.
 - SSH agent forwarding: a key credential can be marked "Forward this key through ssh-agent", and a connection has its own "SSH Agent Forwarding" (ForwardAgent) switch. With the local ssh-agent forwarded to the remote host, that host (a jump host, for example) can authenticate onward to deeper hosts with your local key. Applies to new terminal sessions.
@@ -934,7 +978,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - The commit and rollback buttons of the SQL editor's manual transaction, and "Commit changes" in the table data page, show a loading indicator while the write is in flight, so it is clear which step is still running; the other button is merely disabled and does not spin.
 - External drivers reached over IPC can now time out per call category, with a per-connection override: user operations (query, exec, cursor, import/export) default to 30 minutes while metadata and structure browsing keep 30 seconds, and the connection's advanced settings gain a "Request timeout (seconds)" field (empty follows the category defaults, 0 means unlimited). Large queries and imports on slow databases are no longer cut off by the single 30-second timeout that used to apply to every call.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - macOS (Touch Bar models): the crash when closing a window is now closed out by the upstream fix. Upstream zed#65186 removed the root cause — accesskit no longer swaps the content view's class to attach its adapter, and that "restore the class" step was what corrupted the AppKit Touch Bar observer state and made window close throw. The "hide on close" experiment switch is therefore gone, and both macOS architectures, Windows and Linux are back to destroying on close, no longer paying the memory cost of hidden windows that keep their native window and rendering layer alive. The whole mechanism is kept and is now permanently off; if the crash ever reproduces on real hardware, passing the same feature to the affected build is enough and no code has to change. Internal dependencies were synced to gpui-pre fork-0.3.124 and gpui-kit v0.7.1 (37 upstream commits, including a batch of upstream fixes for headless windowing and the hang monitor).
 - Fixed the crash when typing Chinese into the WHERE / ORDER BY filter inputs (#326): completion scanning stepped back one byte at a time, and because the first byte of a Chinese character spans three, that landed in the middle of a character and took the process down. It now steps back on UTF-8 character boundaries.
@@ -963,11 +1007,11 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - macOS (Touch Bar models): closing a window no longer crashes, now covering every entry point that opens a window. Closing the dialog path in the previous release was not enough: forms, remote desktop, table export and the editor window each destroyed their own native window, so closing from any of those (the "Save" button in a form, for example) still entered AppKit's destruction flow. All of them now go through the same funnel — the native window is hidden rather than destroyed, the session ends, and opening the same target again reuses that window. Multiple windows open at the same time (two connections being edited, two remote desktops, exports of different tables in one connection) no longer interfere with each other.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - "Hide on close" is currently on by default only for the Intel macOS package (x86_64): every reproduced crash came from an Intel model, and a hidden native window keeps its NSWindow and rendering layer alive until the process exits. ARM Macs, Windows and Linux keep destroying on close, so they no longer pay a memory cost for this fix; the 13-inch MacBook Pro with M1 (2020) or M2 (2022) also has a Touch Bar, so that side can switch the same feature on for its build whenever the protection is needed.
 - Internal dependency update (gpui fork 0.3.121 / 0.3.122): the Touch Bar duplicate-unregistration exception is now caught in code compiled as Objective-C, which is what makes it effective in release builds with panic=abort (the Rust-side catch never took effect there).
@@ -1003,7 +1047,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - SSH now supports combined "password + private key" authentication (MFA password,publickey): firewalls and switches configured with AuthenticationMethods password,publickey must pass two factors on the same connection, and picking one method at a time always failed on such devices. The server decides the factor order, so both password,publickey and publickey,password devices work; the option is available for the target host and the jump host separately, and database tunnels, terminals, SFTP and port forwarding all support it.
 - "View object details" in the SQL editor no longer opens a separate window; it opens a read-only tab inside the database tab. Cmd/Ctrl+click on an identifier and the context menu both work, reopening the same object activates the existing tab, the title and icon follow the object type, and the content stays selectable.
@@ -1011,7 +1055,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Opening the table designer now shows "Loading table structure…": the first open of an existing table runs three serial queries (columns, indexes, table info) and used to leave a blank form that looked broken.
 - RDP connections gain a graphics pipeline switch (auto / always / never) per connection, for environments where the automatic mode is not the right choice for quality or performance.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed the blank field list when opening a table designer on MSSQL: nullable columns come back as variable-length types that failed to decode, and the whole column list was then silently swallowed, leaving an empty table with no message at all. Variable-length types now decode, and a failed load raises a window notification. Auto-increment flags are no longer lost either: MSSQL IDENTITY, MySQL AUTO_INCREMENT, PostgreSQL serial and identity, SQLite single-column INTEGER primary keys, DuckDB nextval and Oracle identity columns are all reported from metadata now, so the designer no longer falls back to guessing from the type name.
 - Fixed the CREATE TABLE produced by object details, the hover popover and "Copy DDL" differing from the table designer: it came from a local generator whose output was effectively invalid DDL (double-quoted identifiers, missing primary key / auto-increment / engine / charset / comments / indexes). All three now call the driver's generator and match the table designer byte for byte, showing "Generating DDL…" while it loads; views, columns and functions no longer pretend to have a CREATE TABLE statement.
@@ -1051,7 +1095,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - Query results can now use a vertical "column: value" layout: a wide result set that spans dozens of columns becomes readable when shown field by field, shared by the table data page and the SQL result tabs, and switchable from "Display mode" in the toolbar or Settings → General → Database → Result display mode. Long values are no longer truncated — the label column stays fixed while the value area scrolls horizontally with an always-visible scrollbar. Click a value row to select it, click a selected row again to edit it (Enter commits, Esc cancels), and the toolbar reveals undo / SQL preview / commit while editing.
 - The field filter panel was rebuilt: it now has a field search box (case-insensitive substring, so `id` also matches `tenant_id`), a height-capped list with an always-visible scrollbar, a "shown fields / total fields" counter in the title, and a fixed footer with the "at least one field stays visible" hint and "Show all fields". Previously it was a dropdown menu whose height was decided purely by the number of entries, so a table with dozens of columns pushed it past the bottom of the window and the last fields could not be reached.
@@ -1059,7 +1103,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - SQL dumps can merge multiple rows into a single INSERT: the dump window gains a "rows per statement" field next to the destination, defaulting to 100 (matching Navicat's equivalent setting), and paging is aligned to whole batches so a batch is never split across two statements.
 - Double-clicking an RDP/VNC connection that is already open now switches to its existing tab instead of stacking several sessions for the same host, with the tab identity pinned to "protocol + connection id". The same connection can no longer open a second tab (copy the connection if you need a second session to the same host).
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed Navop crashing on macOS when closing some dialogs on Touch Bar Macs, where the crash frames land in AppKit's Touch Bar observer deregistration: dialogs now hide and get reused instead of destroying the native window. 12 windows are covered — global proxy settings, the update prompt, extension offline package download and extension details, remote image preview, SQL hover details, import data, export table, run SQL file, dump SQL file, data comparison and schema comparison. Note the deliberate behavior change: dialogs such as import data, export table and data comparison now open one at a time instead of allowing several at once.
 - Dragging to select text inside a cell that is being edited no longer starts the grid's own drag selection: the pointer used to sweep neighbouring cells into the selection, and committing wrote the new value across the whole selection — effectively editing the neighbours by accident.
@@ -1080,7 +1124,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed terminals freezing frequently on Windows (git bash, PowerShell — stalling right after switching views, recovering after a while). Three hotspots are addressed together: whenever decorations such as highlights or search marks existed, every repaint rebuilt the entire text cache for the whole screen; now only the lines whose decorations actually changed are rebuilt. Custom highlight rules no longer rescan the full visible grid every frame — only lines damaged this frame are rescanned. And the directory-entry lookup for hover detection on local terminals moved its synchronous disk read to a background thread, off the UI thread.
 
@@ -1113,7 +1157,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - Table data find: press Cmd/Ctrl+F while browsing table data to open the find bar; matched cells get an outlined highlight, Cmd/Ctrl+G / Cmd/Ctrl+Shift+G jump between matches and scroll the hit column into view horizontally, and hits are re-scanned after paging/refresh using the current term. Two prerequisite defects are fixed: Cmd/Ctrl+F did nothing while focus sat on the tab shell (focus now lands on the grid right after the tab opens), and the toolbar search box no longer filters rows — it highlights matches instead, with both entries merged into a single find bar.
 - Field filtering for table data preview: a column-header dropdown selects visible fields, so wide tables can show only the columns you care about.
@@ -1121,7 +1165,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - New shortcut Cmd/Ctrl+Shift+W closes the active tab, rebindable in settings.
 - The "Workspace" field in connection forms is now consistently called "Group", matching what it actually does.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed SSH MFA logins answering the verification-code prompt with the saved password and failing auth. The client now probes with the RFC 4252 "none" method first: when the server offers keyboard-interactive, the code is entered by the user while the password is still answered from saved credentials at the password prompt; a user-answered code being rejected fails MFA immediately instead of retrying pointlessly; servers without the method keep the original password-first order.
 - Fixed SSH connections to legacy devices (Huawei VRP etc.) dying with `` `mpint` encoding invalid ``: their host keys carry redundant leading zero bytes in the RSA e/n, which RFC 4251 forbids but OpenSSH has always tolerated on read. Peer-message parsing now trims and normalizes them the same way.
@@ -1154,12 +1198,12 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - Database object lists now support select all and drag-select. Tables, views and stored procedures can be Shift-clicked or drag-selected as multiple rows, Cmd/Ctrl drag-select adds to the existing selection, and dragging back and forth shrinks the range as expected. Two interaction bugs are fixed as well: releasing the mouse outside the list no longer reuses a stale anchor and cuts out a wrong range, and Shift-click scrolls the target row just into view instead of pushing the visible rows away.
 - PostgreSQL foreign tables and materialized views are now supported. The table catalogue for PG connections was hard-coded to ordinary tables only, so foreign and partitioned tables simply never showed up, and materialized views had no entry point at all because the view list does not include them — objects the user had already created did not exist in Navop. Foreign tables now live in the same "Tables" folder as ordinary and partitioned tables, with the type column showing Table / Partitioned Table / Foreign Table, and materialized views get their own folder. Rename, truncate, drop and dump actions generate SQL according to the object type and are schema-qualified outside `public`, so `DROP TABLE` is never issued against a foreign table. Foreign tables are excluded from schema comparison, data comparison, ER diagrams and whole-database DDL dumps (data dumps still work).
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed SQL tabs not being able to execute concurrently. While one tab was running, no other tab could execute even when connected to a different database: the whole session table shared a single lock, held from acquiring the connection until the statement finished, so every tab queued behind it. The session pool also had three concurrency defects: releasing a session interleaved with the next statement could mark a running session as idle, which was then reclaimed by the idle sweep (surfacing as "session not found"); scanning for a reusable session blocked other tabs when it hit one running a long statement; and a concurrently detached session could be disconnected twice. Locking is now per-session on the connection itself, session state queries no longer wait for a running statement, and reuse and lifecycle are synchronized by reference counting so a statement acquires and releases exactly once. Mutual exclusion within the same session is preserved.
 - Fixed MySQL text columns being displayed as binary. When connecting to some MySQL-compatible implementations or proxies, the character set in the result column metadata is 0, so with no decoder available every column was downgraded to binary and text columns showed up as "二进制 · N B" in the grid. Table structure metadata, custom SQL and UNION ALL results were affected in the same way, even though the bytes were valid UTF-8. Unknown character sets now fall back to strict UTF-8 decoding; bytes that are not valid UTF-8 or contain control characters still stay binary.
@@ -1183,7 +1227,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Windows: fixed the new version not coming back after an in-app update. While replacing the package the updater can rename the running executable on Windows, so the replacement completes while the old instance is still alive; the new version started right afterwards found the single-instance pipe still held by that instance, forwarded the startup request once and exited — which looked like "the app disappears after updating". The updater now waits until the previous instance really exits (the backup file becoming deletable is that signal) before starting the new version. When the wait times out or the probe fails it no longer restarts blindly: it shows a system dialog asking the user to end the Navop process and start the app manually.
 - Windows: fixed the main window not being restored when the app is started again after being minimized to the tray. The forwarded startup request only asked the window to activate, while tray hiding uses a hidden window, which is not the minimized state, so no show call was ever issued. The restore path now distinguishes minimized from hidden windows, so the restored window is both visible and still maximized instead of being shrunk back.
@@ -1205,7 +1249,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - macOS: fixed a crash when restoring the main window from the tray on macOS 13 and earlier, where the app terminated the process. The restore path called a system API that only exists on macOS 14 and newer. It now picks the API available on the running system, so macOS 12 and 13 restore the window normally.
 - Windows: fixed duplicate launches, where double-clicking the app icon opened a second window. The second instance compared the wrong system error code when checking whether another instance was running, so the forwarding branch never executed; even when it did, the wait timeout it relied on is unsupported on Windows named pipes. The instance check and startup forwarding are rewritten on native named pipes, and the startup gate is tightened: when the process can neither claim the primary instance nor forward its request, it reports the failure and exits instead of silently starting a second window.
@@ -1222,7 +1266,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Windows: fixed a console window flashing when the app starts. Background helpers — WSL distribution detection during startup, opening an HTML preview, browsing container files, and installing skills from Settings — used to spawn console child processes (`wsl.exe`, `cmd`, `docker`, `npx`); Windows created and displayed a console window for each of them, even though their output was already redirected into pipes. They now all run with a hidden console window, so nothing flashes anymore.
 
@@ -1251,7 +1295,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - Tray: the window close button no longer hides the window silently — it asks whether to minimize to the tray or quit, with a "remember my choice" checkbox and a new "Close button behavior" dropdown in Settings. When no tray is available the app still quits directly, so it can never leave a hidden window the user cannot find or restore. Windows duplicate launches are fixed as well: a second instance used to mistake itself for the primary one and start a full process.
 - The terminal's file panel can now switch its remote target host: a picker in the panel header lists SSH / SFTP / FTP connections, marks the current target and the terminal's own host separately, clears the previous host's path and history on switch, and pauses terminal-path following across hosts.
@@ -1259,7 +1303,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - The terminal grid now shows a per-line timestamp and line number in the left margin, each toggleable in Settings.
 - Remote-target and SFTP-endpoint switching now share one picker dialog: icon, connection name and user@host:port, with search, arrow-key selection and scrolling, styled like Quick Open.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Cross-host guard for the terminal file panel: when a jump host nests an ssh into an inner machine, paths reported by that inner shell are no longer used as the panel's own host paths. Previously the directory would not list or refresh at all, and files could be deleted or uploaded on the jump host by mistake. The panel now shows a notice explaining that the terminal has entered X while the panel is still connected to Y.
 - Fixed the shell integration hook being inherited into sub-shells, where every prompt printed "bash: __onetcli_precmd_bash: command not found" (#217). The hook now checks for its own function and stays silent when it is missing, while exit codes are still reported correctly.
@@ -1283,7 +1327,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Extension marketplace: fixed the release-blocking bug where none of the card actions worked — the install / update / uninstall / reload buttons and clicking a card to open its details were all unresponsive (regression from the v0.18.0 redesign). Installed cards now also show their hover highlight, and an install that loses its window or fails to close its tabs no longer leaves the page stuck in a busy state.
 - SFTP: switching the left pane to a server that requires a password at connect time and has not saved one now prompts for credentials in a dialog for that connection only (nothing is persisted). A failed authentication feeds the reason back into the dialog for a retry instead of dropping the left pane.
@@ -1333,7 +1377,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - New standalone FTP / FTPS connection type, and SFTP / FTP / FTPS switching on an existing SSH connection record while its terminal keeps using SSH. FTPS uses explicit AUTH TLS and now connects directly by IP address; SSH connections also gain an open-mode preference so a double-click opens the terminal or the dual-pane file view.
 - New native resource workbench: extensions declare collections, tables, detail pages, and operations that the host renders with native GPUI. The first release is a Docker workbench with engine overview, container start/stop/restart/remove, asynchronous image pulls, log viewer, container processes, filesystem changes, and exec terminals, refined into a region-based v2 layout. Destructive operations require user confirmation.
@@ -1350,7 +1394,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Closing the main window minimizes it to the system tray and keeps the app running.
 - Resource workbench trees support static children declared without a request, decoupling tree expansion from navigation.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Redis: key-tree search no longer double-filters server results and keeps connection and database anchors in filter mode (#181); collection value columns are resizable and long scores are no longer compressed (#180); large keys load with bounded memory.
 - Terminal: fixed SSH keyboard input being permanently buffered when the shell-integration handshake had no fallback (#206); a local PTY backend stopping abnormally now ends the session explicitly instead of hanging; Ctrl+L is re-sent after clear to fix a disappearing prompt and input misalignment; SSH degrades to a single-channel reconnect when probing drops the transport (#183); the selection highlight is cleared immediately after copy; overlays are height-capped with scroll-follow and down-key cycling.
@@ -1404,7 +1448,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - New Known Hosts page: review key algorithms and fingerprints of SSH hosts trusted by the app, copy or remove trusted host identities, and import entries from the system `known_hosts` file.
 - Table data editing supports batch-editing selected cells, with improved result-grid scrollbars and viewport layout.
@@ -1417,7 +1461,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Editor: save shortcuts, and syntax highlighting restored with WASM language parsers enabled.
 - Navop is now installable on Windows via Scoop: `scoop bucket add extras && scoop install navop`.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed the release build failure on macOS x86_64 caused by a BOOL type difference in the GPUI framework; updated GPUI with CJK input (XIM, macOS IME) support, and Rocky Linux 10 now works.
 - Fixed editor syntax-highlighting loss and a crash when the context menu read the editor during callbacks.
@@ -1445,7 +1489,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed minimize, maximize, restore, and close icons appearing black and hard to see under dark themes on Windows (#164). Window control icons now follow the theme colors.
 - Improved release builds with parallel Thin LTO and moved the LLM connector into a workspace crate for unified dependency management.
@@ -1482,7 +1526,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - Background tasks no longer auto-open the task panel or fire toasts; upload/download progress is now shown in each view's bottom progress bar for a quieter experience.
 - A "Universal Resource Plugin" foundation lands: extensions can declare new resource types backed by a standard stored connection and reuse the connection form, workspace, home, and sidebar lifecycles; the host owns process startup, permissions, health checks, and restarts, paving the way for third-party resource types.
@@ -1492,7 +1536,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Added MQTT middleware connections on a rumqttc runtime (MQTT 3.1.1 over rustls) with dedicated subscribe, messages, and publish views (ring-buffered messages, text/Hex toggle); connection tabs follow the MongoDB multi-tab pattern, with SSH tunneling and automatic resubscription after reconnects.
 - Added a declarative connection-form engine for middleware: middleware connections reuse the database form's page model with declaratively configured tabs, while workspace/team/cloud-sync/keychain/notes are handled uniformly; the new-connection dialog now includes dedicated Time-series Database and Middleware categories.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed terminal authentication failures when manually typing passwords containing uppercase or certain special characters (#147).
 - Fixed paste-confirm dialog buttons being pushed out of view and missing large-paste confirmation; long previews now scroll within a height limit, with an option to paste as a single line, and non-bracketed pastes filter dangerous control characters.
@@ -1526,12 +1570,12 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - The Settings entry is now consistently placed at the top-right of the global tab bar, after Background Tasks; it is no longer duplicated in the modern or classic home navigation.
 - SQL result editing is improved: date, time, and numeric columns now use type-appropriate editors based on result-set and schema metadata, without extra schema queries just to identify types for non-MySQL databases.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed the database-tree filter popover flickering, rejecting continued input, or losing IME/focus on Windows; the filter panel now uses an independent host with consistent outside-click, Escape, focus restoration, and connection-switching behavior.
 - Fixed MySQL database names, table names, and other text results being displayed as hexadecimal under environments such as `character_set_results=binary`; result character sets are now negotiated explicitly while genuine binary data remains lossless.
@@ -1557,13 +1601,13 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - Terminal gains "highlight identical text on selection": after selecting text, matching text in the visible area is highlighted with a subtle background, working in both SSH and local terminals; toggleable in the terminal sidebar settings (on by default).
 - Connection list width is now persisted: resizing the sidebar connection tree is saved automatically and restored on next launch; the docked sidebar shares the main window background with a resize-handle divider, and the floating mode adopts a card-style look (rounded corners + shadow).
 - The "check for updates automatically" toggle and "Check for Updates" button move from general settings to the About page, alongside the version information.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed sidebar and command bar icon buttons rendering black instead of following the terminal/Agent custom theme colors.
 - Fixed SFTP restoring the old mtime when overwriting remote files, which made mtime-based change detection (rsync deploys, web/app caches, incremental builds) treat the overwritten file as unchanged and keep serving stale content; the server now records the actual write time.
@@ -1588,14 +1632,14 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - Terminal SSH monitoring now runs collection through the current SSH session instead of writing scripts to the remote host, with a new monitoring toggle in the panel header (#126).
 - Terminal inline credential/MFA input now echoes usernames and verification codes in plain text while masking passwords with asterisks.
 - The terminal file manager gains an "auto-follow terminal working directory" toggle sharing the settings persistence path, and remote paths are normalized to fix duplicated breadcrumb segments.
 - Notes directory layout improvements: an explicitly chosen directory becomes the notes root directly (no automatic `files/` subdirectory), plus a split edit-with-live-preview mode (#109).
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed terminal inline MFA/credential keys passing through to the platform text-input system, double-typing verification codes and passwords.
 - Fixed MySQL still forcing TLS after SSL was disabled.
@@ -1633,7 +1677,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ---
 
-#### What's New
+##### What's New
 
 - SQL editor now supports cross-database/schema qualified completion with lazy loading, plus database hints after FROM, selected-database qualifier suggestions, and isolated qualifier metadata scopes.
 - SQL formatting preserves keyword case; new format settings (keyword case, indentation) with live preview and balanced template masking so sample code/placeholders are not mangled.
@@ -1646,7 +1690,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Extension marketplace supports an "updates available" filter; update notifications jump only to updatable extensions; the MCP Assistant category is removed.
 - macOS titlebar content inset is now opt-in to avoid disturbing custom titlebars.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed the home "Start Center" recent list being stretched by items_center; centered on the main axis instead.
 - Stabilized SQL editor typing flicker and popover interactions; query toolbar buttons pinned to the shared 28px control height.
@@ -1692,7 +1736,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - Major SQL editor upgrade: function signature hints, inline widgets and editor lifecycle management; multi-statement execution, `@set` variables, IN-list and INSERT-clause smart completion, and wildcard completion; execution errors now map to precise source locations for easier troubleshooting.
 - The terminal gains runtime SSH shell integration: prompts, command start/end, and the current directory are sensed in real time without any writes to the remote host, laying the groundwork for automation and script hints.
@@ -1704,7 +1748,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Refreshed the built-in model catalog with the latest model list.
 - Session logs support deletion.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed zmodem upload/download transfer races, task lifecycle, and frame parsing issues; progress updates are more accurate and no longer collide.
 - Fixed SSH timeouts caused by large terminal pastes.
@@ -1744,13 +1788,13 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - SSH connections can now use a separate SFTP account: a new "SFTP Account" tab in the connection form lets you enable an independent SFTP username/password. When enabled, SFTP transfers, remote file browsing, and remote file editing connect with that account while the SSH terminal keeps using the main account; when unset, SFTP and SSH share the same credentials.
 - The SFTP file browser breadcrumb now handles minimum widths more smartly: the root label no longer reserves extra width, keeping the path compact in narrow windows.
 - The connection tree gains an auto-hide toggle (enabled by default): when on, the tree shows as a floating overlay and collapses automatically after you open a session so it never covers the terminal; when off, the tree renders as a fixed split panel docked beside the terminal and stays expanded for continuous browsing.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed terminal paste blocking: multi-line commands with trailing backslash line continuations (e.g., multi-line wget/curl) are no longer hard-blocked as "unsafe multi-line paste" and now use the normal multi-line paste confirmation; the unsafe-paste warning for heredoc and unterminated quotes now offers a "Paste Anyway" button so you can proceed after confirming.
 - Fixed copying table output from the terminal losing column alignment; copied text now keeps the original column spacing.
@@ -1787,13 +1831,13 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - Extension marketplace update notifications: Navop now checks the extension marketplace in the background on startup, compares it with installed plugin versions, and shows a notification when updates are available, with a direct link to view them in the marketplace; each batch of updates is announced only once.
 - The offline package download dialog now lists all download channels: the extension marketplace, GitHub Releases, and the domestic mirror, each with copy-address and open buttons.
 - The connection tree is now a floating panel: expanding it no longer squeezes or pushes the terminal/tab bar, clicking a connection no longer accidentally collapses the sidebar, and the expand/collapse toggle no longer jumps under the window controls.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Table designer SQL preview is now generated asynchronously by the database driver, sharing the same code path as saving: dialect-specific DDL such as `COMMENT ON` is produced by the IPC plugin instead of a host-local builder, fixing blank or "no changes detected" previews when editing table/column comments on DM, Kingbase, and others.
 - The table designer now echoes the table comment on load by plumbing the schema through IPC, falling back to matching by table name when a driver does not report a schema.
@@ -1826,14 +1870,14 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - Added configurable connection sorting under **Settings → General → Connection Display**: a new "Connection Sorting" option defaults to natural name order (numeric segments such as IP addresses compared by value, case-insensitive) with "Most Recently Used" (LRU) also available; the Home connection list, Redis/MongoDB workspace tabs, and the persistent connection sidebar tree all honor the setting and refresh immediately on change.
 - SSH now offers opt-in compatibility for legacy servers. With "Allow Legacy SSH Algorithms" enabled under **Advanced Settings**, Navop can connect to old devices that only support DSA host keys, SHA-1 key exchange/MAC, or 1024-bit DH group negotiation, with adjusted negotiation parameters and order that avoid "Key exchange init failed", plus clearer error messages.
 - Improved tabs: duplicated tabs are automatically numbered (e.g. `192.168.1.1` → `192.168.1.1(1)`), reusing freed numbers, and tab widths now adapt to content so long titles are not truncated.
 - Updated dependencies for security and functionality: clickhouse, sqlparser, russh, and russh-sftp were upgraded, and a gpui-ce clipboard fix was included.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed native RDP overlay dialogs and the close flow, and improved native window overlay handling, connecting status display, and clipboard retry/backoff.
 - Fixed MySQL export so `LONGTEXT` fields are correctly exported as text.
@@ -1856,7 +1900,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed compatibility and stability issues with dedicated fullscreen Windows RDP windows. Opening a dedicated window from a connection's context menu now launches the system Remote Desktop client (`mstsc.exe`) in fullscreen, avoiding white-screen, focus, and exit issues that could occur with the embedded native window.
 - Correctly passes hostnames, IPv4/IPv6 addresses, and custom ports to the system Remote Desktop client, with clear in-app messages when the connection parameters are invalid or the external program cannot be launched.
@@ -1895,7 +1939,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - Added session locking to tabs: lock and unlock sessions with a password kept only in memory, with "Lock All Sessions" and "Hide Output" options; locked terminals reject keystrokes and cannot be closed via the close button.
 - Added SecureCRT-style connection status badges to tabs, showing connected, disconnected, and connected-and-locked states with tooltips.
@@ -1909,7 +1953,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Rebuilt Windows native RDP initialization and shutdown lifecycle to fix white screens and crashes, opening in a tab by default; the dedicated fullscreen window is available from the connection context menu, starts as the active presentation, reveals its title bar on top-edge hover, and exits fullscreen with Escape; only the Windows-native MSTSC and IronRDP backends remain.
 - Other improvements: window placement is restored across displays, SFTP prompts for delayed credentials, PostgreSQL retries transient connection failures, RDP normalizes Windows clipboard file paths, quick-open on the home page now triggers on double-click, and additional i18n text was added.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed crashes and white screens during Windows native RDP initialization and shutdown.
 - Fixed database character-type display and editing, and the loss of binary/text values across data workflows.
@@ -1945,7 +1989,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - Added Telnet connections with automatic login scripts and manual credential overrides.
 - Added session logs and a static terminal history viewer with scrollback, text selection, search, and TXT export for SSH, serial, and local terminal sessions.
@@ -1957,7 +2001,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Added Native and pure-Go driver choices for Oracle connections, improved driver-mode preservation when editing connections, and added Oracle 11g query-limit support.
 - Added portable x64 and ARM64 Linux packages and improved compatibility with older ARM64 runtimes, Wayland dependencies, and usrmerge-based systems.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed Escape being intercepted by the terminal clear-selection shortcut, allowing Vim and other terminal applications to receive Escape normally.
 - Improved preservation and editing of MySQL BIT and binary values across SQL import/export, table editing, and data grids.
@@ -1993,7 +2037,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - Added terminal pane controls for splitting a terminal to the left, right, top, or bottom, with an option to restore a pane to a regular tab.
 - Added batch selection and management to the connection sidebar, including selecting visible connections, moving multiple connections to a group, and deleting them in one operation, with the related actions consolidated into the overflow menu.
@@ -2001,7 +2045,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Added an unlimited-results mode and cancellation for running SQL queries.
 - Unified auxiliary-window close behavior and aligned shortcuts with each platform's standard window-close action.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Made table imports transactional and binary-safe so failures can roll back without leaving partial data, and fixed SQL exports to preserve binary values correctly.
 - Improved SSH multi-factor and keyboard-interactive authentication by preserving terminal buffers and allowing multi-step authentication to continue.
@@ -2041,7 +2085,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - Added cut, copy, and paste for files and directories in the workspace explorer, with `Cmd-X/C/V` shortcuts on macOS and `Ctrl-X/C/V` on other platforms.
 - Expanded SSH/SFTP file management with clearer drop-down action menus, file clipboard operations, remote command execution, copy progress and cancellation, plus a reworked server-to-server copy flow with direct-transfer authentication, automatic source-side SSH key setup, preserved SSH proxy settings, and a relay-only mode.
@@ -2050,7 +2094,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Workspace database queries can now select among available connections while synchronizing the active connection, database, and schema context. Closing an unnamed SQL query now offers cancel, discard, or save-with-a-name choices.
 - SSH terminals can request runtime credentials during connection. Agent settings now include a configurable iteration limit, and copied chat-message content has been improved.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed OTP prompts being lost during SSH multi-factor authentication.
 - Fixed direct SFTP server-to-server copies that could hang, omit source-side keys, lose source SSH proxy settings, or fail to handle unknown host keys.
@@ -2084,13 +2128,13 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - Added configurable SSH terminal encodings, including UTF-8, GBK, GB18030, Big5, Shift_JIS, EUC-JP, EUC-KR, and Windows-1252, improving display and input for legacy and non-UTF-8 environments.
 - Added “Paste Selected Text” to the terminal context menu, allowing the current selection to be sent directly to the terminal.
 - Added explicit security confirmation when an SSH host key changes, showing the new and previously trusted fingerprints and warning about possible man-in-the-middle attacks before allowing an update or one-time acceptance.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed Agent tasks stopping when context-compaction model calls fail; a local fallback summary is now used while preserving cancellation behavior.
 - Fixed keyboard focus being lost in popovers during search or content updates, and correctly restored the previously focused element when the popover is dismissed.
@@ -2123,13 +2167,13 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - Added ZMODEM file transfers over SSH, including file selection for uploads and destination-directory selection for downloads.
 - Added directory uploads to the SFTP file-transfer toolbar, allowing users to choose files or folders directly from the upload menu.
 - Added table actions for copying a table name or table comment from the database object tree.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed incomplete SQL query-result exports so complete result sets can now be exported.
 - Fixed crashes and stale-result updates in Agent mention completion, especially during rapid typing and CJK or numeric queries.
@@ -2161,7 +2205,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - Added editors for MySQL procedures, MySQL functions, and PostgreSQL functions and procedures. Routine lists now show argument and identity-argument information, distinguish schema-scoped objects, and open overloaded routines accurately.
 - Added a pre-save RDP connection test with timeout handling and clearer failure diagnostics, fixed remote keyboard input-state handling, and improved RDP/VNC connection icons.
@@ -2169,7 +2213,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Added a global sync switch that is disabled by default and clarified sync and encryption prompts. Portable mode can optionally store an encrypted master-key copy under `data/state/key_storage` for automatic unlock. This copy uses a key embedded in the application rather than device-bound protection, so anyone who obtains both the application and the complete `data` directory may be able to recover the master key. Enable it only if you understand and accept this risk.
 - Added Windows 32-bit release packages and made the updater select the matching Windows x86 download.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Connection Quick Open now searches by IP address, username, host, and port.
 - Prevented Agent/MCP from submitting plan titles or status text directly as shell commands, and now send EOF immediately to remote commands without stdin so they do not wait indefinitely for input.
@@ -2203,7 +2247,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - Added a Windows EXE installer that uses the same per-user installation flow as the MSI. The default installation location does not require administrator privileges and provides Start menu shortcuts, a desktop shortcut, and file associations.
 - Clearly separated the standard Windows no-install ZIP from the portable ZIP. The standard `navop-x86_64-pc-windows-msvc.zip` uses the normal Windows user data directories and supports remembered master-key unlock. The portable `navop-x86_64-pc-windows-msvc-portable.zip` keeps data beside the executable and asks for the master key on every start by default, but users who explicitly accept the risk may store an encrypted, automatically recoverable copy under `data/state/key_storage`. This copy uses a key embedded in the application instead of device-bound protection, so anyone who obtains both the application and the complete `data` directory may be able to recover the master key.
@@ -2215,7 +2259,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Back up the complete old portable directory before upgrading. Extract the new portable ZIP to a new directory, copy the entire old `data` directory into it, keep `navop.portable` beside `navop.exe`, and enter the original master key when starting the new version.
 - Do not migrate by deleting `navop.portable`. The new standard ZIP and the MSI/EXE installers use the normal Windows user data directories and do not automatically migrate old portable data. If connections and settings appear missing after switching editions, the original data remains in the old portable directory.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Improved image attachment compatibility for SiliconFlow and other models by handling PNG, JPEG, WebP, and GIF according to their actual encoding, converting or resizing incompatible and oversized images, and reporting unsupported attachments before sending the request.
 - Added an actionable hint when an older SSH server fails key-exchange negotiation because there is no common KEX algorithm, directing users to enable legacy algorithm compatibility in the connection's advanced settings.
@@ -2250,14 +2294,14 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - Added persistent terminal session recording with read-only timeline playback, recording file associations, and safe browsing. Playback blocks input, online operations, and Public MCP exposure to prevent accidental execution.
 - Added an entry point for opening table queries from database table views, made the cell preview panel resizable, and improved row selection with Shift-based range extension.
 - Improved Markdown editing and file interactions with better Typora compatibility, image rendering inside table cells, note-navigation shortcuts, and drag-and-drop opening for associated files.
 - Expanded the update dialog with richer version information and a skip-version option, and added local update simulation for validating the complete update flow.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Fixed Windows terminals such as WSL and PowerShell blanking or becoming unresponsive during continuous output or heavy load. Rendering, search, selection, clipboard, scrolling, and control operations now use non-blocking scheduling with bounded queues so the UI remains responsive.
 - Optimized high-load terminal paths by bounding ingress queues and command-output capture, improving SSH and serial parser ingestion and performance metrics, adding command-bar history navigation, and preserving terminal output across SSH reconnects.
@@ -2291,12 +2335,12 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ### English
 
-#### What's New
+##### What's New
 
 - Added SSH remote/reverse port forwarding (`ssh -R`) with both fixed remote ports and automatic port allocation via port `0`, integrated across connection management, start/stop handling, command copying, sharing, personal sync, status display, and bilingual documentation.
 - Unified execution mode in AI Chat is now persisted, preserving the selected mode after restarting the application.
 
-#### Fixes and Improvements
+##### Fixes and Improvements
 
 - Improved remote port-forwarding lifecycle handling by preventing the startup race during automatic port allocation and ensuring failed cleanup does not leave a stale running state.
 - Smoothed remote cursor movement in RDP sessions for more stable pointer feedback.
