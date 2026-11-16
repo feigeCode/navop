@@ -1,9 +1,6 @@
 # Public MCP 與外部自動化
 
-Public MCP 讓 Codex、Claude Desktop、Claude Code 與相容用戶端呼叫目前正在執行的 Navop、Navop Shell 或 Navop Data。它不是固定雲端 API：使用動態 loopback 連接埠與僅目前使用者可讀的 discovery token，真實工具和 Schema 來自本機應用程式。
-
-> [!NOTE]
-> Public MCP 依產品個別探索、個別授權：`navop`、`navop-shell`、`navop-data` 各自只提供該應用程式當下可用的工具；連線用戶端前先確認指向哪個產品。
+Public MCP 讓 Codex、Claude Desktop、Claude Code 與相容用戶端呼叫目前正在執行的 Navop。它不是固定雲端 API：使用動態 loopback 連接埠與僅目前使用者可讀的 discovery token，真實工具和 Schema 來自本機應用程式。
 
 ## 服務模式與探索
 

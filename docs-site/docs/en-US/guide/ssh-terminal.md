@@ -1,9 +1,6 @@
 # SSH and terminal workspaces
 
-Navop and Navop Shell combine remote SSH and local Terminal sessions with tabs, splits, broadcast input, history, quick commands, highlighting, and shell integration. Every command acts on the current local machine or remote server, so keep the host and identity visible.
-
-> [!NOTE]
-> This feature is available in **Navop** and **Navop Shell**. **Navop Data** has no terminal workspace.
+Navop combines remote SSH and local Terminal sessions with tabs, splits, broadcast input, history, quick commands, highlighting, and shell integration. Every command acts on the current local machine or remote server, so keep the host and identity visible.
 
 ## Create SSH and local profiles
 

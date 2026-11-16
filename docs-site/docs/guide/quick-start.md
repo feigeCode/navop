@@ -1,54 +1,29 @@
 # 快速开始
 
-Navop 现在有三个应用，共用同一套原生内核：全量 **Navop**、远程运维 **Navop Shell**、数据工具 **Navop Data**。第一次使用不必一次配置全部能力：先按下面的对照表选一个应用，完成一个真实任务，再按本手册继续扩展。
+Navop 是一个用 Rust 与 GPUI 原生构建的桌面工作台，不需要浏览器运行时。第一次使用不必一次配置全部能力：先完成一个真实连接和一个只读任务，再按本手册继续扩展。
 
 ![Navop 工作区总览](/images/app.png)
 
 上图中的首页是连接和工作区的入口。数据库、SSH/SFTP、Redis、MongoDB、终端和远程桌面连接都从这里创建，进入连接后才会出现对应的编辑器、浏览器或终端标签。
 
-## 选哪个应用
-
-| 你的主要工作 | 建议应用 |
-| --- | --- |
-| 数据库和服务器都要管，或需要 ER 图、数据迁移、监控、文件关联 | **Navop**（全量版） |
-| 主要是 SSH 登录服务器、SFTP 传文件、端口转发、RDP/VNC 远程桌面、串口/Telnet | **Navop Shell**（远程运维） |
-| 主要是连数据库写 SQL、管理 Redis/MongoDB、看 ER 图、做数据迁移 | **Navop Data**（数据工具） |
-
-三个应用共享 AI、Notes、团队同步、扩展市场、主题、快捷键、tab 恢复、托盘、单实例和自动更新，同版本发布且可以并排安装；数据目录与钥匙串各自独立。拿不准就先装全量 Navop，它的能力最全，之后仍可并排安装独立产品。
-
 ## 五分钟完成第一个任务
 
-三个应用都从[官网下载中心](https://navop.dev/zh-CN/extensions)下载对应安装包，安装方法见[安装与更新](./install-update)。
-
-### 用 Navop（全量版）
+从[官网下载中心](https://navop.dev/zh-CN/extensions)下载 Navop，安装方法见[安装与更新](./install-update)。
 
 1. 启动 Navop，在首页选择“新建连接”，创建数据库或 SSH 连接，填写地址、端口和认证信息，先执行“测试连接”。
 2. 测试成功后打开连接：数据库连接进入数据库工作区，展开 Schema 和表，打开 SQL 编辑器执行一条只读查询；SSH 连接进入终端工作区，执行 `pwd`、`whoami` 等低风险命令，再进入 SFTP 查看远程目录。
-3. 需要本地工作时，直接打开 Terminal 或 Notes；全量 Navop 还会接管 `.db`、`.duckdb`、`.md` 和 `.cast` 文件关联。
+3. 需要本地工作时，直接打开 Terminal 或 Notes；Navop 还会接管 `.db`、`.duckdb`、`.md` 和 `.cast` 文件关联。
 
-### 用 Navop Shell（远程运维）
+## 认识工作区
 
-1. 启动 Navop Shell，从首页“新建连接”创建 SSH/SFTP、终端、RDP/VNC、串口/Telnet 或端口转发。
-2. 先测试连接，再打开 SSH 终端执行 `pwd`、`whoami` 等命令，或进入 SFTP 浏览远程目录。
-3. 需要图形会话时先从扩展市场安装远程桌面 Provider，再新建 RDP 或 VNC 连接；需要隧道时从已保存的 SSH 连接建立端口转发。
+- **首页**：统一管理数据库、SSH、Redis、MongoDB、远程桌面等连接，支持网格、树形视图、最近连接和批量操作。
+- **数据库工作区**：SQL 编辑器、表数据、表设计、ER 图、导入导出、结构比较与数据迁移。
+- **SSH 工作区**：终端、分屏、快捷命令、广播输入、SFTP、远程文件编辑和服务器监控。
+- **远程访问**：端口转发、RDP/VNC 远程桌面、串口与 Telnet。
+- **Notes 与 AI**：本地 Markdown 预览与编辑，AI 可在 SQL、查询结果和终端上下文里生成、解释和排查。
+- **扩展与协作**：扩展市场安装数据库驱动、ACP Agent、远程桌面 Provider 和语言包；团队空间管理成员与共享连接。
 
-### 用 Navop Data（数据工具）
-
-1. 启动 Navop Data，新建数据库、Redis 或 MongoDB 连接，填写地址、端口和认证信息后先测试。
-2. 数据库连接进入 SQL 工作区，展开 Schema 和表并执行一条只读查询；Redis 与 MongoDB 分别打开各自的浏览器和诊断入口。
-3. 需要梳理表关系或搬运数据时，打开 ER 图或数据迁移；两个入口都只在数据工作区中出现。
-
-## 认识产品地图
-
-**全量 Navop** 覆盖数据库、Redis、MongoDB、SSH/SFTP、本地与远程终端、端口转发、远程桌面、串口/Telnet、SQL 编辑器、ER 图、数据迁移、监控、Notes、AI 工作台、团队同步、扩展市场和 Public MCP。首页负责管理连接和工作区；数据库区域覆盖 SQL、表数据、表设计、ER 图、导入导出和比较同步；SSH 工作区包含终端、分屏、快捷命令、SFTP、远程编辑和服务器监控。
-
-**Navop Shell** 保留远程运维相关的工作区：SSH/SFTP、本地与远程终端、端口转发、远程桌面 RDP/VNC、串口/Telnet，并共享 AI、Notes、团队与扩展体系。
-
-**Navop Data** 保留数据工作相关的工作区：SQL 工作区、Redis、MongoDB、ER 图、数据迁移，并共享 AI、Notes、团队与扩展体系。
-
-三个应用共享主题、快捷键、tab 恢复、托盘、单实例、自动更新和 Public MCP。Public MCP 按产品分别发现、分别授权：`navop`、`navop-shell`、`navop-data` 各自暴露本应用当前可用的工具，不要假设一个应用的 manifest 能操作另一个应用。
-
-Notes 用于本地 Markdown 的只读预览与源码编辑。AI 工作台在三个应用中一致，可配置模型 Provider，并以 Ask、Plan 或 Auto 模式围绕真实资源工作。对于 Codex 等可执行终端命令的 AI Agent，可安装 Navop Skill，通过 `navop` 按需操作资源，减少每轮携带完整 MCP 工具定义的上下文和 Token 开销。CLI 仍要求启用对应应用的 Public MCP，并遵循 Tool Exposure、权限档位和审批策略。扩展市场用于安装数据库驱动、ACP Agent、连接导入、远程桌面和语言包。
+Public MCP 让外部 Codex、Claude 等客户端调用当前运行中的 Navop。它使用动态 loopback 端口和仅当前用户可读的 discovery token，实际暴露的工具受 Tool Exposure、权限档位和审批策略控制。
 
 ## 推荐的上手顺序
 
@@ -60,13 +35,13 @@ Notes 用于本地 Markdown 的只读预览与源码编辑。AI 工作台在三�
 
 连接密码、SSH 私钥等敏感信息由主密钥在本地加密。启用同步后，云端保存的是本地加密产生的密文；主密钥遗失无法由官网恢复。团队密钥也只以加密形式保存在成员设备上。不要把生产凭据、主密钥、完整日志或未脱敏截图粘贴到公开渠道。
 
-三个应用各自维护数据目录和钥匙串；即使并排安装，也不会共用同一份连接密文。迁移或备份时请按产品分别处理，不要把两个应用的目录混在一起。
+配置、连接密文和钥匙串都保存在本机，可以随应用一起备份或迁移；迁移前请先退出应用，避免复制到只写入一半的文件。
 
 Public MCP 和 AI 工具可能执行真实操作。首次使用时选择更保守的权限档位，只开放当前任务需要的工具，逐次阅读审批内容。任何删除、覆盖、清表、DDL、批量同步和停止转发操作都应先确认影响范围，并优先在可回滚环境验证。
 
 ## 推荐的首个可复现任务
 
-首次启动时，应用会在本地数据目录初始化 `Demo Orders (SQLite)` 演示数据库。这个数据库只用于熟悉界面，不连接网络，也不包含真实业务数据；它在 Navop 与 Navop Data 的数据库工作区中可以直接打开。
+首次启动时，应用会在本地数据目录初始化 `Demo Orders (SQLite)` 演示数据库。这个数据库只用于熟悉界面，不连接网络，也不包含真实业务数据。
 
 1. 在首页找到 `Demo Orders (SQLite)`，打开数据库工作区。
 2. 展开 Schema 和表，先打开 `customers` 或 `products` 查看数据。
@@ -86,7 +61,6 @@ ORDER BY order_count DESC;
 
 ## 完成检查
 
-- [ ] 知道自己用的是 Navop、Navop Shell 还是 Navop Data，以及它与另外两个应用的分工。
 - [ ] 能在首页找到一个连接，并能区分连接名称、类型和环境。
 - [ ] 能打开数据库对象或 SSH 终端。
 - [ ] 能执行一条只读 SQL，或在终端执行 `pwd`、`whoami`。
@@ -95,8 +69,8 @@ ORDER BY order_count DESC;
 
 ## 下一步阅读
 
-- 需要选择或切换应用：阅读[安装与更新](./install-update)。
-- 需要连接自己的数据库：阅读[数据库连接](./database-connections)（Navop / Navop Data）。
-- 需要编写和执行查询：阅读 [SQL 编辑器与事务](./sql-editor)（Navop / Navop Data）。
-- 需要连接服务器：阅读 [SSH 与终端工作区](./ssh-terminal) 和 [SFTP 与远程文件编辑](./sftp-remote-files)（Navop / Navop Shell）。
+- 需要了解安装包、平台差异与升级：阅读[安装与更新](./install-update)。
+- 需要连接自己的数据库：阅读[数据库连接](./database-connections)。
+- 需要编写和执行查询：阅读 [SQL 编辑器与事务](./sql-editor)。
+- 需要连接服务器：阅读 [SSH 与终端工作区](./ssh-terminal) 和 [SFTP 与远程文件编辑](./sftp-remote-files)。
 - 需要导入已有连接：阅读[首页、工作区与连接管理](./workspace-connections)。

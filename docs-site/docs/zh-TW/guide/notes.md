@@ -4,12 +4,9 @@ Notes 用於開啟和編輯本機 Markdown 檔案，提供**唯讀預覽**與**�
 
 ![Markdown 原始碼編輯器](/images/markdown.png)
 
-> [!NOTE]
-> Notes 在三個應用程式中均可用，編輯的是本機 Markdown 檔案。
-
 ## 開啟 Markdown
 
-進入 Notes 後選擇可讀寫的本機資料夾，即可瀏覽其中的 Markdown 檔案。也可透過作業系統檔案關聯，直接使用 Navop 開啟 `.md` 檔案。
+進入 Notes 後選擇可讀寫的本機資源資料夾，即可瀏覽其中的 Markdown 檔案。也可透過作業系統檔案關聯，直接使用 Navop 開啟 `.md` 檔案。
 
 更換 Notes 資料夾不會自動移動舊檔案。使用雲端硬碟、網路磁碟或 Git 目錄時，同步衝突、檔案鎖定和版本合併仍由相應工具處理。
 

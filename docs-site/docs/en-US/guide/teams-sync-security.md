@@ -2,9 +2,6 @@
 
 Navop supports personal sync and team-shared connection configuration. Accounts, sign-in, teams, members, and team keys are all managed in the app's **Team** page. The app performs local encryption, decryption, and actual connection use, and cloud storage contains locally produced ciphertext, not directly readable credentials.
 
-> [!NOTE]
-> Teams, sync, and account features are available in all three apps. Each app uses its own data directory and keychain, and its Team page manages only that app's connections.
-
 ## Sign in and assign roles
 
 Sign in from the app with your email password or a one-time OTP. Team roles are Owner, Admin, and Member. Owners handle highest-level management and handoff, Admins manage members and team configuration, and Members use authorized resources. Follow the current UI permission messages.

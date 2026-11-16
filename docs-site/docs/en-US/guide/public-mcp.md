@@ -1,9 +1,6 @@
 # Public MCP and external automation
 
-Public MCP lets Codex, Claude Desktop, Claude Code, and compatible clients call the currently running Navop, Navop Shell, or Navop Data. It is not a fixed cloud API: discovery uses a dynamic loopback port and a user-only token, while live tools and schemas come from the local application.
-
-> [!NOTE]
-> Public MCP is discovered and authorized per product: `navop`, `navop-shell`, and `navop-data` each expose only the tools available in that app. Confirm which product your client is pointing at.
+Public MCP lets Codex, Claude Desktop, Claude Code, and compatible clients call the currently running Navop. It is not a fixed cloud API: discovery uses a dynamic loopback port and a user-only token, while live tools and schemas come from the local app.
 
 ## Choose a server mode
 
