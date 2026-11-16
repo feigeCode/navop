@@ -21,10 +21,9 @@ use extension_host::CancellationToken;
 use extension_plugin_adapter::ActivationHandle;
 use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement as _, Styled, Subscription, Task, Window, div,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div,
 };
-use gpui_component::{ActiveTheme as _, Theme};
+use gpui_component::Theme;
 use nsh_engine::HostChannel;
 use nsh_platform_gpui::{AppOptions, AppView, Locale};
 use serde_json::{Map, Value, json};
@@ -76,17 +75,34 @@ pub struct NshTab {
     dispatcher: super::dispatch::MainThread,
     /// 连接型页面：provider 资源由本 tab 打开并持有（`owned: true`）。
     connection: Option<super::connection::NshConnectionLaunch>,
+    /// 打开这个 tab 时携带的宿主侧启动上下文（`host.params.context`）。
+    ///
+    /// 典型来源：DB 树右键菜单等宿主 UI 触发的打开动作，把触发场景
+    /// （节点、连接、命令）作为启动事实交给页面。仅启动时注入，运行期不变。
+    launch_context: Option<Value>,
+    /// 本页面所在的页签容器：页面自己 `App.open` 时沿用同一个容器，
+    /// 免得从数据库标签页里点开的扩展页跳到主窗口的页签栏。
+    launch_tabs: Option<gpui::WeakEntity<one_core::tab_container::TabContainer>>,
+    /// 面板 surface：`Some(panel_id)` 表示本实例是 `contributes.panels`
+    /// 的一个面板（挂在终端侧栏等宿主锚点里），`host.params.surface`
+    /// 是 `"panel"`；tab 场景是 `None`（surface 为 `"tab"`）。
+    surface_panel: Option<String>,
+    /// 面板所属锚点（`terminal-sidebar` / `db-sidebar`）；tab 实例为 None。
+    surface_anchor: Option<String>,
+    /// 面板自带主题覆盖（终端侧栏面板跟终端配色）。
+    surface_theme: Option<nsh_platform_gpui::Theme>,
     /// 本页是不是连接型页面（连接启动参数在准备阶段就被消费掉了，
     /// 重装时要靠这个标记区分"能重来"和"要重开连接"）。
     is_connection: bool,
     /// 连接资源准备好了但还没交给会话（建会话要等窗口）。
     prepared_connection: Option<super::connection::PreparedNshConnection>,
-    /// 插件 AI 侧栏（plugin-ai-tools.md §9）：每 tab 一个实例，默认收起。
-    /// 页面装载成功后创建；会话 v1 只在内存里，tab 关掉即丢。
+    /// 插件 AI 面板（收起时是页面右下角的浮钮，点开在右侧停靠）。
     plugin_ai: Option<Entity<super::plugin_ai_panel::PluginAiPanel>>,
 }
 
 impl NshTab {
+    /// 非容器入口（旧签名保留；容器路径走 `open_in`）。
+    #[allow(dead_code)]
     pub(crate) fn open(
         contribution: extension_runtime::RegisteredShellAppContribution,
         route: Option<String>,
@@ -103,8 +119,133 @@ impl NshTab {
             dispatcher,
             None,
             None,
+            None,
+            None,
+            None,
             cx,
         )
+    }
+
+    /// 带宿主侧启动上下文打开：上下文进 `host.params.context`（如 DB 树
+    /// 右键菜单把触发节点交给页面）。
+    /// 非容器入口（旧签名保留；容器路径走 `open_with_context_in`）。
+    #[allow(dead_code)]
+    pub(crate) fn open_with_context(
+        contribution: extension_runtime::RegisteredShellAppContribution,
+        route: Option<String>,
+        context: Value,
+        service: crate::UniversalPluginService,
+        trust: Trust,
+        dispatcher: super::dispatch::MainThread,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        Self::create(
+            contribution,
+            route,
+            service,
+            trust,
+            dispatcher,
+            None,
+            None,
+            Some(context),
+            None,
+            None,
+            cx,
+        )
+    }
+
+    /// 打开到指定页签容器（数据库标签页自己的页签栏），不带启动上下文。
+    pub(crate) fn open_in(
+        contribution: extension_runtime::RegisteredShellAppContribution,
+        route: Option<String>,
+        tabs: gpui::WeakEntity<one_core::tab_container::TabContainer>,
+        service: crate::UniversalPluginService,
+        trust: Trust,
+        dispatcher: super::dispatch::MainThread,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        Self::create(
+            contribution,
+            route,
+            service,
+            trust,
+            dispatcher,
+            None,
+            None,
+            None,
+            Some(tabs),
+            None,
+            cx,
+        )
+    }
+
+    /// 带启动上下文打开到指定页签容器。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_with_context_in(
+        contribution: extension_runtime::RegisteredShellAppContribution,
+        route: Option<String>,
+        context: Value,
+        tabs: gpui::WeakEntity<one_core::tab_container::TabContainer>,
+        service: crate::UniversalPluginService,
+        trust: Trust,
+        dispatcher: super::dispatch::MainThread,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        Self::create(
+            contribution,
+            route,
+            service,
+            trust,
+            dispatcher,
+            None,
+            None,
+            Some(context),
+            Some(tabs),
+            None,
+            cx,
+        )
+    }
+
+    /// 面板 surface 构造器：本实例是 `contributes.panels[]` 的一个面板，
+    /// 挂在宿主 UI 锚点（终端侧栏）里而不是 tab 容器里。
+    ///
+    /// 面板不建插件 AI 侧栏（那是 tab 的伴随面板）；其余装载流程与 tab
+    /// 完全一致（先租 provider，再建 `AppView`）。
+    ///
+    /// 注意：`surface_panel` 要在 `create` 返回后经 `update` 设置——构造
+    /// 体内拿不到半成品实体；而装载发生在第一次 `render`，所以这里设置
+    /// 一定早于装载，`host.params.surface/panel` 不会错过。
+    pub(crate) fn open_panel(
+        contribution: extension_runtime::RegisteredShellAppContribution,
+        panel_id: &str,
+        panel_anchor: &str,
+        launch_context: Option<serde_json::Value>,
+        tabs: Option<gpui::WeakEntity<one_core::tab_container::TabContainer>>,
+        surface_theme: Option<nsh_platform_gpui::Theme>,
+        service: crate::UniversalPluginService,
+        trust: Trust,
+        dispatcher: super::dispatch::MainThread,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        let tab = Self::create(
+            contribution,
+            None,
+            service,
+            trust,
+            dispatcher,
+            None,
+            None,
+            None,
+            tabs,
+            surface_theme,
+            cx,
+        );
+        tab.update(cx, |tab, _| {
+            tab.surface_panel = Some(panel_id.to_string());
+            tab.surface_anchor = Some(panel_anchor.to_string());
+            tab.launch_context = launch_context;
+        });
+        tab
     }
 
     /// 连接型页面：先用连接配置打开 provider 资源，再把页面挂在这个会话上。
@@ -127,6 +268,9 @@ impl NshTab {
             dispatcher,
             Some(connection),
             Some(title),
+            None,
+            None,
+            None,
             cx,
         )
     }
@@ -140,6 +284,9 @@ impl NshTab {
         dispatcher: super::dispatch::MainThread,
         connection: Option<super::connection::NshConnectionLaunch>,
         connection_title: Option<SharedString>,
+        launch_context: Option<Value>,
+        tabs: Option<gpui::WeakEntity<one_core::tab_container::TabContainer>>,
+        surface_theme: Option<nsh_platform_gpui::Theme>,
         cx: &mut App,
     ) -> Entity<Self> {
         let title: SharedString = connection_title
@@ -155,7 +302,7 @@ impl NshTab {
                 // v2 的主题走 nsh 原生（`set_theme` / `set_appearance`）：
                 // 不再向页面推 `navop.theme.changed`，页面也不读 navop.theme.*。
                 if let Some(view) = &this.view {
-                    theme::push(view, cx);
+                    theme::push_with(this.surface_theme.as_ref(), view, cx);
                 }
             });
             Self {
@@ -181,6 +328,11 @@ impl NshTab {
                 dispatcher,
                 is_connection: connection.is_some(),
                 connection,
+                launch_context,
+                launch_tabs: tabs,
+                surface_panel: None,
+                surface_anchor: None,
+                surface_theme,
                 prepared_connection: None,
                 plugin_ai: None,
             }
@@ -314,11 +466,31 @@ impl NshTab {
             &self.contribution,
             self.route.as_deref(),
             connection,
+            self.launch_context.take(),
+            self.surface_panel.as_deref(),
+            self.surface_anchor.as_deref(),
         ));
+        // 能力面（nativeModule）的宿主上下文：扩展身份/清单走 `host_abi`，
+        // 主线程队列与会话随 surface 走。模块函数从引擎上下文读回它。
+        let api = super::native_api::SurfaceApi::new(
+            Arc::clone(&host_abi),
+            if self.surface_panel.is_some() {
+                "panel"
+            } else {
+                "tab"
+            },
+            self.dispatcher.clone(),
+            Arc::clone(&session),
+        )
+        .with_panel(self.surface_panel.clone(), self.surface_anchor.clone())
+        // 页面自己 `App.open` 时也落在同一个页签容器里（数据库标签页内的
+        // 扩展页不该把手伸到主窗口的页签栏）。
+        .with_tabs(self.launch_tabs.clone());
         let options = AppOptions {
             app_id: program.app_id,
             asset_base: program.asset_base,
             host: self.channel.clone(),
+            context: nsh_engine::EngineContext::default().with(api),
             // 原生组件（`<Terminal/>` 这类）按**本页面**的注册表注入：
             // 每视图一份，工厂里钉死扩展身份与清单权限。
             components: super::native::components_for(
@@ -331,32 +503,34 @@ impl NshTab {
         // 事件泵先于 handler 建好：`navop.event.subscribe` 会把订阅交给它。
         let pump = EventPump::new(self.channel.clone(), Arc::clone(&session));
 
-        // 插件 AI 侧栏（§9）：页面装载成功后建好（默认收起，随时可开）。
-        // 连接型页面回查完整 StoredConnection（build_sidebar_resource_state
-        // 需要它），查不到按"无连接"处理。先建面板再注册 ABI：navop.ai.*
-        // 的 handler 需要面板句柄。
-        let connection = self.connection.as_ref().and_then(|launch| {
-            use one_core::storage::traits::Repository as _;
-            let id = launch.connection_id();
-            cx.try_global::<one_core::storage::GlobalStorageState>()
-                .and_then(|state| state.storage.get::<one_core::storage::ConnectionRepository>())
-                .and_then(|repo| repo.get(id).ok().flatten())
-        });
-        let contribution_title = self.contribution.title.clone();
-        let extension_id: Arc<str> = Arc::from(self.extension_id.as_str());
-        let route: Option<Arc<str>> = self.route.as_deref().map(Arc::from);
-        let service = self.service.clone();
-        let plugin_ai = cx.new(|cx| {
-            super::plugin_ai_panel::PluginAiPanel::new(
-                &service,
-                extension_id,
-                Arc::from(contribution_title.as_str()),
-                route,
-                connection,
-                window,
-                cx,
-            )
-        });
+        // 插件 AI（§9）：页面右下角的浮钮 + 右侧停靠面板。面板 surface 不建
+        // （侧栏里再嵌一层侧栏没有意义）；页面也可以自己挂
+        // `nativeComponent("navop.ai")` 取代这套默认位置。
+        if self.surface_panel.is_none() {
+            let connection: Option<one_core::storage::StoredConnection> = self
+                .connection
+                .as_ref()
+                .and_then(|launch| {
+                    let id = launch.connection_id();
+                    let state = cx.try_global::<one_core::storage::GlobalStorageState>()?;
+                    let repo = state.storage.get::<one_core::storage::ConnectionRepository>()?;
+                    use one_core::storage::traits::Repository as _;
+                    repo.list().ok()?.into_iter().find(|c| c.id == Some(id))
+                });
+            let title: Arc<str> = Arc::from(self.title.as_ref());
+            let panel = cx.new(|cx| {
+                super::plugin_ai_panel::PluginAiPanel::new(
+                    &self.service,
+                    Arc::from(self.extension_id.as_ref()),
+                    title,
+                    self.route.as_ref().map(|route| Arc::from(route.as_ref())),
+                    connection,
+                    window,
+                    cx,
+                )
+            });
+            self.plugin_ai = Some(panel);
+        }
         // 先把能力挂到通道上，再让页面跑起来。
         abi::register(
             &self.channel,
@@ -364,16 +538,11 @@ impl NshTab {
             Arc::clone(&session),
             &pump,
             &self.dispatcher,
-            Some(plugin_ai.downgrade()),
         );
-        // 侧栏展开/收起改变的是 tab 的布局（展开时占宽度、收起时只剩浮层按钮），
-        // 所以要跟着侧栏的更新重画这个 tab。
-        cx.observe(&plugin_ai, |_this, _panel, cx| cx.notify())
-            .detach();
-        self.plugin_ai = Some(plugin_ai);
         let view = cx.new(|cx| AppView::new(options, window, cx));
         // 首帧前把宿主主题与界面语言交给页面（spec §2 附、§7 主题走原生）。
-        theme::push(&view, cx);
+        // 面板可以带覆盖主题：终端侧栏面板用终端配色，而不是应用主题。
+        theme::push_with(self.surface_theme.as_ref(), &view, cx);
         let locale = rust_i18n::locale().to_string();
         let locale = Locale::parse(&locale).unwrap_or(Locale::EN_US);
         view.update(cx, |view, cx| view.set_locale(Some(locale), cx));
@@ -398,8 +567,6 @@ impl NshTab {
         self.session = Some(session);
         self.pump = Some(pump);
         self.view = Some(view);
-
-
 
         // 两阶段装载的第二步：首帧画出来、且没有立刻报错，才算这个 build
         // 健康，把它记进信任库（方案 §8）。失败就让上一个 build 继续可用。
@@ -426,14 +593,25 @@ impl NshTab {
 /// `host.params` 的载荷（契约 §3）：启动事实，运行期不变。
 ///
 /// 页面在顶层同步读它，所以字段名一旦定下就是契约：`apiVersion` /
-/// `extension.{id,title}` / `route` / `backends` / `connection`。
+/// `extension.{id,title}` / `route` / `backends` / `connection` / `context` /
+/// `surface` / `panel`。
 ///
 /// `route` 是宿主建议的初始页面（来自连接清单的 `route` 或打开方给的
 /// deep link）；页面可以用它当默认值，也可以在 app 内继续导航。
+///
+/// `context` 是打开方注入的宿主侧触发上下文（如 DB 树右键菜单的
+/// `{node, databaseType, connectionId, commandId}`）；没有则为 null。
+///
+/// `surface` 是本实例的挂载位置：`"tab"`（tab 容器里的整页）或
+/// `"panel"`（宿主 UI 锚点里的面板）。面板实例额外带 `panel`（清单
+/// `contributes.panels[].id`）；tab 实例的 `panel` 为 null。
 fn params_payload(
     contribution: &extension_runtime::RegisteredShellAppContribution,
     route: Option<&str>,
     connection: Value,
+    launch_context: Option<Value>,
+    surface_panel: Option<&str>,
+    surface_anchor: Option<&str>,
 ) -> Map<String, Value> {
     let mut params = Map::new();
     params.insert("apiVersion".to_owned(), json!(2));
@@ -450,6 +628,13 @@ fn params_payload(
         json!(contribution.backends.keys().collect::<Vec<&String>>()),
     );
     params.insert("connection".to_owned(), connection);
+    params.insert("context".to_owned(), launch_context.unwrap_or(Value::Null));
+    params.insert(
+        "surface".to_owned(),
+        json!(if surface_panel.is_some() { "panel" } else { "tab" }),
+    );
+    params.insert("panel".to_owned(), json!(surface_panel));
+    params.insert("anchor".to_owned(), json!(surface_anchor));
     params
 }
 
@@ -488,6 +673,11 @@ impl EventPump {
         since: u64,
         cancel: CancellationToken,
     ) -> Result<Value, crate::host_error::NavopError> {
+        // 宿主事件：`handle: "host"` 表示订阅宿主进程自己发的事件，不需要
+        // provider 资源句柄。帧形状与 provider 事件一致，页面侧代码不变。
+        if resource == super::host_events::HOST_HANDLE {
+            return Ok(self.clone().subscribe_host(kind));
+        }
         let opened = self
             .session
             .open_event(&resource, kind, None, cancel)
@@ -619,6 +809,67 @@ impl EventPump {
         Ok(json!({ "handle": handle, "cursor": since }))
     }
 
+    /// 订阅一条宿主事件 topic（`handle: "host"`）。
+    ///
+    /// 宿主事件是“此刻发生”：没有回放，`since` 不参与（游标从 0 起）。
+    fn subscribe_host(self: Arc<Self>, topic: String) -> Value {
+        let subscription = super::host_events::subscribe(&topic);
+        let handle = subscription.handle.clone();
+        let token = self.session.call_token();
+        self.subscriptions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(handle.clone(), token.clone());
+        let channel = self.channel.clone();
+        let session = Arc::clone(&self.session);
+        let pump = Arc::clone(&self);
+        let frame_handle = handle.clone();
+        let forget_handle = handle.clone();
+        session.tokio().spawn(async move {
+            let mut subscription = subscription;
+            let mut cursor = 0u64;
+            loop {
+                let received = tokio::select! {
+                    _ = token.cancelled() => break,
+                    received = subscription.receiver.recv() => received,
+                };
+                match received {
+                    Ok(data) => {
+                        cursor += 1;
+                        let frame = json!({
+                            "handle": frame_handle,
+                            "cursor": cursor,
+                            "events": [{ "seq": cursor, "data": data }],
+                        });
+                        if channel.send("navop.event", frame).is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(dropped)) => {
+                        // 与 provider 事件同一套溢出语义：报错并结束，
+                        // 页面可用 `cursor` 续订（宿主事件没有回放，续订等于重来）。
+                        let _ = channel.send(
+                            "navop.event",
+                            json!({
+                                "handle": frame_handle,
+                                "cursor": cursor,
+                                "error": {
+                                    "code": "EVENT_OVERFLOW",
+                                    "message": format!("宿主事件缓冲溢出，丢弃了 {dropped} 条"),
+                                    "retryable": true,
+                                },
+                            }),
+                        );
+                        break;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            pump.forget(&forget_handle);
+        });
+        json!({ "handle": handle, "cursor": 0 })
+    }
+
     /// 取消一条订阅：泵任务看到取消位后自行退出。
     pub(crate) fn unsubscribe(&self, handle: &str) {
         if let Some(token) = self
@@ -734,42 +985,11 @@ impl Render for NshTab {
                             .h_full()
                             .child(view.clone()),
                     );
-                let mut collapsed_panel = None;
+                // AI：收起时是右下角浮钮（绝对定位，不占布局），点开在右侧停靠。
                 if let Some(panel) = self.plugin_ai.clone() {
-                    if panel.read(cx).is_open() {
-                        row = row.child(panel);
-                    } else {
-                        collapsed_panel = Some(panel);
-                    }
+                    row = row.child(panel);
                 }
-                root = root.relative().child(row);
-                if let Some(panel) = collapsed_panel {
-                    let fab_panel = panel.clone();
-                    root = root.child(
-                        div()
-                            .id("plugin-ai-fab-host")
-                            .absolute()
-                            .bottom_4()
-                            .right_4()
-                            .child(
-                                div()
-                                    .id("plugin-ai-fab")
-                                    .on_click(move |_event, _window, cx: &mut App| {
-                                        fab_panel
-                                            .update(cx, |panel, cx| panel.open_panel(cx));
-                                    })
-                                    .flex()
-                                    .items_center()
-                                    .px_3()
-                                    .py_2()
-                                    .rounded_full()
-                                    .bg(cx.theme().primary)
-                                    .text_color(cx.theme().primary_foreground)
-                                    .text_sm()
-                                    .child("AI"),
-                            ),
-                    );
-                }
+                root = root.child(row);
             }
             (None, Some(error)) => {
                 root = root
@@ -783,6 +1003,20 @@ impl Render for NshTab {
     }
 }
 
+/// 扩展清单里的图标文件 → `Icon`。
+///
+/// 图标文件走 `local-icon/` 资产命名空间（应用 `AssetSource` 直接读盘，
+/// SVG 以图像方式解码可保留原色）；文件缺失或没声明时用通用扩展图标。
+fn extension_icon(icon_path: Option<&std::path::Path>) -> gpui_component::Icon {
+    use gpui_component::Icon;
+    match icon_path {
+        Some(path) if path.is_file() => Icon::default()
+            .path(one_core::storage::connection_icon::local_icon_asset_path(path))
+            .color(),
+        _ => Icon::new(one_assets::IconName::ExtensionsLine),
+    }
+}
+
 impl one_core::tab_container::TabContent for NshTab {
     fn content_key(&self) -> &'static str {
         "NshHost"
@@ -790,6 +1024,13 @@ impl one_core::tab_container::TabContent for NshTab {
 
     fn title(&self, _cx: &App) -> SharedString {
         self.title.clone()
+    }
+
+    /// 标签页图标取自 `contributes.shellApp.icon`（扩展自己的品牌图标）。
+    /// 声明了但文件缺失时退回通用「扩展」图标：宁可显示占位，也不要
+    /// 标签栏里出现一个看不见的空槽。
+    fn icon(&self, _cx: &App) -> Option<gpui_component::Icon> {
+        Some(extension_icon(self.contribution.icon_path.as_deref()))
     }
 
     fn can_rename(&self, _cx: &App) -> bool {
@@ -961,5 +1202,23 @@ impl NshTab {
     #[cfg_attr(not(test), allow(dead_code, reason = "台子断言用；生产路径 M6 接线"))]
     pub(crate) fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extension_icon;
+
+    /// 标签页图标：声明的文件存在就用它，缺失/没声明时退回通用扩展图标，
+    /// 不 panic、也不返回 None（宁可有占位图标，也别在标签栏留空槽）。
+    #[test]
+    fn extension_icon_falls_back_to_the_generic_mark() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("icon.svg");
+        std::fs::write(&file, "<svg/>").unwrap();
+
+        let _ = extension_icon(Some(&file));
+        let _ = extension_icon(Some(std::path::Path::new("/definitely/not/here.svg")));
+        let _ = extension_icon(None);
     }
 }

@@ -261,7 +261,9 @@ fn terminal_render_owns_internal_tool_dock_regions() {
     assert!(render_source.contains("terminal-tool-dock-bottom"));
     assert!(render_source.contains("terminal-tool-dock-toolbar"));
     assert!(render_source.contains(".child(self.sidebar_toolbar.clone())"));
-    assert!(render_source.contains("right_tool_region_width(&layout, sidebar_size)"));
+    // 右栏宽度必须按“合并后的边”算：只被扩展面板占用时也要留出面板宽度。
+    assert!(render_source.contains("let has_right = layout.has_right() || extension_layout.has_right();"));
+    assert!(render_source.contains("sidebar_size + TOOLBAR_WIDTH"));
 }
 
 #[test]
@@ -969,4 +971,28 @@ fn embedded_sidebar_resize_uses_dock_bounds_not_window_bounds() {
         !resize_event_handler.contains("window.bounds()"),
         "resize event handler must not derive view bounds from the window"
     );
+}
+
+#[test]
+fn workspace_mode_renders_extension_panels_in_free_edges() {
+    let layout = include_str!("../../workspace/layout.rs");
+
+    // 工作区分屏里扩展面板要跟内嵌模式同一套「内建优先、扩展补空边」规则，
+    // 否则把终端弹成独立窗格后扩展面板会静默消失。
+    assert!(layout.contains("extension_layout.left.clone()"));
+    assert!(layout.contains("extension_layout.right.clone()"));
+    assert!(layout.contains("extension_layout.bottom.clone()"));
+    assert!(layout.contains("self.render_extension_tool_panel("));
+    assert!(layout.contains("layout.right.is_some() || extension_layout.right.is_some()"));
+}
+
+#[test]
+fn extension_panel_frame_is_shared_by_both_render_modes() {
+    let frame = include_str!("../../sidebar/tool_dock.rs");
+    assert!(frame.contains("pub(crate) fn render_extension_tool_panel_frame"));
+    assert!(frame.contains("sidebar.move_extension_panel(&id, target, cx)"));
+    assert!(frame.contains("sidebar.close_extension_panel(&remove_id, cx)"));
+
+    assert!(include_str!("../tool_dock.rs").contains("render_extension_tool_panel_frame"));
+    assert!(include_str!("../../workspace/render.rs").contains("render_extension_tool_panel_frame"));
 }

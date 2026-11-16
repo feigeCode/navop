@@ -82,10 +82,58 @@ pub(crate) fn appearance(mode: ThemeMode) -> Appearance {
     }
 }
 
+/// 终端侧栏的扩展面板要跟终端自己的配色走：用终端色板覆盖身份色，
+/// 字号/圆角仍取应用主题（终端侧栏沿用同一套排版尺度）。
+#[cfg(feature = "nsh-terminal")]
+pub(crate) fn nsh_theme_from_terminal(
+    base: &Theme,
+    colors: &terminal_view::TerminalColors,
+) -> nsh_platform_gpui::Theme {
+    let mut nsh = nsh_theme(base);
+    for (name, c) in [
+        ("background", colors.background),
+        ("foreground", colors.foreground),
+        ("card", colors.muted),
+        ("card-foreground", colors.foreground),
+        ("popover", colors.muted),
+        ("popover-foreground", colors.foreground),
+        ("primary", colors.accent),
+        ("primary-foreground", colors.accent_foreground),
+        ("secondary", colors.muted),
+        ("secondary-foreground", colors.foreground),
+        ("muted", colors.muted),
+        ("muted-foreground", colors.muted_foreground),
+        ("accent", colors.accent),
+        ("accent-foreground", colors.accent_foreground),
+        ("border", colors.border),
+        ("input", colors.border),
+        ("ring", colors.accent),
+        ("sidebar", colors.muted),
+        ("sidebar-foreground", colors.foreground),
+        ("sidebar-accent", colors.accent),
+        ("sidebar-accent-foreground", colors.accent_foreground),
+        ("sidebar-border", colors.border),
+        ("sidebar-ring", colors.accent),
+    ] {
+        nsh.set_color(name, AdaptiveColor::from(color(c)));
+    }
+    nsh
+}
+
 /// 把宿主当前主题推给一个 `AppView`（首帧前、主题或明暗变化后）。
-pub(crate) fn push(view: &Entity<AppView>, cx: &mut App) {
+///
+/// `override_theme` 可以带一份覆盖主题（终端侧栏面板用它跟终端配色）。
+pub(crate) fn push_with(
+    override_theme: Option<&nsh_platform_gpui::Theme>,
+    view: &Entity<AppView>,
+    cx: &mut App,
+) {
     let theme = cx.theme();
-    let (nsh, look) = (nsh_theme(theme), appearance(theme.mode));
+    let nsh = match override_theme {
+        Some(theme) => theme.clone(),
+        None => nsh_theme(theme),
+    };
+    let look = appearance(theme.mode);
     view.update(cx, |view, cx| {
         view.set_theme(Some(nsh), cx);
         view.set_appearance(look, cx);

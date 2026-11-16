@@ -38,7 +38,38 @@ UI 统一由 nsh 承载：宿主侧是 `crates/universal-plugins/src/nsh_host/`�
 - 不解析 `contributes.declarativePanels`。
 - 不提供 `ui/action`、`ui/dialog`、`ui/window`。
 - 不提供 WASM `open-view` 或 `handle-view-action`。
-- DB tree extension action 仍可执行无 UI WASM action。
+- 扩展页面有两种 surface：
+  - **tab**（默认）：工具箱 / DB 菜单打开的 app 页；
+  - **panel**：`contributes.panels` 声明的宿主侧栏面板，锚点
+    `terminal-sidebar`（终端侧栏）或 `db-sidebar`（数据库侧栏）。同一
+    bundle 的独立 AppView 实例，`host.params.surface == "panel"` +
+    `panel` / `anchor` 指明挂载点。声明面板的扩展必须同时声明
+    `contributes.shellApp`（入口复用 `shellApp.entry`）。
+- 图标：`shellApp.icon` → 标签页 / 工具箱卡片；`panels[].icon` → 侧栏按钮
+  （缺省回落 `shellApp.icon`，再没有则用通用扩展图标）；`commands[].icon` →
+  DB 树右键菜单项（缺省纯文字）。路径相对扩展根目录，经 `local-icon/` 资产
+  命名空间读盘，SVG 保留原色。
+- DB tree 扩展菜单支持两种 handler：
+  - `kind: "wasm"`：无 UI headless 动作（原路径，不变）；
+  - `kind: "nsh"`：打开本扩展的 shell app tab，触发场景（节点/连接/命令）
+    通过 `host.params.context` 交给页面；要求扩展声明 `contributes.shellApp`。
+- 页面可用的宿主能力面走 nsh 的 nativeModule（`nativeModule("navop")`），
+  `contributes.shellApp.modules` 声明后逐面授权：
+  - `app`：`App.open({...})` 打开 tab（可带 route/context）；
+  - `ui`：`Ui.notify({...})` 宿主 toast 通知；
+  - `terminal`：`Terminal.list/read/write/wait/exec/sshExec` —— 列终端会话、
+    读屏幕文本、向会话写输入、等输出变化（`wait` 是长轮询的 `tail -f`），
+    `exec` 往活动终端里执行命令并等输出、`sshExec` 在 SSH 会话上独立执行
+    （stdout/stderr 分开、可后台）；复用 Public MCP 终端注册表，写入与执行
+    都是高权限动作；
+  - `db`：连接与查询 `Db.listConnections/openSession/execute/closeSession/
+    refreshTree`，元数据 `Db.listDatabases/listSchemas/listTables/
+    describeTable/listFunctions`（库 → schema → 表/视图 → 列/索引/外键/函数，
+    `describeTable` 一次取全一张表）—— 权限沿用清单 `db:*` 声明，元数据读
+    要 `db:schema:<conn|*>`；与 WASM 侧同一套 `ExtensionDbGateway` 校验；
+    写/结构变更执行成功会向宿主事件 `db.treeChanged` 推一条
+    （`navop.event.subscribe` 的 `handle` 写 `"host"` 订阅）。
+  provider 的 `resource`/`job`/`event`/`blob` 仍走 `host.call` 字符串通道。
 - `extension_view` 继续作为 Navop 的扩展安装/管理页面，与插件 UI 无关。
 
 ## 页面接入点

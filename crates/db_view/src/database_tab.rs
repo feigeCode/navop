@@ -177,9 +177,15 @@ impl DatabaseTabView {
         cx: &mut Context<Self>,
     ) -> Self {
         let db_tree_view = cx.new(|cx| DbTreeView::new(&connections, window, cx));
+        crate::db_tree_registry::register_db_tree_view(db_tree_view.clone(), cx);
 
         let tab_container =
             cx.new(|cx| TabContainer::new(window, cx).with_background_task_panel(false));
+        // 右键菜单里 `kind: "nsh"` 的扩展页要开在这个页签容器里（与查询页签并排），
+        // 而不是主窗口的页签栏。
+        db_tree_view.update(cx, |view, _| {
+            view.set_extension_tab_container(tab_container.downgrade())
+        });
 
         let objects_panel = cx.new(|cx| DatabaseObjectsPanel::new(workspace.clone(), window, cx));
 
@@ -224,6 +230,13 @@ impl DatabaseTabView {
                 cx,
             )
         });
+        // 面板里 `App.open` 要落在数据库页签栏里，不能跳到主窗口。
+        sidebar.update(cx, |sidebar, _| {
+            sidebar.set_extension_tab_container(tab_container.downgrade())
+        });
+
+        // 扩展面板（anchor: "db-sidebar"）：构造时对齐一次宿主提供的规格。
+        sidebar.update(cx, |sidebar, cx| sidebar.sync_extension_panels(cx));
 
         // 注册 SQL 代码块操作
         Self::register_sql_code_block_actions(

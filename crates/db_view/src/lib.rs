@@ -19,10 +19,12 @@ pub mod database_view_plugin;
 pub mod db_object_selector;
 mod db_tree_event;
 mod db_tree_search;
+pub mod db_tree_registry;
 pub mod db_tree_view;
 mod driver_i18n;
 pub mod er_diagram;
 pub mod extension_menu;
+pub mod extension_panels;
 #[cfg(test)]
 mod extension_menu_contract_tests;
 mod import_export;

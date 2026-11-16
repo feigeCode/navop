@@ -10,7 +10,7 @@ use one_core::tab_container::TabContent as _;
 
 use super::{TerminalPaneId, TerminalSplitNode, TerminalWorkspace};
 use crate::sidebar::SidebarPanel;
-use crate::sidebar::tool_dock::render_internal_tool_panel_frame;
+use crate::sidebar::tool_dock::{render_extension_tool_panel_frame, render_internal_tool_panel_frame};
 use crate::view::TerminalWorkspaceSidebarSnapshot;
 
 const TERMINAL_PANE_MIN_WIDTH: Pixels = px(240.0);
@@ -121,6 +121,34 @@ impl TerminalWorkspace {
                     content,
                     snapshot.colors.clone(),
                     one_ui::theme_geometry().layout.panel_header,
+                    cx,
+                ),
+            ))
+            .into_any_element()
+    }
+
+    /// 工作区模式下的扩展面板：复用与内嵌模式同一个外框（标题/移动菜单/关闭）。
+    pub(super) fn render_extension_tool_panel(
+        &self,
+        snapshot: &TerminalWorkspaceSidebarSnapshot,
+        id: SharedString,
+        placement: SidebarPlacement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(view) = snapshot.sidebar.read(cx).extension_panel_view(&id) else {
+            return div().into_any_element();
+        };
+        v_flex()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .child(div().flex_1().min_h_0().overflow_hidden().child(
+                render_extension_tool_panel_frame(
+                    snapshot.sidebar.clone(),
+                    id,
+                    placement,
+                    view,
+                    snapshot.colors.clone(),
                     cx,
                 ),
             ))

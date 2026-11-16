@@ -65,7 +65,7 @@ use crate::settings::{
     current_settings, update_settings,
 };
 use crate::sidebar::tool_dock::{
-    TerminalToolDockLayout, render_internal_tool_panel_frame, right_tool_region_width,
+    TerminalToolDockLayout, render_extension_tool_panel_frame, render_internal_tool_panel_frame,
 };
 use crate::sidebar::{
     LocalWorkspaceSidebar, SidebarPanel, TerminalSidebar, TerminalSidebarEvent,

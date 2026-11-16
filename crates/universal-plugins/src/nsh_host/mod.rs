@@ -10,15 +10,24 @@
 //! 迁移方案见 `docs/extension-resource-plugins/nsh-migration-plan.md`。
 
 mod abi;
+#[cfg(feature = "nsh-db")]
+mod abi_db;
+#[cfg(feature = "nsh-terminal")]
+mod abi_terminal;
+mod abi_ui;
 mod bundle;
 mod connection;
 mod decision;
 mod dev;
 mod dispatch;
 mod grant;
+mod host_events;
+mod native_ai;
+mod native_api;
 mod monitor;
 mod native;
 mod opener;
+mod panel;
 mod plugin_ai_panel;
 mod session;
 mod tab;
@@ -26,7 +35,21 @@ mod theme;
 
 pub use dev::{DevOps, set_dev_ops};
 pub use native::{NativeFactory, NativeViewContext, register_native_component};
+pub use panel::NshPanel;
 pub use tab::NshTab;
+#[cfg(feature = "nsh-db")]
+pub use abi_db::{set_db_state, set_tree_refresh_hook};
+pub use native_api::install as install_native_api;
+/// 由终端色板派生一份 nsh 主题（终端侧栏的扩展面板用）。
+#[cfg(feature = "nsh-terminal")]
+pub fn nsh_terminal_theme(
+    colors: &terminal_view::TerminalColors,
+    cx: &gpui::App,
+) -> nsh_platform_gpui::Theme {
+    use gpui_component::ActiveTheme as _;
+    theme::nsh_theme_from_terminal(cx.theme(), colors)
+}
+
 
 /// 打开一条扩展连接的页面（provider 资源由页面自己开）。
 pub struct ConnectionPageOpen {
@@ -37,7 +60,7 @@ pub struct ConnectionPageOpen {
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use gpui::{App, Global, WeakEntity};
+use gpui::{App, Entity, Global, WeakEntity};
 
 use crate::universal_plugins::UniversalPluginService;
 
@@ -51,6 +74,8 @@ type Retiring = Rc<RefCell<std::collections::HashSet<String>>>;
 #[derive(Clone)]
 pub(crate) enum Tracked {
     Page(WeakEntity<NshTab>),
+    /// 面板 surface（终端侧栏等宿主锚点里的 `NshPanel`）。
+    Panel(WeakEntity<panel::NshPanel>),
 }
 
 pub(crate) type Trust = Rc<RefCell<nsh_platform_gpui::package::TrustStore>>;
@@ -150,6 +175,16 @@ impl NshHost {
             .push(Tracked::Page(tab));
     }
 
+    /// 面板实体只进 monitor 记账（provider 重启要通知它重装），不进 tab
+    /// 记账（它不在 tab 容器里，关闭由宿主锚点负责）。
+    pub(crate) fn track_panel(&self, extension_id: &str, panel: WeakEntity<panel::NshPanel>) {
+        self.tracked
+            .borrow_mut()
+            .entry(extension_id.to_string())
+            .or_default()
+            .push(Tracked::Panel(panel));
+    }
+
     /// 这个扩展当前开着的 tab（顺手清掉已关闭的条目）。
     pub(crate) fn open_tabs(&self, extension_id: &str) -> Vec<gpui::Entity<NshTab>> {
         let mut tabs = self.tabs.borrow_mut();
@@ -170,6 +205,8 @@ impl NshHost {
 /// 调用点保证与 gpui-shell 宿主互斥：两个宿主都往 `GlobalShellAppOpener`
 /// 里放实现，后注册的覆盖先注册的。
 pub fn init(service: UniversalPluginService, cx: &mut App) {
+    // `navop.ai` 组件：页面用 `nativeComponent("navop.ai")` 自己摆位置。
+    native_ai::install(service.clone(), cx);
     let host = NshHost::new(
         service,
         dispatch::MainThread::new(cx),
@@ -183,6 +220,87 @@ pub fn init(service: UniversalPluginService, cx: &mut App) {
 }
 
 impl NshHost {
+    /// 打开一个扩展面板：装载 `contributes.panels[]` 的一条为独立
+    /// `AppView` 实例，返回给宿主锚点（终端侧栏）嵌入。
+    ///
+    /// 面板不进 tab 容器；同一 (extension, panel) 每次调用都新建实例，
+    /// 去重由宿主锚点自己记（侧栏每个面板只开一份）。找不到贡献项时
+    /// 返回 None（扩展可能已被停用）。
+    pub fn open_panel(
+        &self,
+        extension_id: &str,
+        panel_id: &str,
+        cx: &mut App,
+    ) -> Option<Entity<panel::NshPanel>> {
+        self.open_panel_with_context(extension_id, panel_id, None, None, cx)
+    }
+
+    /// 打开扩展面板并带上宿主上下文（如数据库侧栏的当前连接）。
+    ///
+    /// 上下文与 DB 菜单那条路径同形：面板页面从 `host.params.context` 读到
+    /// 它，用来定位“我挂在哪个连接的侧栏上”。同一面板重复打开时不会重放。
+    pub fn open_panel_with_context(
+        &self,
+        extension_id: &str,
+        panel_id: &str,
+        launch_context: Option<serde_json::Value>,
+        tabs: Option<gpui::WeakEntity<one_core::tab_container::TabContainer>>,
+        cx: &mut App,
+    ) -> Option<Entity<panel::NshPanel>> {
+        if self.retiring.borrow().contains(extension_id) {
+            return None;
+        }
+        let contribution = self.contribution(extension_id)?;
+        let registered = extension_runtime::global_catalog(cx)
+            .and_then(|catalog| catalog.panel(extension_id, panel_id).cloned());
+        let registered = registered?;
+        let entity = panel::NshPanel::open(
+            contribution,
+            registered,
+            launch_context,
+            tabs,
+            None,
+            self.service.clone(),
+            self.trust.clone(),
+            self.dispatcher(),
+            cx,
+        );
+        self.track_panel(extension_id, entity.downgrade());
+        Some(entity)
+    }
+
+    /// 打开扩展面板，并指定面板自带主题（终端侧栏面板跟终端配色）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_panel_with_theme(
+        &self,
+        extension_id: &str,
+        panel_id: &str,
+        launch_context: Option<serde_json::Value>,
+        tabs: Option<gpui::WeakEntity<one_core::tab_container::TabContainer>>,
+        surface_theme: Option<nsh_platform_gpui::Theme>,
+        cx: &mut App,
+    ) -> Option<Entity<panel::NshPanel>> {
+        if self.retiring.borrow().contains(extension_id) {
+            return None;
+        }
+        let contribution = self.contribution(extension_id)?;
+        let registered = extension_runtime::global_catalog(cx)
+            .and_then(|catalog| catalog.panel(extension_id, panel_id).cloned());
+        let registered = registered?;
+        let entity = panel::NshPanel::open(
+            contribution,
+            registered,
+            launch_context,
+            tabs,
+            surface_theme,
+            self.service.clone(),
+            self.trust.clone(),
+            self.dispatcher(),
+            cx,
+        );
+        Some(entity)
+    }
+
     /// 打开连接型扩展页面：先按连接配置打开 provider 资源，再挂页面。
     ///
     /// tab id 用 `extension-connection:{id}`，同一连接重复打开复用同一个 tab
@@ -281,19 +399,20 @@ pub fn refresh_views(cx: &mut App) {
 /// 一个扩展只有一个 app，所以 tab id 由 `nsh:app:{extension_id}` 加 route
 /// 组成；没有初始 route 的（工具箱卡片）就是裸 app id。连接型 tab 走
 /// [`NshHost::open_connection`]，id 是 `extension-connection:{connection_id}`。
+///
+/// `launch_context`（可选）是宿主侧触发上下文（如 DB 树右键菜单），
+/// 注入 `host.params.context`；仅在 tab 新建时生效，复用已有 tab 时丢弃
+/// （同一 (extension, route) 视为同一页面场景）。
 fn open_view(
     host: NshHost,
     contribution: extension_runtime::RegisteredShellAppContribution,
     route: Option<&str>,
+    launch_context: Option<serde_json::Value>,
     window: &mut gpui::Window,
     cx: &mut App,
 ) {
-    use one_core::tab_container::{GlobalTabContainer, TabItem};
+    use one_core::tab_container::GlobalTabContainer;
 
-    let tab_id = match route {
-        Some(route) => format!("nsh:app:{}#{route}", contribution.extension_id),
-        None => format!("nsh:app:{}", contribution.extension_id),
-    };
     let Some(tabs) = cx.try_global::<GlobalTabContainer>() else {
         tracing::warn!(
             extension_id = %contribution.extension_id,
@@ -302,21 +421,56 @@ fn open_view(
         return;
     };
     let tabs = tabs.primary_pane();
+    open_view_in(host, contribution, route, launch_context, tabs, window, cx);
+}
+
+/// 打开扩展页面到指定 tab 容器（如数据库标签页自己的页签栏）。
+fn open_view_in(
+    host: NshHost,
+    contribution: extension_runtime::RegisteredShellAppContribution,
+    route: Option<&str>,
+    launch_context: Option<serde_json::Value>,
+    tabs: gpui::Entity<one_core::tab_container::TabContainer>,
+    window: &mut gpui::Window,
+    cx: &mut App,
+) {
+    use one_core::tab_container::TabItem;
+
+    let tab_id = match route {
+        Some(route) => format!("nsh:app:{}#{route}", contribution.extension_id),
+        None => format!("nsh:app:{}", contribution.extension_id),
+    };
     let extension_id = contribution.extension_id.clone();
     let route = route.map(str::to_string);
+    // 页面继承自己所在的页签容器：从这里 `App.open` 打开的页面也留在同一个
+    // 数据库标签页里，而不是跳到主窗口的页签栏。
+    let launch_tabs = tabs.downgrade();
     tabs.update(cx, |tabs, cx| {
         let host_for_tab = host.clone();
         tabs.activate_or_add_tab_lazy(
             tab_id.clone(),
             move |_window, cx| {
-                let tab = NshTab::open(
-                    contribution,
-                    route,
-                    host_for_tab.service.clone(),
-                    host_for_tab.trust().clone(),
-                    host_for_tab.dispatcher(),
-                    cx,
-                );
+                let tab = match launch_context {
+                    Some(context) => NshTab::open_with_context_in(
+                        contribution,
+                        route,
+                        context,
+                        launch_tabs,
+                        host_for_tab.service.clone(),
+                        host_for_tab.trust().clone(),
+                        host_for_tab.dispatcher(),
+                        cx,
+                    ),
+                    None => NshTab::open_in(
+                        contribution,
+                        route,
+                        launch_tabs,
+                        host_for_tab.service.clone(),
+                        host_for_tab.trust().clone(),
+                        host_for_tab.dispatcher(),
+                        cx,
+                    ),
+                };
                 host_for_tab.track(&extension_id, tab.downgrade());
                 TabItem::new(tab_id, format!("nsh:{extension_id}"), tab)
             },
@@ -530,6 +684,8 @@ mod tests {
         // ②③④：另一个页面只用手写 JS，验结构化错误、dev 门禁与 `navop.event` 推送。
         let probe_dir = tempfile::tempdir().expect("建临时扩展目录");
         std::fs::write(probe_dir.path().join("view.js"), PROBE_PAGE).expect("写探针页");
+        // 能力面是 UI set（进程级）：测试要在建引擎之前装一次。
+        crate::nsh_host::native_api::install();
         let probes = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
         let trust: Trust = Rc::new(RefCell::new(nsh_platform_gpui::package::TrustStore::new()));
         let tab2 = context.update(|_window, cx| {
@@ -563,14 +719,25 @@ mod tests {
             )
         };
 
-        for _ in 0..100 {
-            draw_probe(&mut context);
-            context.run_until_parked();
-            if probes.lock().unwrap().len() >= 3 {
-                break;
+        // 等到页面把「启动期」的几项探针都报完（探针数量会随能力面增减，
+        // 所以按 kind 等，不按条数等）。
+        let wait_for = |context: &mut VisualTestContext, kinds: &[&str]| {
+            for _ in 0..100 {
+                draw_probe(context);
+                context.run_until_parked();
+                let reported = probes.lock().unwrap();
+                if kinds.iter().all(|kind| {
+                    reported
+                        .iter()
+                        .any(|payload| payload["kind"].as_str() == Some(kind))
+                }) {
+                    return;
+                }
+                drop(reported);
+                std::thread::sleep(std::time::Duration::from_millis(20));
             }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        };
+        wait_for(&mut context, &["params", "invoke", "dev", "native", "native-notify"]);
 
         // 宿主的推送：`send("navop.event", …)` 之后页面 `host.on` 要收到。
         context.update(|_window, cx| {
@@ -586,15 +753,9 @@ mod tests {
                 )
                 .expect("通道应能推送 navop.event");
         });
-        for _ in 0..100 {
-            draw_probe(&mut context);
-            context.run_until_parked();
-            if probes.lock().unwrap().len() >= 4 {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        wait_for(&mut context, &["event"]);
 
+        let probes_arc = probes.clone();
         let probes = probes.lock().unwrap();
         let probe = |kind: &str| {
             probes
@@ -618,10 +779,63 @@ mod tests {
         let event = probe("event");
         assert_eq!(event["frame"]["handle"], "evt-1", "页面收到的推送: {event}");
         assert_eq!(event["frame"]["events"][0]["data"]["kind"], "ping");
+        // `handle: "host"` 的订阅：不碰 provider，句柄形如 `host:{topic}:{n}`。
+        let subscribe = probe("host-subscribe");
+        let host_handle = subscribe["handle"]
+            .as_str()
+            .unwrap_or_else(|| panic!("宿主事件订阅失败: {subscribe}"))
+            .to_string();
+        assert!(
+            host_handle.starts_with("host:probe.ping:"),
+            "宿主事件句柄形状: {subscribe}"
+        );
+        assert_eq!(subscribe["cursor"], 0, "宿主事件没有回放: {subscribe}");
+        // nativeModule：同一套 UI set 里的模块，页面按 nsh 标准解析出对象。
+        let native = probe("native");
+        let modules = native["modules"].as_str().unwrap_or_default();
+        assert!(
+            modules.split(',').any(|module| module == "App"),
+            "nativeModule 缺 App: {native}"
+        );
+        assert!(
+            modules.split(',').any(|module| module == "Ui"),
+            "nativeModule 缺 Ui: {native}"
+        );
+        let notify = probe("native-notify");
+        assert_eq!(notify["ok"], serde_json::json!(true), "nativeModule 调用: {notify}");
+        drop(probe);
+        drop(probes);
+
+        // 宿主发布：帧形状与 provider 事件一致，页面按句柄过滤。
+        super::host_events::publish(
+            "probe.ping",
+            serde_json::json!({ "kind": "host-ping", "n": 7 }),
+        );
+        let mut received = None;
+        for _ in 0..100 {
+            draw_probe(&mut context);
+            context.run_until_parked();
+            let found = probes_arc
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|payload| {
+                    payload["kind"] == "event" && payload["frame"]["handle"] == host_handle.as_str()
+                })
+                .cloned();
+            if found.is_some() {
+                received = found;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let received = received.unwrap_or_else(|| panic!("宿主事件没有被推送: {probes_arc:?}"));
+        assert_eq!(received["frame"]["events"][0]["data"]["n"], 7, "{received}");
+        assert_eq!(received["frame"]["events"][0]["data"]["kind"], "host-ping");
     }
 
     /// 手写的探针页：不依赖构建工具，直接跑在 nsh 引擎里。
-    const PROBE_PAGE: &str = r#"import { host, mount, View } from "nsh";
+    const PROBE_PAGE: &str = r#"import { host, mount, nativeModule, View } from "nsh";
 
 let started = false;
 
@@ -646,7 +860,29 @@ function probe() {
     .call("navop.dev.list", {}, { timeout: 5000 })
     .then(() => report({ kind: "dev", code: null }))
     .catch((error) => report({ kind: "dev", code: error?.code ?? String(error), details: error?.details }));
+  host
+    .call("navop.event.subscribe", { handle: "host", kind: "probe.ping" }, { timeout: 5000 })
+    .then((answer) => report({ kind: "host-subscribe", handle: answer?.handle ?? null, cursor: answer?.cursor }))
+    .catch((error) =>
+      report({
+        kind: "host-subscribe",
+        handle: null,
+        code: error?.code ?? String(error),
+        details: error?.details,
+      }),
+    );
   host.on("navop.event", (frame) => report({ kind: "event", frame: frame }));
+  // nativeModule：nsh 标准的强类型宿主能力面（与 host.call 并行）。
+  try {
+    const api = nativeModule("navop");
+    report({ kind: "native", modules: Object.keys(api).sort().join(",") });
+    api.Ui
+      .notify({ level: "info", title: "探针通知" })
+      .then((answer) => report({ kind: "native-notify", ok: answer?.ok === true }))
+      .catch((error) => report({ kind: "native-notify", ok: false, message: error?.message ?? String(error) }));
+  } catch (error) {
+    report({ kind: "native", code: error?.name ?? String(error), message: error?.message ?? String(error) });
+  }
 }
 
 function App() {
@@ -673,9 +909,16 @@ mount(App);
             category: None,
             keywords: Vec::new(),
             backends: BTreeMap::new(),
-            modules: [ShellHostModule::Resource, ShellHostModule::Dev]
-                .into_iter()
-                .collect(),
+            modules: [
+                ShellHostModule::Resource,
+                ShellHostModule::Event,
+                ShellHostModule::Dev,
+                // nativeModule 的鉴权走同一份清单：探针要调 App/Ui 就得声明。
+                ShellHostModule::App,
+                ShellHostModule::Ui,
+            ]
+            .into_iter()
+            .collect(),
             permissions: Vec::new(),
             shell_api_version: "2".into(),
             required_nsh_version: Some("0.3.0".into()),

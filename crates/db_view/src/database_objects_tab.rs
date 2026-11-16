@@ -1243,7 +1243,7 @@ impl DatabaseObjects {
                         .try_global::<GlobalDbTreeExtensionActionHandler>()
                         .cloned()
                     {
-                        handler.run(context.clone(), window, cx);
+                        handler.run(context.clone(), None, window, cx);
                     } else {
                         warn!(
                             "db tree extension action handler is not registered for {}",

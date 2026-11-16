@@ -10,18 +10,25 @@
 //! 简单数据（字符串、路径、JSON），不能带 `Rc`/`Entity` —— 那些只能在
 //! 主线程上取。
 
+use std::any::Any;
 use std::sync::Arc;
 
 use gpui::App;
 use serde_json::Value;
 
-/// 主线程任务：在主线程上执行，返回 JSON 或一句错误。
-type Job = Box<dyn FnOnce(&mut App) -> Result<Value, String> + Send>;
+/// 主线程任务的返回值：装箱成 `Any`，交给调用方 downcast。
+///
+/// 绝大多数调用只想要一段 JSON（[`MainThread::run`]），但有些任务要带回
+/// 非 JSON 的句柄（比如终端注册表），所以这里不把返回类型钉死在 `Value`。
+type AnyValue = Box<dyn Any + Send>;
+
+/// 主线程任务：在主线程上执行，返回装箱结果或一句错误。
+type Job = Box<dyn FnOnce(&mut App) -> Result<AnyValue, String> + Send>;
 
 struct Queue {
     sender: tokio::sync::mpsc::UnboundedSender<(
         Job,
-        tokio::sync::oneshot::Sender<Result<Value, String>>,
+        tokio::sync::oneshot::Sender<Result<AnyValue, String>>,
     )>,
 }
 
@@ -36,7 +43,7 @@ impl MainThread {
     pub(crate) fn new(cx: &mut App) -> Self {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<(
             Job,
-            tokio::sync::oneshot::Sender<Result<Value, String>>,
+            tokio::sync::oneshot::Sender<Result<AnyValue, String>>,
         )>();
         // drain 任务住在主线程上：它只在收到任务时醒来，空闲时是零开销。
         cx.spawn(async move |cx| {
@@ -54,16 +61,33 @@ impl MainThread {
         }
     }
 
-    /// 在主线程上跑一段任务，等结果。
+    /// 在主线程上跑一段任务，等结果（JSON 版本）。
     pub(crate) async fn run(
         &self,
         job: impl FnOnce(&mut App) -> Result<Value, String> + Send + 'static,
     ) -> Result<Value, String> {
+        self.run_with(job).await
+    }
+
+    /// 在主线程上跑一段任务，把任意 `Send` 返回值带回来。
+    ///
+    /// 用来取只在主线程可读的 GPUI 全局（终端注册表这类句柄）：任务本身
+    /// 只在主线程短暂执行，重活仍然留在 tokio 线程上。
+    pub(crate) async fn run_with<T: Send + 'static>(
+        &self,
+        job: impl FnOnce(&mut App) -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        let job: Job =
+            Box::new(move |cx| job(cx).map(|value| Box::new(value) as Box<dyn Any + Send>));
         let (done, wait) = tokio::sync::oneshot::channel();
         self.queue
             .sender
-            .send((Box::new(job), done))
+            .send((job, done))
             .map_err(|_| "主线程队列已关闭".to_string())?;
-        wait.await.map_err(|_| "主线程已关闭".to_string())?
+        let boxed = wait.await.map_err(|_| "主线程已关闭".to_string())??;
+        boxed
+            .downcast::<T>()
+            .map(|value| *value)
+            .map_err(|_| "主线程任务返回了意外的类型".to_string())
     }
 }

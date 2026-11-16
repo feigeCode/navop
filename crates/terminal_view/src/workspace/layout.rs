@@ -9,7 +9,7 @@ use one_core::sidebar_contribution::SidebarPlacement;
 
 use super::TerminalWorkspace;
 use super::resize::{WorkspaceResizeEventHandler, WorkspaceSidebarResize};
-use crate::sidebar::tool_dock::{TerminalToolDockLayout, right_tool_region_width};
+use crate::sidebar::tool_dock::TerminalToolDockLayout;
 use crate::view::TerminalWorkspaceSidebarSnapshot;
 
 impl TerminalWorkspace {
@@ -25,24 +25,55 @@ impl TerminalWorkspace {
         let root = self.split_tree.root().clone();
         let split_content = self.render_node(&root, "root", cx);
         let panel_size = self.sidebar_panel_size;
+        // 扩展面板与内建面板共用三边槽位：内建面板优先，扩展面板只补内建
+        // 面板未占用的边（与内嵌模式同一套规则）。工作区分屏里同样要显示，
+        // 否则「把终端弹成独立窗格」之后扩展面板会静默消失。
+        let extension_layout = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.extension_layout.clone())
+            .unwrap_or_default();
         let left = snapshot.as_ref().and_then(|snapshot| {
             layout
                 .left
                 .map(|panel| self.render_tool_panel(snapshot, panel, SidebarPlacement::Left, cx))
+                .or_else(|| {
+                    extension_layout.left.clone().map(|id| {
+                        self.render_extension_tool_panel(snapshot, id, SidebarPlacement::Left, cx)
+                    })
+                })
         });
         let right = snapshot.as_ref().and_then(|snapshot| {
             layout
                 .right
                 .map(|panel| self.render_tool_panel(snapshot, panel, SidebarPlacement::Right, cx))
+                .or_else(|| {
+                    extension_layout.right.clone().map(|id| {
+                        self.render_extension_tool_panel(snapshot, id, SidebarPlacement::Right, cx)
+                    })
+                })
         });
         let bottom = snapshot.as_ref().and_then(|snapshot| {
             layout
                 .bottom
                 .map(|panel| self.render_tool_panel(snapshot, panel, SidebarPlacement::Bottom, cx))
+                .or_else(|| {
+                    extension_layout.bottom.clone().map(|id| {
+                        self.render_extension_tool_panel(snapshot, id, SidebarPlacement::Bottom, cx)
+                    })
+                })
         });
+        let has_right = layout.right.is_some() || extension_layout.right.is_some();
         let right_width = snapshot
             .as_ref()
-            .map(|_| right_tool_region_width(&layout, panel_size))
+            .map(|_| {
+                // 与内嵌模式一致：宽度按“合并后的右栏”算，只被扩展面板占用的
+                // 边也要留出面板宽度（否则面板被压进 44px 工具条）。
+                if has_right {
+                    panel_size + TOOLBAR_WIDTH
+                } else {
+                    TOOLBAR_WIDTH
+                }
+            })
             .unwrap_or_default();
 
         let center = v_flex()

@@ -14,6 +14,7 @@
 //! navop.blob.{read,close}
 //! navop.event.{subscribe,unsubscribe}
 //! navop.runtime.info
+//! navop.app.open
 //! navop.dev.*（9 个，仅内置扩展 com.navop.devtools）
 //! navop.log（post）
 //! ```
@@ -32,6 +33,7 @@
 //!    `App`。所以要等 provider 的调用都先 `into_reply()`（`HostReply` 是
 //!    `Send`），再搬到 tokio 线程上跑，结论回主线程/引擎线程应答。
 
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use nsh_engine::{HostCall, HostChannel, HostReply};
@@ -49,11 +51,15 @@ pub(crate) const DEVTOOLS_EXTENSION_ID: &str = "com.navop.devtools";
 /// 生命周期与 `NshTab` 一致 —— tab 关掉，`host` 通道随 `AppView` 一起丢，
 /// handler 不会再被调到。
 pub(crate) struct HostAbi {
-    extension_id: String,
+    pub(crate) extension_id: String,
     /// 打开这个 tab 时的初始路由（日志用）。
     route: Option<String>,
     backends: std::collections::BTreeMap<String, String>,
     modules: Vec<String>,
+    /// 清单声明的权限（`db:*` 等）：navop.db 能力面按它收口。
+    /// 清单里的 `permissions`：数据库网关按它判读写（只有 nsh-db 构建读它）。
+    #[cfg_attr(not(feature = "nsh-db"), allow(dead_code))]
+    pub(crate) permissions: Vec<String>,
     /// 取消位：随页面关闭置位，在途的 provider 调用据此 reject。
     cancelled: Mutex<bool>,
 }
@@ -72,12 +78,13 @@ impl HostAbi {
                 .iter()
                 .map(|module| module.module_specifier().to_owned())
                 .collect(),
+            permissions: contribution.permissions.clone(),
             cancelled: Mutex::new(false),
         })
     }
 
     /// manifest 里声明的 host 模块（完整 specifier，如 `"navop.resource"`）。
-    fn has_module(&self, module: &str) -> bool {
+    pub(crate) fn has_module(&self, module: &str) -> bool {
         self.modules.iter().any(|declared| declared == module)
     }
 
@@ -93,7 +100,7 @@ impl HostAbi {
         *self.cancelled.lock().unwrap_or_else(|e| e.into_inner()) = true;
     }
 
-    fn cancelled(&self) -> bool {
+    pub(crate) fn cancelled(&self) -> bool {
         *self.cancelled.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
@@ -108,12 +115,99 @@ pub(crate) fn register(
     session: Arc<NshSession>,
     pump: &Arc<EventPump>,
     dispatcher: &super::dispatch::MainThread,
-    plugin_ai: Option<gpui::WeakEntity<super::plugin_ai_panel::PluginAiPanel>>,
 ) {
     register_post(channel, &abi);
     register_capability_plane(channel, &abi, &session, pump);
     register_dev(channel, &abi, &session, dispatcher);
-    register_ai_plane(channel, &abi, &session, dispatcher, plugin_ai);
+    register_ai_plane(channel, &abi, &session, dispatcher);
+}
+/// 主线程上打开 shell app：解析窗口 → `open_shell_app_with_context`。
+///
+/// 窗口解析复用 dev openApp 的兜底思路（活动窗口 → 主窗口），但这里在
+/// 主线程任务里直接拿得到 `cx.defer` + `AnyWindowHandle::update`，不需要
+/// navop_app 的私有 helper。窗口不存在时返回错误文本（settle_dev 会转成
+/// 参数错误回给页面）。
+pub(crate) fn open_app_on_main(
+    extension_id: &str,
+    route: Option<String>,
+    context: Value,
+    cx: &mut gpui::App,
+) -> Result<Value, String> {
+    let extension_id = extension_id.to_string();
+    let context = (!context.is_null()).then_some(context);
+    let opened = Rc::new(std::cell::Cell::new(false));
+    let opened_flag = Rc::clone(&opened);
+    // 打开 app 要窗口，等这一帧的借用结束再做（同 dev openApp）。
+    cx.defer(move |cx| {
+        let Some(window) = cx
+            .active_window()
+            .or_else(|| cx.window_stack().and_then(|stack| stack.first().copied()))
+        else {
+            tracing::warn!(
+                extension_id,
+                ?route,
+                "no window available for navop.app.open"
+            );
+            return;
+        };
+        let _ = window.update(cx, |_, window, cx| {
+            match &context {
+                Some(context) => extension_view::open_shell_app_with_context(
+                    &extension_id,
+                    route.as_deref(),
+                    context.clone(),
+                    window,
+                    cx,
+                ),
+                None => extension_view::open_shell_app(&extension_id, route.as_deref(), window, cx),
+            }
+            opened_flag.set(true);
+        });
+    });
+    // 打开动作被 `defer` 排到下一帧：这里只能确认“已入队”。窗口不在时
+    // `defer` 里会记一条 warn——调用方不该因为当帧还没窗口就报错。
+    let _ = opened.get();
+    Ok(json!({ "ok": true }))
+}
+
+/// 在指定页签容器里打开扩展页面（数据库标签页内的 `App.open` 用）。
+///
+/// 和 [`open_app_on_main`] 的区别只在落点：这里把页面开进 `container` 自己的
+/// 页签栏（与触发它的数据库标签页同栏），窗口从主线程活动窗口取。
+pub(crate) fn open_app_in_container(
+    container: gpui::Entity<one_core::tab_container::TabContainer>,
+    extension_id: &str,
+    route: Option<String>,
+    context: Value,
+    cx: &mut gpui::App,
+) -> Result<Value, String> {
+    let extension_id = extension_id.to_string();
+    let context = (!context.is_null()).then_some(context);
+    cx.defer(move |cx| {
+        let Some(window) = cx
+            .active_window()
+            .or_else(|| cx.window_stack().and_then(|stack| stack.first().copied()))
+        else {
+            tracing::warn!(
+                extension_id,
+                ?route,
+                "no window available for navop.app.open"
+            );
+            return;
+        };
+        let _ = window.update(cx, |_, window, cx| {
+            extension_view::open_shell_app_in_container(
+                &extension_id,
+                route.as_deref(),
+                context.clone().unwrap_or(Value::Null),
+                container,
+                window,
+                cx,
+            );
+        });
+    });
+    // 和 `open_app_on_main` 一样：打开被排到下一帧，这里只能确认“已入队”。
+    Ok(json!({ "ok": true }))
 }
 
 /// `host.post("navop.log", { level, message, fields })`。
@@ -289,30 +383,31 @@ impl DevOp {
 
 /// AI 平面（`navop.ai.*`，plugin-ai-tools.md §9.4）。
 ///
-/// - `navop.ai.context`：`host.post`，页面把上下文覆盖式报给宿主；
-///   侧栏没建（面板装载失败等）就静默丢弃，post 没有应答。
-/// - `navop.ai.open`：`host.call`，打开本 tab 的 AI 侧栏。
-/// - `navop.ai.ask`：`host.call`，打开侧栏并发一条消息（submit 默认 true，
-///   v1 不做「只预填不发送」，一律直接发送）。
+/// 宿主不再内置「AI 侧栏 + 图标栏」：页面自己挂 `nativeComponent("navop.ai")`
+/// 决定放在哪儿。因此这三个名字的语义变成：
 ///
-/// 权限不设新模块：shellApp 存在（页面能起来）即可用。侧栏实体在主线程，
-/// 所以所有变更都经 dispatcher 派回主线程。
+/// - `navop.ai.context`：`host.post`，把页面上下文转给**本页面里已挂载的**
+///   AI 组件（同扩展的实例都收一份；没挂就丢弃，post 没有应答）。
+/// - `navop.ai.open` / `navop.ai.ask`：保留名字，但宿主没有可展开的侧栏，
+/// 宿主不再内置 AI 侧栏：页面要自己挂 `nativeComponent("navop.ai")`。
+fn ai_unavailable() -> HostFailure {
+    invalid_argument(
+        "宿主不再内置 AI 侧栏；请在页面里用 nativeComponent(\"navop.ai\") 自己挂一个",
+    )
+}
+
 fn register_ai_plane(
     channel: &HostChannel,
     abi: &Arc<HostAbi>,
     session: &Arc<NshSession>,
     dispatcher: &super::dispatch::MainThread,
-    plugin_ai: Option<gpui::WeakEntity<super::plugin_ai_panel::PluginAiPanel>>,
 ) {
-    // navop.ai.context —— post-only，无应答，失败只记宿主日志。
     let abi_for_context = Arc::clone(abi);
-    let panel_for_context = plugin_ai.clone();
-    let dispatcher_for_context = dispatcher.clone();
     let session_for_context = Arc::clone(session);
+    let dispatcher_for_context = dispatcher.clone();
     channel.handle("navop.ai.context", move |call| {
         let context = call.data().clone();
         if !call.is_post() {
-            // post-only 名字上的 host.call 按参数错误回。
             if let Some(reply) = call.into_reply() {
                 reject(reply, invalid_argument("navop.ai.context 只接受 host.post"));
             }
@@ -321,115 +416,35 @@ fn register_ai_plane(
         if abi_for_context.cancelled() {
             return;
         }
-        if serialization_too_large(&context) {
-            tracing::debug!("navop.ai.context 超过 2KB，丢弃");
-            return;
-        }
-        let Some(panel) = panel_for_context.clone() else {
-            return;
-        };
+        let extension_id = abi_for_context.extension_id.clone();
         let dispatcher = dispatcher_for_context.clone();
         session_for_context.tokio().spawn(async move {
             let _ = dispatcher
                 .run(move |cx| {
-                    if let Some(panel) = panel.upgrade() {
-                        panel.update(cx, |panel, cx| panel.set_page_context(context, cx));
-                    }
+                    super::native_ai::publish_context(&extension_id, context, cx);
                     Ok(serde_json::json!(null))
                 })
                 .await;
         });
     });
 
-    // navop.ai.open —— 打开侧栏，回 {ok:true}。
-    let abi_for_open = Arc::clone(abi);
-    let panel_for_open = plugin_ai.clone();
-    let dispatcher_for_open = dispatcher.clone();
-    let session_for_open = Arc::clone(session);
-    channel.handle("navop.ai.open", move |call| {
-        let Some(reply) = call.into_reply() else {
-            return;
-        };
-        if abi_for_open.cancelled() {
-            reject(reply, cancelled());
-            return;
-        }
-        let Some(panel) = panel_for_open.clone() else {
+    for name in ["navop.ai.open", "navop.ai.ask"] {
+        let abi_for = Arc::clone(abi);
+        channel.handle(name, move |call| {
+            let Some(reply) = call.into_reply() else {
+                return;
+            };
+            if abi_for.cancelled() {
+                reject(reply, cancelled());
+                return;
+            }
             reject(reply, ai_unavailable());
-            return;
-        };
-        let dispatcher = dispatcher_for_open.clone();
-        session_for_open.tokio().spawn(async move {
-            let result = dispatcher
-                .run(move |cx| {
-                    let Some(panel) = panel.upgrade() else {
-                        return Err("AI 侧栏不可用".to_string());
-                    };
-                    panel.update(cx, |panel, cx| panel.open_panel(cx));
-                    Ok(serde_json::json!({ "ok": true }))
-                })
-                .await;
-            settle_dev(reply, result);
         });
-    });
-
-    // navop.ai.ask —— 打开侧栏并发消息，回 {ok:true}。
-    let abi_for_ask = Arc::clone(abi);
-    let panel_for_ask = plugin_ai.clone();
-    let dispatcher_for_ask = dispatcher.clone();
-    let session_for_ask = Arc::clone(session);
-    channel.handle("navop.ai.ask", move |call| {
-        let data = call.data().clone();
-        let Some(reply) = call.into_reply() else {
-            return;
-        };
-        if abi_for_ask.cancelled() {
-            reject(reply, cancelled());
-            return;
-        }
-        // prompt 必须是非空字符串（到尾空白不算）。
-        let prompt = payload_str(&data, "prompt")
-            .map(|p| p.trim().to_string())
-            .filter(|p| !p.is_empty());
-        let Some(prompt) = prompt else {
-            reject(reply, invalid_argument("navop.ai.ask 需要 prompt 参数"));
-            return;
-        };
-        let Some(panel) = panel_for_ask.clone() else {
-            reject(reply, ai_unavailable());
-            return;
-        };
-        let dispatcher = dispatcher_for_ask.clone();
-        session_for_ask.tokio().spawn(async move {
-            let result = dispatcher
-                .run(move |cx| {
-                    let Some(panel) = panel.upgrade() else {
-                        return Err("AI 侧栏不可用".to_string());
-                    };
-                    panel.update(cx, |panel, cx| panel.ask(prompt, cx));
-                    Ok(serde_json::json!({ "ok": true }))
-                })
-                .await;
-            settle_dev(reply, result);
-        });
-    });
+    }
 }
 
-/// AI 侧栏不可用（面板没建起来）的失败。错误码复用 RUNTIME_UNAVAILABLE
-/// （AI 平面对页面就是一块宿主运行面）。
-fn ai_unavailable() -> HostFailure {
-    HostFailure::new(
-        crate::host_error::ErrorCode::RuntimeUnavailable,
-        "AI 侧栏不可用",
-    )
-}
-
-fn serialization_too_large(value: &Value) -> bool {
-    serde_json::to_string(value)
-        .map(|serialized| serialized.len() > 2048)
-        .unwrap_or(true)
-}
-
+/// 收敛一次 dev 操作的结果。
+///
 /// dev 操作的失败只有一句话（没有稳定 code），按参数错误回给页面。
 fn settle_dev(reply: HostReply, result: Result<Value, String>) {
     match result {
@@ -689,6 +704,11 @@ fn register_capability_plane(
             // 先掐泵再关流：泵的 `read_event` 随即因取消退出，不会为一条
             // 刚被页面退订的流再补一个错误帧。
             pump.unsubscribe(&handle);
+            // 宿主事件没有 provider 侧的流可关：句柄一撤，泵就停了。
+            if super::host_events::is_host_handle(&handle) {
+                reply.resolve(json!({ "ok": true }));
+                return;
+            }
             let result = session.close_event(&handle, cancel).await;
             settle(reply, result);
         });
@@ -779,11 +799,11 @@ fn settle(reply: HostReply, result: Result<Value, crate::host_error::NavopError>
     }
 }
 
-fn reject(reply: HostReply, failure: HostFailure) {
+pub(crate) fn reject(reply: HostReply, failure: HostFailure) {
     reply.reject_error(failure.to_js_error());
 }
 
-fn payload_str(data: &Value, field: &str) -> Option<String> {
+pub(crate) fn payload_str(data: &Value, field: &str) -> Option<String> {
     data.get(field)?.as_str().map(str::to_owned)
 }
 
@@ -791,7 +811,7 @@ fn payload_value(data: &Value, field: &str) -> Value {
     data.get(field).cloned().unwrap_or(Value::Null)
 }
 
-fn payload_u32(data: &Value, field: &str) -> Option<u32> {
+pub(crate) fn payload_u32(data: &Value, field: &str) -> Option<u32> {
     data.get(field)?
         .as_u64()
         .and_then(|value| u32::try_from(value).ok())
@@ -802,7 +822,7 @@ fn payload_u64(data: &Value, field: &str) -> Option<u64> {
 }
 
 /// 模块声明的门：没声明就 `PERMISSION_DENIED`（`details.module` 是短名）。
-fn gate(abi: &HostAbi, module: &str) -> Result<(), HostFailure> {
+pub(crate) fn gate(abi: &HostAbi, module: &str) -> Result<(), HostFailure> {
     if abi.has_module(module) {
         return Ok(());
     }
@@ -879,14 +899,14 @@ fn log(abi: &HostAbi, level: &str, message: Option<String>, fields: Option<Value
 /// 与 gpui-shell 平面同一个错误词汇表：统一走 [`crate::host_error`]。
 type HostFailure = crate::host_error::NavopError;
 
-fn cancelled() -> HostFailure {
+pub(crate) fn cancelled() -> HostFailure {
     HostFailure::new(
         crate::host_error::ErrorCode::RequestCancelled,
         "页面已关闭，调用取消",
     )
 }
 
-fn invalid_argument(message: impl Into<String>) -> HostFailure {
+pub(crate) fn invalid_argument(message: impl Into<String>) -> HostFailure {
     HostFailure::new(crate::host_error::ErrorCode::InvalidArgument, message)
 }
 
@@ -924,6 +944,7 @@ mod tests {
             route: Some("main".into()),
             backends: Default::default(),
             modules: Vec::new(),
+            permissions: Vec::new(),
             cancelled: Mutex::new(false),
         };
         let error = gate(&abi, "navop.resource").expect_err("module not declared");

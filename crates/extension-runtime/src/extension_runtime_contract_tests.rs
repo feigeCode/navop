@@ -67,6 +67,130 @@ fn runtime_catalog_rejects_wasm_command_with_missing_runtime() {
 }
 
 #[test]
+fn runtime_catalog_registers_nsh_command_with_shell_app() {
+    // kind == "nsh" 的命令：注册进 CommandRegistry，handler 带 route，
+    // `nsh_command` 能查出 (extension_id, route)。
+    let mut manifest = shell_manifest();
+    manifest.contributes.shell_app = Some(shell_app("ui/explorer.js"));
+    manifest.contributes.commands.push(CommandContrib {
+        id: "example.open_explorer".to_string(),
+        title: "打开资源浏览器".to_string(),
+        category: String::new(),
+        icon: None,
+        enablement_when: None,
+        handler: CommandHandlerContrib {
+            kind: "nsh".to_string(),
+            runtime_id: String::new(),
+            function: None,
+            route: Some("tables".to_string()),
+        },
+    });
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+
+    assert_eq!(
+        Some(("com.example.tools".to_string(), Some("tables".to_string()))),
+        catalog.nsh_command("example.open_explorer")
+    );
+    // nsh 命令不能走 wasm 绑定：component_binding 路径应报 UnsupportedCommand。
+    assert!(
+        catalog
+            .component_permissions_for_command("example.open_explorer")
+            .is_err()
+    );
+    // wasm 命令不会被误判为 nsh。
+    assert_eq!(None, catalog.nsh_command("example.does_not_exist"));
+}
+
+#[test]
+fn runtime_catalog_rejects_nsh_command_without_shell_app() {
+    // kind == "nsh" 但扩展没有 shellApp：安装期报 InvalidShellApp。
+    let mut manifest = base_manifest();
+    manifest.contributes.commands.push(CommandContrib {
+        id: "example.open_missing".to_string(),
+        title: "打开不存在的 app".to_string(),
+        category: String::new(),
+        icon: None,
+        enablement_when: None,
+        handler: CommandHandlerContrib {
+            kind: "nsh".to_string(),
+            runtime_id: String::new(),
+            function: None,
+            route: None,
+        },
+    });
+
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+
+    assert!(error.to_string().contains("handler kind `nsh`"));
+    assert!(error.to_string().contains("shellApp"));
+}
+
+#[test]
+fn runtime_catalog_registers_panels_with_shell_app() {
+    // contributes.panels：注册进 catalog，anchor 过滤 + order 排序。
+    use crate::extension::manifest::PanelContrib;
+
+    let mut manifest = shell_manifest();
+    manifest.contributes.shell_app = Some(shell_app("ui/explorer.js"));
+    manifest.contributes.panels = vec![
+        PanelContrib {
+            id: "example.monitor".to_string(),
+            title: Some("监控".to_string()),
+            icon: None,
+            anchor: "terminal-sidebar".to_string(),
+            order: 10,
+            when: None,
+        },
+        PanelContrib {
+            id: "example.quick".to_string(),
+            title: Some("快捷".to_string()),
+            icon: None,
+            anchor: "terminal-sidebar".to_string(),
+            order: -5,
+            when: Some("".to_string()),
+        },
+    ];
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+
+    // anchor 过滤 + order 排序（quick 在前）。
+    let panels = catalog.panels_for_anchor("terminal-sidebar");
+    assert_eq!(2, panels.len());
+    assert_eq!("example.quick", panels[0].id);
+    assert_eq!("example.monitor", panels[1].id);
+    // 精确查询。
+    let monitor = catalog
+        .panel("com.example.tools", "example.monitor")
+        .expect("面板应能按 (extension, panel) 查到");
+    assert_eq!("监控", monitor.title);
+    // entry 继承 shellApp.entry。
+    assert!(monitor.entry_path.ends_with("ui/explorer.js"));
+    // 不存在的 anchor 查不到。
+    assert!(catalog.panels_for_anchor("main-sidebar").is_empty());
+}
+
+#[test]
+fn runtime_catalog_rejects_panels_without_shell_app() {
+    // 声明 panels 但没有 shellApp：安装期报 InvalidPanel。
+    use crate::extension::manifest::PanelContrib;
+
+    let mut manifest = base_manifest();
+    manifest.contributes.panels = vec![PanelContrib {
+        id: "example.orphan".to_string(),
+        title: Some("孤儿面板".to_string()),
+        icon: None,
+        anchor: "terminal-sidebar".to_string(),
+        order: 0,
+        when: None,
+    }];
+
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+
+    assert!(error.to_string().contains("shellApp"), "错误信息：{error}");
+}
+
+#[test]
 fn runtime_catalog_exposes_component_permissions_for_command() {
     let mut manifest = base_manifest();
     manifest.runtime.wasm.push(wasm_runtime("main"));
@@ -873,6 +997,74 @@ fn runtime_catalog_rebuild_after_uninstall_drops_db_tree_menu() {
     );
 }
 
+#[test]
+fn runtime_catalog_panel_inherits_app_icon_when_panel_has_none() {
+    use crate::extension::manifest::PanelContrib;
+
+    let root = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(root.path().join("icons")).unwrap();
+    std::fs::write(root.path().join("icons/app.svg"), "<svg/>").unwrap();
+    std::fs::create_dir_all(root.path().join("ui")).unwrap();
+    std::fs::write(root.path().join("ui/explorer.js"), "mount();").unwrap();
+
+    let mut manifest = shell_manifest();
+    manifest.manifest_dir = root.path().to_path_buf();
+    let mut app = shell_app("ui/explorer.js");
+    app.icon = Some("icons/app.svg".to_string());
+    manifest.contributes.shell_app = Some(app);
+    manifest.contributes.panels.push(PanelContrib {
+        id: "inspector".to_string(),
+        title: Some("检查器".to_string()),
+        icon: None,
+        anchor: "db-sidebar".to_string(),
+        order: 0,
+        when: None,
+    });
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let panels = catalog.panels_for_anchor("db-sidebar");
+
+    assert_eq!(1, panels.len());
+    assert_eq!(
+        Some(root.path().join("icons/app.svg")),
+        panels[0].icon_path,
+        "面板没声明 icon 时应回落到 shellApp.icon"
+    );
+}
+
+#[test]
+fn runtime_catalog_db_tree_menu_items_carry_command_icons() {
+    let mut manifest = base_manifest();
+    manifest.runtime.wasm.push(wasm_runtime("main"));
+    let mut cmd = command("main", "example.export_table");
+    cmd.icon = Some("icons/export.svg".to_string());
+    manifest.contributes.commands.push(cmd);
+    manifest.contributes.menus.insert(
+        "db.tree.table".to_string(),
+        vec![MenuContrib {
+            command: MenuCommandRef {
+                id: "example.export_table".to_string(),
+            },
+            label: Some("导出表".to_string()),
+            group: None,
+            when: None,
+            requires_active: true,
+        }],
+    );
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let items = catalog
+        .db_tree_menu_registry()
+        .items_for_node(db::DbNodeType::Table);
+
+    assert_eq!(1, items.len());
+    assert_eq!(
+        Some(PathBuf::from("/tmp/com.example.tools/icons/export.svg")),
+        items[0].icon,
+        "菜单项应复用命令声明的图标"
+    );
+}
+
 fn shell_manifest() -> Manifest {
     let mut manifest = base_manifest();
     manifest.permissions = vec![
@@ -934,6 +1126,7 @@ fn command(runtime_id: &str, command_id: &str) -> CommandContrib {
             kind: "wasm".to_string(),
             runtime_id: runtime_id.to_string(),
             function: Some("run".to_string()),
+            route: None,
         },
     }
 }

@@ -69,6 +69,58 @@ impl<P: Copy + PartialEq> ToolDockLayout<P> {
     }
 }
 
+impl<P: PartialEq> ToolDockLayout<P> {
+    /// 由打开面板列表构建布局（无 `Copy` 约束版本，供 `SharedString` 等键使用）。
+    pub fn from_open_panels_cloned(
+        open_panels: impl IntoIterator<Item = (P, SidebarPlacement)>,
+    ) -> Self
+    where
+        P: Clone,
+    {
+        let mut layout = Self::default();
+        for (panel, placement) in open_panels {
+            layout.set_placement_cloned(panel, placement);
+        }
+        layout
+    }
+
+    /// 若指定边被占用则清空该边（用于扩展面板给内建面板让位）。
+    pub fn clear_if_occupied(&mut self, placement: SidebarPlacement) -> Option<P> {
+        self.take_placement(placement)
+    }
+
+    /// 把面板放到某一边（无 `Copy` 约束版本）。
+    pub fn set_placement_cloned(&mut self, panel: P, placement: SidebarPlacement) -> Option<P> {
+        match placement {
+            SidebarPlacement::Left => self.left.replace(panel),
+            SidebarPlacement::Right => self.right.replace(panel),
+            SidebarPlacement::Bottom => self.bottom.replace(panel),
+        }
+    }
+
+    /// 面板当前停靠的边。
+    pub fn placement_edge(&self, panel: &P) -> Option<SidebarPlacement> {
+        if self.left.as_ref() == Some(panel) {
+            Some(SidebarPlacement::Left)
+        } else if self.right.as_ref() == Some(panel) {
+            Some(SidebarPlacement::Right)
+        } else if self.bottom.as_ref() == Some(panel) {
+            Some(SidebarPlacement::Bottom)
+        } else {
+            None
+        }
+    }
+
+    /// 清空并返回指定边的面板。
+    fn take_placement(&mut self, placement: SidebarPlacement) -> Option<P> {
+        match placement {
+            SidebarPlacement::Left => self.left.take(),
+            SidebarPlacement::Right => self.right.take(),
+            SidebarPlacement::Bottom => self.bottom.take(),
+        }
+    }
+}
+
 impl<P> ToolDockLayout<P> {
     pub fn has_right(&self) -> bool {
         self.right.is_some()
@@ -173,5 +225,32 @@ mod tests {
     #[test]
     fn right_sidebar_resize_excludes_toolbar_width() {
         assert_eq!(px(256.0), right_sidebar_width(px(1000.0), px(700.0)));
+    }
+
+    #[test]
+    fn cloned_api_works_for_non_copy_keys() {
+        use std::rc::Rc;
+
+        let one = Rc::new("one");
+        let two = Rc::new("two");
+        let mut layout =
+            ToolDockLayout::from_open_panels_cloned([(one.clone(), SidebarPlacement::Left)]);
+        assert_eq!(layout.placement_edge(&one), Some(SidebarPlacement::Left));
+        assert_eq!(layout.placement_edge(&two), None);
+
+        // 后放入同一边的面板替换先前的（返回被替换者）。
+        assert_eq!(
+            layout.set_placement_cloned(two.clone(), SidebarPlacement::Left),
+            Some(one.clone())
+        );
+        assert_eq!(layout.left, Some(two.clone()));
+
+        // 清空占用的边。
+        assert_eq!(
+            layout.clear_if_occupied(SidebarPlacement::Left),
+            Some(two.clone())
+        );
+        assert!(layout.left.is_none());
+        assert!(layout.is_empty());
     }
 }

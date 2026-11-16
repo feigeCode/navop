@@ -30,6 +30,8 @@ dirs = {workspace = true}
 futures = { workspace = true }
 smol = { workspace = true }
 db_view = { workspace = true, optional = true }
+# navop.db 能力面（nsh 宿主）需要读全局数据库状态；database feature 打开。
+db = { workspace = true, optional = true }
 extension-runtime = { workspace = true }
 extension-host.workspace = true
 extension-plugin-adapter.workspace = true
@@ -132,7 +134,8 @@ database = [
     "dep:redis_view",
     "dep:redis-runtime",
     "dep:mongodb_view",
-    "dep:mongodb-runtime"]
+    "dep:mongodb-runtime",
+    "dep:db"]
 shell = [
     "extension-runtime/remote-desktop",
     "navop_runtime/sftp",
@@ -160,7 +163,7 @@ github-updates = ["app_kit/github-updates"]
 macos-touchbar-window-hide = ["one-core/macos-touchbar-window-hide"]
 screenshot-safe = []
 # M2 spike：挂一个 nsh AppView tab（nsh 扩展宿主方向验证），默认不开。
-nsh-host = ["universal-plugins/nsh-host"]
+nsh-host = ["universal-plugins/nsh-host", "universal-plugins/nsh-db", "universal-plugins/nsh-terminal"]
 wasm-components = ["extension-runtime/wasm-components"]
 windows-native-rdp = ["remote_desktop_view?/windows-native-rdp"]
 

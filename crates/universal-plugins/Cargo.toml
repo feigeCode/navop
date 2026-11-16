@@ -18,6 +18,13 @@ extension-host.workspace = true
 extension-plugin-adapter.workspace = true
 extension-protocol.workspace = true
 extension-runtime.workspace = true
+# nsh 宿主的 navop.db 能力面：会话/权限模型与 WASM 侧共用 extension-component。
+extension-component = { workspace = true, optional = true }
+db = { workspace = true, optional = true }
+# navop.terminal 能力面：会话注册表与读/写句柄来自 terminal_view 的
+# Public MCP 桥（每个活动终端在创建时注册）。
+public_mcp = { workspace = true, optional = true }
+terminal_view = { workspace = true, optional = true }
 extension_view.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
@@ -26,6 +33,8 @@ nsh-platform-gpui = { workspace = true, optional = true }
 # nsh-platform-gpui 没有重导出它。
 nsh-core = { workspace = true, optional = true }
 nsh-engine = { workspace = true, optional = true }
+# 能力面注册要连同 `nsh/base`：UI set 是整表替换，漏了它页面连 `View` 都没有。
+nsh-base = { workspace = true, optional = true }
 one-core.workspace = true
 one-ui = { workspace = true, optional = true }
 rust-i18n.workspace = true
@@ -50,10 +59,21 @@ nsh-host = [
     "dep:nsh-platform-gpui",
     "dep:nsh-core",
     "dep:nsh-engine",
+    "dep:nsh-base",
     "dep:ai_chat_view",
     "dep:one-ui",
     "dep:serde",
+    "dep:extension-component",
 ]
+# navop.db 能力面（宿主内建数据库会话）。依赖 extension-runtime 的
+# `database` feature（ExtensionDbGateway）；宿主 app 侧同时启用两者。
+# cfg 门用下划线拼写：`feature = "nsh-db"` 在 cfg 里自动映射为 nsh_db。
+nsh-db = ["nsh-host", "extension-runtime/database", "dep:db", "db-plane"]
+# 仅供 cfg 使用的哑 feature（cfg 里 feature 名的 `-` 与 `_` 等价）。
+db-plane = []
+# navop.terminal 能力面：复用 terminal_view 的 Public MCP 终端注册表。
+nsh-terminal = ["nsh-host", "dep:terminal_view", "dep:public_mcp", "terminal-plane"]
+terminal-plane = []
 
 [lints]
 workspace = true

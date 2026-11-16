@@ -4243,6 +4243,10 @@ Compare:
     zh-HK: "INSERT: %{insert} | UPDATE: %{update} | DELETE: %{delete} | DDL: %{ddl} | 總計: %{total}"
 
 DatabaseSidebar:
+  close_extension:
+    en: Close panel
+    zh-CN: 关闭面板
+    zh-HK: 關閉面板
   ai_chat:
     en: AI Chat
     zh-CN: AI 对话

@@ -6,14 +6,16 @@ pub mod security;
 mod security_rules;
 mod shell_validation;
 mod tools_validation;
+mod panels_validation;
 pub mod versioning;
 
 pub use contributes::{
-    CommandContrib, DocumentExporterContrib, DocumentRendererContrib, RemoteFileEditorLaunchMode,
-    ResolvedTerminalLaunch, ResourceConnectionContrib, ResourceConnectionFieldType,
-    ResourceConnectionForm, ResourceConnectionFormField, ResourceConnectionFormTab,
-    ResourceConnectionSelectOption, ResourceConnectionTerminal, ResourceConnectionVisibilityRule,
-    ShellAppContrib, ShellHostModule, TerminalLaunchError, ToolAnnotations, ToolContrib, ToolRisk,
+    CommandContrib, DocumentExporterContrib, DocumentRendererContrib, PanelContrib,
+    RemoteFileEditorLaunchMode, ResolvedTerminalLaunch, ResourceConnectionContrib,
+    ResourceConnectionFieldType, ResourceConnectionForm, ResourceConnectionFormField,
+    ResourceConnectionFormTab, ResourceConnectionSelectOption, ResourceConnectionTerminal,
+    ResourceConnectionVisibilityRule, ShellAppContrib, ShellHostModule, TerminalLaunchError,
+    ToolAnnotations, ToolContrib, ToolRisk,
 };
 #[cfg(test)]
 pub use contributes::{CommandHandlerContrib, ContributesManifest, HtmlPreviewTransformContrib};
@@ -29,6 +31,7 @@ pub use schema::{Manifest, WasmRuntimeKind};
 pub use security::build_permission_review;
 pub(crate) use shell_validation::validate_shell_app;
 pub(crate) use tools_validation::validate_tools;
+pub(crate) use panels_validation::validate_panels;
 pub use versioning::{HostApiVersions, current_host_version, set_current_host_version};
 
 #[cfg(test)]

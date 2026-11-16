@@ -474,17 +474,34 @@ pub(crate) struct PluginAiPanel {
 
 ### 9.4 页面 ABI
 
-三条能力都走现有通道，不改 `apiVersion`：
+两种形态，清单声明 `modules: ["ai"]` 后都能用：
 
-| 通道 | 名字 | 方向 | 参数 | 返回 / 语义 |
-|---|---|---|---|---|
-| `host.post` | `navop.ai.context` | 页面 → 宿主 | `PageContext`（见上） | 无；覆盖式更新当前 tab 上下文 |
-| `host.call` | `navop.ai.open` | 页面 → 宿主 | `{ context?: PageContext }` | 打开侧栏；`{ ok: true }` |
-| `host.call` | `navop.ai.ask` | 页面 → 宿主 | `{ prompt: string, submit?: boolean, context?: PageContext }` | 预填（`submit=false`）或直接发送；`{ ok: true }` |
+**默认（宿主放）**：每个扩展页右下角一枚 AI 浮钮，点开在右侧停靠一条可拖宽的聊天面板
+（`crates/universal-plugins/src/nsh_host/plugin_ai_panel.rs`）。页面只需
+`host.post("navop.ai.context", …)` 上报上下文。
 
-- 权限：不需要新模块；`shellApp` 存在即可。未声明 `tools` 的扩展也能用侧栏（AI 只是没有扩展工具）。
-- 错误：`AI_DISABLED`（宿主设置关）、`AI_UNAVAILABLE`（没有可用模型）、`INVALID_ARGUMENT`。
-- 页面可以只实现 `navop.ai.context`，完全不接侧栏，能力不受影响。
+**自定义（页面放）**：页面自己嵌组件，位置与尺寸完全自主——给的一格要有尺寸：
+
+```tsx
+import { nativeComponent } from "nsh";
+
+const Ai = nativeComponent<{ context?: Record<string, unknown> }>("navop.ai", {
+  props: ["context"],
+});
+
+// 自己选一格：右栏、抽屉、弹窗都行（必须给定尺寸，否则挂载出来是 0 高）
+<View style={{ width: 360, flexShrink: 0 }}>
+  <Ai style={{ flex: 1 }} context={{ route: route(), container: id }} />
+</View>
+```
+
+- `context`：可选 prop，对象或 JSON 字符串；宿主把它当参考塞进系统指令（带注入防护，≤2 KB）。
+- `host.post("navop.ai.context")` 仍然可用：把上下文转给**本页面里已挂载的** AI 组件
+  （同扩展的实例都收一份；没挂组件就丢弃），适合路由切换时上报。
+- `navop.ai.open` / `navop.ai.ask` 保留名字，但宿主没有可展开的侧栏，一律回
+  `INVALID_ARGUMENT: 宿主不再内置 AI 侧栏；请在页面里用 nativeComponent("navop.ai") 自己挂一个`。
+- 权限：需要 `modules: ["ai"]`（授予 `navop.ai` / `navop.ai.*`）；数据访问仍按各能力面自己的权限走。
+- 页面可以只上报上下文、不挂组件，能力不受影响（AI 就是没有这个页面的入口）。
 
 ### 9.5 工具作用域（M4 增强，可先按全局）
 
@@ -590,7 +607,7 @@ pub struct ToolExposureSettings {
 
 ### M2 侧边栏（3–4 天）
 
-- `NshTab` 右侧 `PluginAiPanel` + 浮钮/快捷键 + `navop.ai.*` ABI + 上下文注入 + 主题。
+- `navop.ai` 原生组件（聊天面板，位置由页面决定）+ `navop.ai.context` 上下文注入 + 主题。
 - 验收：docker tab 内问"现在有几个容器在跑"，AI 自动调 `ext_docker__containers_list`；换连接/切路由后系统指令更新；
   GPUI 测试覆盖开关、宽度、上下文刷新。
 

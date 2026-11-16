@@ -288,6 +288,17 @@ fn extension_menu_items_for_node(
     })
 }
 
+/// 菜单项图标：扩展目录里的图片文件走 `local-icon/` 资产命名空间，
+/// 由应用 `AssetSource` 直接读盘（SVG 经 `img()` 解码可保留原色）。
+/// 文件不存在时返回 `None`，菜单项退化成纯文字。
+fn menu_item_icon(path: &std::path::Path) -> Option<gpui_component::Icon> {
+    path.is_file().then(|| {
+        gpui_component::Icon::default()
+            .path(one_core::storage::connection_icon::local_icon_asset_path(path))
+            .color()
+    })
+}
+
 fn extension_action_context_for_item(
     node: &DbNode,
     item: &DbTreeExtensionMenuItem,
@@ -725,6 +736,8 @@ pub struct DbTreeView {
     db_filter_popover_open: HashMap<String, bool>,
     // 当前 Tab 跟踪的连接 ID 列表
     tracked_connection_ids: Vec<i64>,
+    // 本树所在标签页自己的页签容器（`kind: "nsh"` 的菜单命令把扩展页开在这里）
+    extension_tab_container: Option<gpui::WeakEntity<one_core::tab_container::TabContainer>>,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -833,19 +846,27 @@ impl DbTreeView {
         items: Vec<DbTreeExtensionMenuItem>,
         is_active: bool,
         node: &DbNode,
+        tab_container: Option<gpui::WeakEntity<one_core::tab_container::TabContainer>>,
     ) -> PopupMenu {
         let mut result_menu = menu;
         for item in items {
             let disabled = item.requires_active && !is_active;
             let context = extension_action_context_for_item(node, &item);
+            let tab_container = tab_container.clone();
             let label = item.label.clone();
-            result_menu = result_menu.item(PopupMenuItem::new(label).disabled(disabled).on_click(
+            let mut entry = PopupMenuItem::new(label).disabled(disabled);
+            if let Some(icon) = item.icon.as_deref().and_then(menu_item_icon) {
+                entry = entry.icon(icon);
+            }
+            result_menu = result_menu.item(entry.on_click(
                 move |_, window, cx| {
                     match cx
                         .try_global::<GlobalDbTreeExtensionActionHandler>()
                         .cloned()
                     {
-                        Some(handler) => handler.run(context.clone(), window, cx),
+                        Some(handler) => {
+                            handler.run(context.clone(), tab_container.clone(), window, cx)
+                        }
                         None => warn!(
                             "db tree extension action handler is not registered for {}",
                             context.command_id
@@ -855,6 +876,15 @@ impl DbTreeView {
             ));
         }
         result_menu
+    }
+
+    /// 记下本树所在的页签容器：右键菜单里 `kind: "nsh"` 的命令要把扩展页
+    /// 开在数据库自己的页签栏，和查询页签并排。
+    pub fn set_extension_tab_container(
+        &mut self,
+        container: gpui::WeakEntity<one_core::tab_container::TabContainer>,
+    ) {
+        self.extension_tab_container = Some(container);
     }
 
     pub fn new(
@@ -981,6 +1011,7 @@ impl DbTreeView {
             db_filter_list_states: HashMap::new(),
             db_filter_popover_open: HashMap::new(),
             tracked_connection_ids,
+            extension_tab_container: None,
             _subscriptions: subscriptions,
         }
     }
@@ -1666,6 +1697,22 @@ impl DbTreeView {
     ///
     /// 之所以不提前清空：清空会让这个节点——以及搜索/过滤命中它子节点的分支——
     /// 在刷新期间从界面上先消失一下再长回来（issue #362）。
+    /// 已打开的连接根节点 id（`only` 给定时只返回该连接）。
+    ///
+    /// 宿主侧的 `navop.db.refreshTree` 拿不到连接快照，用它枚举“哪些连接根
+    /// 需要刷新”；节点按 id 排序，保证同一棵树上的刷新顺序稳定。
+    pub fn connection_root_ids(&self, only: Option<&str>) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .db_nodes
+            .values()
+            .filter(|node| node.node_type == DbNodeType::Connection)
+            .filter(|node| only.map_or(true, |id| id == node.id))
+            .map(|node| node.id.clone())
+            .collect();
+        ids.sort();
+        ids
+    }
+
     pub fn refresh_tree(&mut self, node_id: String, cx: &mut Context<Self>) {
         let refresh_node_id = self
             .db_nodes
@@ -3357,8 +3404,15 @@ impl DbTreeView {
             .map(|registry| extension_menu_items_for_node(node, registry))
             .unwrap_or_default();
         if !extension_items.is_empty() {
+            let tab_container = view.read(cx).extension_tab_container.clone();
             menu = menu.separator();
-            menu = Self::render_extension_menu_items(menu, extension_items, is_active, node);
+            menu = Self::render_extension_menu_items(
+                menu,
+                extension_items,
+                is_active,
+                node,
+                tab_container,
+            );
         }
 
         if node.node_type == DbNodeType::Table {
@@ -3675,6 +3729,7 @@ mod tests {
         registry.add(
             "db.tree.table",
             DbTreeExtensionMenuItem {
+                icon: None,
                 extension_id: "com.example.tools".to_string(),
                 command_id: "example.sync_table".to_string(),
                 label: "同步表".to_string(),
@@ -3686,6 +3741,7 @@ mod tests {
         registry.add(
             "db.tree.table",
             DbTreeExtensionMenuItem {
+                icon: None,
                 extension_id: "com.example.tools".to_string(),
                 command_id: "example.hidden".to_string(),
                 label: "Hidden".to_string(),
@@ -3790,6 +3846,23 @@ mod tests {
         let mut ids: Vec<String> = ids.into_iter().map(|id| id.to_string()).collect();
         ids.sort();
         ids
+    }
+
+    /// 宿主刷新树时按连接根枚举：只认 Connection 节点，可按连接 id 过滤。
+    #[gpui::test]
+    fn connection_root_ids_list_only_connection_roots(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_global(GlobalDbState::default()));
+        let (view, _visual) = search_fixture_view(cx);
+
+        view.update(cx, |view, _cx| {
+            assert_eq!(
+                vec!["conn-1".to_string()],
+                view.connection_root_ids(Some("conn-1"))
+            );
+            assert!(view.connection_root_ids(Some("conn-2")).is_empty());
+            // 不过滤时也只返回连接节点，库/表目录都不在其中。
+            assert_eq!(vec!["conn-1".to_string()], view.connection_root_ids(None));
+        });
     }
 
     /// 刷新一个被过滤的表目录时，命中的表不能先消失一下（issue #362）。

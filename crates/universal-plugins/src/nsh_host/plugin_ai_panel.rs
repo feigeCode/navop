@@ -1,22 +1,38 @@
-//! 插件 AI 侧栏（plugin-ai-tools.md §9）。
+//! 插件 AI 面板（plugin-ai-tools.md §9）。
 //!
-//! 每个 NshTab 一个实例、默认收起；面板里是
-//! [`DefaultAgentChatPanel`] 的 sidebar 形态，系统指令注入扩展上下文
-//! （标题/路由/连接/工具列表/页面上下文）。会话 v1 只在内存里，关 tab 即丢。
+//! 两种形态，同一份实现：
+//!
+//! - **宿主模式**（[`PluginAiPanel::new`]，`NshTab` 持有）：收起时是页面右下角
+//!   的圆形浮钮，点开后在右侧停靠一条可拖宽的聊天面板。
+//! - **组件模式**（[`PluginAiPanel::new_embedded`]，`nativeComponent("navop.ai")`）：
+//!   不画浮钮、不占宽度，填满页面给的那一格，位置完全由页面决定。
+//!
+//! 两种形态都是 [`DefaultAgentChatPanel`] 的 sidebar 形态，系统指令注入扩展
+//! 上下文（标题/路由/连接/工具列表/页面上下文）。会话 v1 只在内存里，关页面即丢。
+//!
+//! 页面自挂（组件模式）：
+//!
+//! ```tsx
+//! const Ai = nativeComponent("navop.ai");
+//! <View style={{ width: 360, height: "100%" }}>
+//!   <Ai context={{ route: "containers", selection: container.id }} />
+//! </View>
+//! ```
+//!
+//! `context` 是可选 prop（对象或 JSON 字符串）：页面把它关心的现状报给
+//! AI，宿主只当参考塞进系统指令，不做任何数据授权。
 
 use std::sync::Arc;
 
 use agent_runtime::{AgentResourceScope, ResourceCatalog};
 use gpui::{
-    App, AppContext, Axis, Bounds, Context, InteractiveElement as _, IntoElement, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Pixels, Render, StatefulInteractiveElement as _, Styled,
-    Window, div, px,
+    App, AppContext, Context, InteractiveElement, IntoElement, ParentElement, Pixels, Render,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
+use gpui_component::ActiveTheme as _;
 use one_core::storage::{
     ConnectionRepository, GlobalStorageState, StoredConnection, traits::Repository,
 };
-use gpui_component::ActiveTheme;
-use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
 
 use ai_chat_view::{
     AiAccessLevels, DefaultAgentChatPanel, DefaultAgentChatPanelEvent, DefaultTargetReason,
@@ -26,17 +42,32 @@ use ai_chat_view::{
 
 use crate::universal_plugins::UniversalPluginService;
 
-/// 侧栏默认宽度（设计稿 §9：360，可拖 320–560）。
-const DEFAULT_WIDTH: f32 = 360.;
-/// 侧栏最小宽度。
-pub const MIN_WIDTH: Pixels = px(320.);
-/// 侧栏最大宽度。
-pub const MAX_WIDTH: Pixels = px(560.);
 /// 页面上下文序列化后的总大小上限（防页面灌爆系统指令）。
 const PAGE_CONTEXT_MAX_BYTES: usize = 2048;
 
-/// 插件 AI 侧栏。
+/// 面板形态：宿主停靠（浮钮 + 右侧面板）还是页面自放（填满给定格子）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PanelMode {
+    Floating,
+    Embedded,
+}
+
+/// 停靠面板的默认宽度与可拖范围。
+const DEFAULT_WIDTH: f32 = 360.;
+const MIN_WIDTH: Pixels = px(320.);
+const MAX_WIDTH: Pixels = px(560.);
+
+/// 插件 AI 面板。
 pub(crate) struct PluginAiPanel {
+    mode: PanelMode,
+    /// 停靠模式是否展开。
+    open: bool,
+    /// 停靠模式的面板宽度。
+    width: Pixels,
+    /// 正在拖宽度。
+    resizing: bool,
+    /// 聊天面板自己发出的 `Close`（用户点了面板标题栏的关闭）：停靠模式要收起。
+    _close: gpui::Subscription,
     chat: gpui::Entity<DefaultAgentChatPanel>,
     /// 扩展 id（如 com.navop.docker）。
     #[allow(dead_code)]
@@ -51,16 +82,10 @@ pub(crate) struct PluginAiPanel {
     tools: Vec<String>,
     /// 页面上报的上下文（覆盖式）。
     page_context: Option<serde_json::Value>,
-    /// 是否展开。
-    open: bool,
-    /// 侧栏宽度（像素）。
-    width: Pixels,
-    /// 是否正在拖拽宽度。
-    resizing: bool,
 }
 
 impl PluginAiPanel {
-    /// 建面板。`connection` 为连接型页面的当前连接（完整 StoredConnection）。
+    /// 建组件。`connection` 为连接型页面的当前连接（完整 StoredConnection）。
     pub(crate) fn new(
         service: &UniversalPluginService,
         extension_id: Arc<str>,
@@ -84,41 +109,71 @@ impl PluginAiPanel {
                 scope, resource_catalog, mentions, window, cx,
             )
         });
-        cx.subscribe(&chat, |this, _, event: &DefaultAgentChatPanelEvent, cx| {
-            if matches!(event, DefaultAgentChatPanelEvent::Close) {
-                this.open = false;
-                cx.notify();
-            }
-        })
-        .detach();
+        // 面板标题栏的关闭按钮：宿主模式收起成浮钮；组件模式没有浮钮，
+        // 收起就没有入口了，所以只清展开态。
+        let chat_for_close = chat.clone();
+        let close_subscription = cx.subscribe(
+            &chat_for_close,
+            |this: &mut Self, _chat, event: &DefaultAgentChatPanelEvent, cx| {
+                if matches!(event, DefaultAgentChatPanelEvent::Close) && this.open {
+                    this.open = false;
+                    cx.notify();
+                }
+            },
+        );
 
         let mut panel = Self {
+            mode: PanelMode::Floating,
+            open: false,
+            width: px(DEFAULT_WIDTH),
+            resizing: false,
+            _close: close_subscription,
             chat,
             extension_id,
             extension_title,
             route,
             connection,
             page_context: None,
-            open: false,
-            width: px(DEFAULT_WIDTH),
-            resizing: false,
             tools,
         };
         panel.refresh_system_instruction(cx);
         panel
     }
 
-    /// 打开侧栏（幂等）。
-    pub(crate) fn open_panel(&mut self, cx: &mut Context<Self>) {
-        if !self.open {
-            self.open = true;
-            self.chat.update(cx, |chat, cx| chat.on_sidebar_shown(cx));
-            cx.notify();
-        }
+    /// 建「页面自放」的面板：不画浮钮，填满父容器。
+    pub(crate) fn new_embedded(
+        service: &UniversalPluginService,
+        extension_id: Arc<str>,
+        extension_title: Arc<str>,
+        route: Option<Arc<str>>,
+        connection: Option<StoredConnection>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut panel = Self::new(
+            service,
+            extension_id,
+            extension_title,
+            route,
+            connection,
+            window,
+            cx,
+        );
+        panel.mode = PanelMode::Embedded;
+        panel
     }
 
-    /// 切换展开/收起（预留给后续快捷键/命令面板入口；v1 的入口是浮钮）。
-    #[allow(dead_code)]
+    /// 展开停靠面板（幂等）。
+    pub(crate) fn open_panel(&mut self, cx: &mut Context<Self>) {
+        if self.open {
+            return;
+        }
+        self.open = true;
+        self.chat.update(cx, |chat, cx| chat.on_sidebar_shown(cx));
+        cx.notify();
+    }
+
+    /// 开/关（浮钮点击）。
     pub(crate) fn toggle(&mut self, cx: &mut Context<Self>) {
         if self.open {
             self.open = false;
@@ -133,7 +188,7 @@ impl PluginAiPanel {
         self.open
     }
 
-    /// 页面上报上下文（navop.ai.context，覆盖式；超 2KB 丢弃）。
+    /// 页面上报上下文（组件的 `context` prop，覆盖式；超 2KB 丢弃）。
     pub(crate) fn set_page_context(
         &mut self,
         context: serde_json::Value,
@@ -151,14 +206,7 @@ impl PluginAiPanel {
         cx.notify();
     }
 
-    /// 页面请求对话（navop.ai.ask）：打开侧栏并发送消息。
-    pub(crate) fn ask(&mut self, message: String, cx: &mut Context<Self>) {
-        self.open_panel(cx);
-        self.chat
-            .update(cx, |chat, cx| chat.send_external_message(message, cx));
-    }
-
-    /// 重算系统指令（建面板/页面上下文变化时）。
+    /// 重算系统指令（建组件/页面上下文变化时）。
     fn refresh_system_instruction(&mut self, cx: &mut Context<Self>) {
         let instruction = build_system_instruction(
             &self.extension_title,
@@ -167,21 +215,133 @@ impl PluginAiPanel {
             self.tools.as_ref(),
             self.page_context.as_ref(),
         );
-        self.chat.update(cx, |chat, cx| {
-            chat.set_system_instruction(Some(instruction), cx)
-        });
+        self.chat
+            .update(cx, |chat, cx| chat.set_system_instruction(Some(instruction), cx));
     }
+}
 
-    /// 拖拽中按鼠标位置更新宽度（面板贴右缘：宽 = 右缘 x - 鼠标 x，clamp）。
-    fn resize(&mut self, right_edge: Pixels, mouse_x: Pixels, cx: &mut Context<Self>) {
-        let new_width = right_edge - mouse_x;
-        self.width = new_width.clamp(MIN_WIDTH, MAX_WIDTH);
-        cx.notify();
+impl Render for PluginAiPanel {
+    #[allow(refining_impl_trait)]
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.mode == PanelMode::Embedded {
+            // 组件模式：填满父容器的格子，宽高都交给页面。
+            return div()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .h_full()
+                .bg(cx.theme().background)
+                .child(self.chat.clone())
+                .into_any_element();
+        }
+        if !self.open {
+            return self.render_fab(cx);
+        }
+        // 停靠模式：左侧一条拖宽把手 + 聊天面板。
+        let entity = cx.entity();
+        div()
+            .h_full()
+            .w(self.width)
+            .flex_shrink_0()
+            .flex()
+            .flex_row()
+            .border_l_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .child(
+                div()
+                    .id("plugin-ai-resize")
+                    .w(px(4.0))
+                    .h_full()
+                    .cursor_col_resize()
+                    .hover(|style| style.bg(cx.theme().accent))
+                    .on_drag(
+                        ResizeDrag { start: self.width },
+                        move |drag: &ResizeDrag, _position, window, cx| {
+                            let _ = entity.update(cx, |this, cx| {
+                                this.resizing = true;
+                                this.width = (drag.start).clamp(MIN_WIDTH, MAX_WIDTH);
+                                let _ = window;
+                                cx.notify();
+                            });
+                            cx.new(|_| ResizeGhost)
+                        },
+                    )
+                    .on_drag_move(cx.listener(
+                        |this, event: &gpui::DragMoveEvent<ResizeDrag>, _window, cx| {
+                            if !this.resizing {
+                                return;
+                            }
+                            let delta = -event.event.position.x + event.bounds.origin.x;
+                            let next = (event.drag(cx).start + delta).clamp(MIN_WIDTH, MAX_WIDTH);
+                            if next != this.width {
+                                this.width = next;
+                                cx.notify();
+                            }
+                        },
+                    ))
+                    .on_mouse_up(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, _window, cx| {
+                            if this.resizing {
+                                this.resizing = false;
+                                cx.notify();
+                            }
+                        }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(self.chat.clone()),
+            )
+            .into_any_element()
     }
+}
 
-    fn done_resizing(&mut self, cx: &mut Context<Self>) {
-        self.resizing = false;
-        cx.notify();
+/// 拖宽时带上起始宽度。
+#[derive(Clone, Copy)]
+struct ResizeDrag {
+    start: Pixels,
+}
+
+struct ResizeGhost;
+
+impl Render for ResizeGhost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+impl PluginAiPanel {
+    /// 收起态：页面右下角的圆形浮钮。
+    fn render_fab(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let panel = cx.entity();
+        div()
+            .id("plugin-ai-fab")
+            .absolute()
+            .bottom(px(20.0))
+            .right(px(20.0))
+            .size(px(38.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .bg(cx.theme().primary)
+            .text_color(cx.theme().primary_foreground)
+            .text_size(px(12.0))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .cursor_pointer()
+            .shadow_md()
+            .hover(|style| style.opacity(0.92))
+            .child("AI")
+            .on_click(move |_, window, cx| {
+                let _ = window;
+                panel.update(cx, |panel, cx| panel.toggle(cx));
+            })
+            .into_any_element()
     }
 }
 
@@ -195,7 +355,7 @@ fn build_system_instruction(
 ) -> String {
     let mut lines = Vec::new();
     lines.push(format!(
-        "你在 Navop 的扩展页面「{extension_title}」旁的 AI 侧栏中协助用户。"
+        "你在 Navop 的扩展页面「{extension_title}」里的 AI 面板中协助用户。"
     ));
     if let Some(route) = route {
         lines.push(format!("页面路由：{route}"));
@@ -248,83 +408,10 @@ fn stored_connections(cx: &App) -> Vec<StoredConnection> {
     match repo.list() {
         Ok(connections) => connections,
         Err(error) => {
-            tracing::warn!(error = %error, "插件 AI 侧栏读取连接列表失败");
+            tracing::warn!(error = %error, "插件 AI 面板读取连接列表失败");
             Vec::new()
         }
     }
-}
-
-impl Render for PluginAiPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // 拖拽期间的鼠标跟踪在 ResizeEventHandler 的 paint 里注册
-        // （window.on_mouse_event 只能在 paint 阶段调，db_view 同款）。
-        let tracker = ResizeEventHandler {
-            view: cx.entity().clone(),
-        };
-
-        if !self.open {
-            // 收起态：右下角浮动按钮（v1 不占全局快捷键——cmd-j 已被
-            // tab switcher 占用，设计稿的快捷键方案需另选键位，后续再做）。
-            let view = cx.entity().clone();
-            return div()
-                .size_full()
-                .relative()
-                .child(tracker)
-                .child(
-                    div()
-                        .id("plugin-ai-fab")
-                        .absolute()
-                        .bottom_4()
-                        .right_4()
-                        .on_click(move |_event, _window, cx: &mut App| {
-                            view.update(cx, |panel, cx| panel.open_panel(cx));
-                        })
-                        .flex()
-                        .items_center()
-                        .px_3()
-                        .py_2()
-                        .rounded_full()
-                        .bg(cx.theme().primary)
-                        .text_color(cx.theme().primary_foreground)
-                        .text_sm()
-                        .child("AI"),
-                )
-                .into_element();
-        }
-
-        let view = cx.entity().clone();
-        let handle = resize_handle::<ResizePanel, ResizePanel>(
-            "plugin-ai-resize-handle",
-            Axis::Horizontal,
-        )
-        .placement(HandlePlacement::Left)
-        .on_drag(ResizePanel, move |_info, _window, _app_cx, drag_cx| {
-            drag_cx.stop_propagation();
-            view.update(drag_cx, |panel, cx| {
-                panel.resizing = true;
-                cx.notify();
-            });
-            drag_cx.new(|_| ResizePanel)
-        });
-
-        div()
-            .h_full()
-            .w(self.width)
-            .flex_shrink_0()
-            .border_l_1()
-            .border_color(cx.theme().border)
-            .child(tracker)
-            .relative()
-            .child(handle)
-            .child(self.chat.clone())
-            .into_element()
-    }
-}
-
-/// 仅供测试：拖拽宽度换算（右缘固定）。
-#[cfg(test)]
-pub(crate) fn resized_width(right_edge: Pixels, mouse_x: Pixels) -> Pixels {
-    (right_edge - mouse_x).clamp(MIN_WIDTH, MAX_WIDTH)
 }
 
 #[cfg(test)]
@@ -354,95 +441,5 @@ mod tests {
         assert!(instruction.contains("Demo"));
         assert!(!instruction.contains("页面路由"));
         assert!(!instruction.contains("当前连接"));
-    }
-
-    #[test]
-    fn resized_width_clamps_to_bounds() {
-        assert_eq!(resized_width(px(1000.), px(100.)), MAX_WIDTH);
-        assert_eq!(resized_width(px(1000.), px(999.)), MIN_WIDTH);
-    }
-}
-
-/// 拖拽期间的鼠标跟踪（`window.on_mouse_event` 只能在 paint 阶段调，
-/// 所以包一个不画任何东西的 Element，照搬 db_view 的 ResizeEventHandler）。
-struct ResizeEventHandler {
-    view: gpui::Entity<PluginAiPanel>,
-}
-
-impl IntoElement for ResizeEventHandler {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
-impl gpui::Element for ResizeEventHandler {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<gpui::ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
-        (window.request_layout(gpui::Style::default(), None, cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        _: Bounds<Pixels>,
-        _: &mut Self::RequestLayoutState,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) -> Self::PrepaintState {
-    }
-
-    fn paint(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        _: Bounds<Pixels>,
-        _: &mut Self::RequestLayoutState,
-        _: &mut Self::PrepaintState,
-        window: &mut Window,
-        _cx: &mut App,
-    ) {
-        // 面板贴 tab 右缘，宽度 = tab 右缘 x - 鼠标 x。
-        window.on_mouse_event({
-            let view = self.view.clone();
-            move |event: &MouseMoveEvent, phase, window, cx: &mut App| {
-                if !phase.bubble() {
-                    return;
-                }
-                if !view.read_with(cx, |panel, _| panel.resizing) {
-                    return;
-                }
-                let right_edge = window.bounds().right();
-                view.update(cx, |panel, cx| {
-                    panel.resize(right_edge, event.position.x, cx)
-                });
-            }
-        });
-        window.on_mouse_event({
-            let view = self.view.clone();
-            move |_: &MouseUpEvent, phase, _window, cx: &mut App| {
-                if phase.bubble() {
-                    view.update(cx, |panel, cx| panel.done_resizing(cx));
-                }
-            }
-        });
     }
 }

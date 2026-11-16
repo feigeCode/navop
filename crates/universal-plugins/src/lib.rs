@@ -23,9 +23,21 @@ pub use connection_icon::{
 pub use extension_connection_form::{ExtensionConnectionForm, ExtensionConnectionFormConfig};
 #[cfg(feature = "nsh-host")]
 pub use nsh_host::{
-    ConnectionPageOpen, DevOps, NativeFactory, NativeViewContext, NshHost, init as init_nsh_host,
-    register_native_component, set_dev_ops,
+    ConnectionPageOpen, DevOps, NativeFactory, NativeViewContext, NshHost, NshPanel,
+    init as init_nsh_host, register_native_component, set_dev_ops,
 };
+#[cfg(feature = "nsh-db")]
+pub use nsh_host::set_db_state as set_nsh_db_state;
+#[cfg(feature = "nsh-db")]
+pub use nsh_host::set_tree_refresh_hook as set_nsh_db_tree_refresh;
+/// 把 navop 的能力面（db / terminal / app / ui）注册成 nsh 的 nativeModule。
+///
+/// 宿主在创建任何 `AppView` 之前调用一次：它同时装 `nsh/base`，因为
+/// `set_ui_sets` 是替换语义。
+#[cfg(feature = "nsh-host")]
+pub use nsh_host::install_native_api;
+#[cfg(all(feature = "nsh-host", feature = "nsh-terminal"))]
+pub use nsh_host::nsh_terminal_theme;
 
 /// 界面语言变化后刷新已打开的脚本页面。
 ///

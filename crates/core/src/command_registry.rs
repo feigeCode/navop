@@ -54,6 +54,12 @@ pub enum CommandHandler {
         runtime_id: String,
         function: String,
     },
+    /// Handler that opens the extension's nsh shell app as a tab.
+    /// `route` is an optional in-app route forwarded to the page via
+    /// `host.params`.
+    Nsh {
+        route: Option<String>,
+    },
 }
 
 impl CommandHandler {
@@ -68,6 +74,10 @@ impl CommandHandler {
             runtime_id: runtime_id.into(),
             function: function.into(),
         }
+    }
+
+    pub fn nsh(route: Option<String>) -> Self {
+        Self::Nsh { route }
     }
 }
 

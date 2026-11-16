@@ -11,18 +11,19 @@ use serde_json::Value;
 use crate::extension::is_active_install_dir_name;
 use crate::extension::manifest::{
     HostApiVersions, Manifest, ManifestError, current_host_version, load_and_check,
-    required_spawn_permission, validate_shell_app, validate_tools,
+    required_spawn_permission, validate_panels, validate_shell_app, validate_tools,
 };
 
 use super::catalog::ExtensionRuntimeCatalog;
 use super::types::{
     ExtensionRuntimeError, RegisteredDocumentExporter, RegisteredDocumentRenderer,
     RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding, RegisteredKeybindingContribution,
-    RegisteredRemoteFileEditorCommand, RegisteredRemoteFileEditorContribution,
-    RegisteredResourceConnectionContribution, RegisteredShellAppContribution,
-    RegisteredToolContribution, WasmRuntimeBinding, command_descriptor, runtime_key,
-    slot_item_from_menu,
+    RegisteredPanelContribution, RegisteredRemoteFileEditorCommand,
+    RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
+    RegisteredShellAppContribution, RegisteredToolContribution, WasmRuntimeBinding,
+    command_descriptor, runtime_key, slot_item_from_menu,
 };
+use one_core::command_registry::{CommandDescriptor, CommandHandler};
 
 static WASM_REGISTRATION_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
@@ -340,6 +341,7 @@ impl ExtensionRuntimeCatalog {
         self.register_wasm_runtimes(&manifest)?;
         self.register_ipc_runtimes(&manifest)?;
         self.register_shell_app(&manifest)?;
+        self.register_panels(&manifest)?;
         self.register_tools(&manifest)?;
         self.register_resource_connections(&manifest)?;
         self.register_html_preview_transforms(&manifest)?;
@@ -436,12 +438,43 @@ impl ExtensionRuntimeCatalog {
         Ok(())
     }
 
+    fn register_panels(&mut self, manifest: &Manifest) -> Result<(), ExtensionRuntimeError> {
+        validate_panels(manifest).map_err(|error| ExtensionRuntimeError::InvalidPanel {
+            field: error.field,
+            reason: error.reason,
+        })?;
+        // 面板是 shellApp 的附加 surface：入口、能力模块都取自 app；
+        // 校验已保证有 panels 就有 shellApp。
+        let Some(app) = manifest.contributes.shell_app.as_ref() else {
+            return Ok(());
+        };
+        for panel in &manifest.contributes.panels {
+            self.panels.push(RegisteredPanelContribution {
+                extension_id: manifest.id.clone(),
+                extension_version: manifest.version.clone(),
+                id: panel.id.clone(),
+                title: panel.title.clone().unwrap_or_else(|| app.title.clone().unwrap_or_else(|| manifest.name.clone())),
+                // 面板没写 icon 就回落到 app 图标：一个扩展通常只有一张
+                // 品牌图标，没必要时每个面板都重复声明。
+                icon_path: panel
+                    .icon
+                    .as_deref()
+                    .or(app.icon.as_deref())
+                    .map(|icon| resolve_extension_path(&manifest.manifest_dir, icon)),
+                anchor: panel.anchor.clone(),
+                order: panel.order,
+                when_clause: panel.when.clone().filter(|w| !w.trim().is_empty()),
+                entry_path: resolve_extension_path(&manifest.manifest_dir, &app.entry),
+                modules: app.modules.iter().copied().collect(),
+            });
+        }
+        Ok(())
+    }
+
     fn register_tools(&mut self, manifest: &Manifest) -> Result<(), ExtensionRuntimeError> {
-        validate_tools(manifest).map_err(|error| {
-            ExtensionRuntimeError::InvalidTool {
-                tool_id: tool_id_from_field(&error.field),
-                reason: error.reason,
-            }
+        validate_tools(manifest).map_err(|error| ExtensionRuntimeError::InvalidTool {
+            tool_id: tool_id_from_field(&error.field),
+            reason: error.reason,
         })?;
         let Some(app) = manifest.contributes.shell_app.as_ref() else {
             return Ok(());
@@ -567,6 +600,40 @@ impl ExtensionRuntimeCatalog {
 
     fn register_commands(&mut self, manifest: &Manifest) -> Result<(), ExtensionRuntimeError> {
         for command in &manifest.contributes.commands {
+            // 三态 handler：
+            // - "wasm"：headless component 动作，走原有 run_action 链路；
+            // - "nsh"：打开扩展的 shell app tab（可带 route），要求扩展声明 shellApp；
+            // - 其他（含默认 "builtin"）：暂不支持，静默跳过。
+            if command.handler.kind == "nsh" {
+                if self.shell_apps.is_empty() {
+                    return Err(ExtensionRuntimeError::InvalidShellApp {
+                        field: "commands.handler".to_string(),
+                        reason: format!(
+                            "command `{}` uses handler kind `nsh` but the extension does not declare `contributes.shellApp`",
+                            command.id
+                        ),
+                    });
+                }
+                let mut descriptor = CommandDescriptor::wasm(
+                    command.id.clone(),
+                    command.title.clone(),
+                    CommandHandler::Nsh {
+                        route: command.handler.route.clone(),
+                    },
+                )
+                .with_extension(manifest.id.clone());
+                if !command.category.is_empty() {
+                    descriptor = descriptor.with_category(command.category.clone());
+                }
+                if let Some(icon) = &command.icon {
+                    descriptor = descriptor.with_icon(icon.clone());
+                }
+                if let Some(when) = &command.enablement_when {
+                    descriptor = descriptor.with_enablement(when.clone());
+                }
+                self.commands.register(descriptor)?;
+                continue;
+            }
             if command.handler.kind != "wasm" {
                 continue;
             }
@@ -750,6 +817,21 @@ impl ExtensionRuntimeCatalog {
     #[cfg(feature = "database")]
     fn register_db_tree_menus(&mut self, manifest: &Manifest) {
         let command_titles = command_titles(manifest);
+        // 菜单项直接复用命令声明的图标：右键菜单里同一命令在命令面板
+        // 里长什么样，在这里就长什么样。
+        let command_icons: std::collections::HashMap<&str, std::path::PathBuf> = manifest
+            .contributes
+            .commands
+            .iter()
+            .filter_map(|command| {
+                command.icon.as_deref().map(|icon| {
+                    (
+                        command.id.as_str(),
+                        resolve_extension_path(&manifest.manifest_dir, icon),
+                    )
+                })
+            })
+            .collect();
         for (position, menus) in &manifest.contributes.menus {
             if !position.starts_with("db.tree.") {
                 continue;
@@ -766,6 +848,7 @@ impl ExtensionRuntimeCatalog {
                         position: position.clone(),
                         item: DbTreeExtensionMenuItem {
                             extension_id: manifest.id.clone(),
+                            icon: command_icons.get(command_id.as_str()).cloned(),
                             command_id,
                             label,
                             group: menu.group.clone(),

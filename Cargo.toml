@@ -103,6 +103,8 @@ gpui-kit = { git = "https://github.com/feigeCode/gpui-kit", rev = "36266413cd4f7
 nsh-platform-gpui = { git = "https://github.com/feigeCode/nsh", branch = "navop/gpui-0.1.13", default-features = false, features = ["js"] }
 # 能力声明（Capabilities）解析用；nsh-platform-gpui 不重导出它。
 nsh-core = { git = "https://github.com/feigeCode/nsh", branch = "navop/gpui-0.1.13" }
+# 能力面的 UI set 要连同 `nsh/base` 一起装（`set_ui_sets` 整表替换）。
+nsh-base = { git = "https://github.com/feigeCode/nsh", branch = "navop/gpui-0.1.13", default-features = false }
 # `host.call` 的分发表：`HostChannel` / `HostCall` 只在 nsh-engine 里，
 # nsh-platform-gpui 的 `AppView::host()` 返回它们但不重导出。
 nsh-engine = { git = "https://github.com/feigeCode/nsh", branch = "navop/gpui-0.1.13", default-features = false, features = ["js"] }

@@ -1,4 +1,5 @@
 use super::*;
+use one_core::dock::ToolDockLayout;
 
 struct ToolDockRenderState {
     sidebar_size: Pixels,
@@ -140,9 +141,19 @@ impl TerminalView {
         } else {
             TerminalToolDockLayout::default()
         };
+        // 扩展面板与内建面板共用三边槽位：内建面板优先，扩展面板只补
+        // 内建面板未占用的边。这里取“合并后每边最终显示的面板”。
+        let extension_layout = if render_internal_dock {
+            self.extension_tool_layout(cx)
+        } else {
+            ToolDockLayout::<SharedString>::default()
+        };
         let sidebar_size = self.sidebar_panel_size;
-        let right_width = if render_internal_dock {
-            right_tool_region_width(&layout, sidebar_size)
+        let has_right = layout.has_right() || extension_layout.has_right();
+        // 宽度按“合并后的右栏”算：内建面板优先，但只被扩展面板占用的边
+        // 也要留出面板宽度，否则面板会被压进 44px 的工具条里（内容全部裁掉）。
+        let right_width = if render_internal_dock && has_right {
+            sidebar_size + TOOLBAR_WIDTH
         } else {
             px(0.0)
         };
@@ -152,13 +163,30 @@ impl TerminalView {
             render_internal_dock,
             left_panel: layout
                 .left
-                .map(|panel| self.render_internal_tool_panel(panel, SidebarPlacement::Left, cx)),
+                .map(|panel| self.render_internal_tool_panel(panel, SidebarPlacement::Left, cx))
+                .or_else(|| {
+                    extension_layout.left.map(|id| {
+                        self.render_extension_tool_panel(id, SidebarPlacement::Left, cx)
+                    })
+                }),
             right_panel: layout
                 .right
-                .map(|panel| self.render_internal_tool_panel(panel, SidebarPlacement::Right, cx)),
+                .map(|panel| self.render_internal_tool_panel(panel, SidebarPlacement::Right, cx))
+                .or_else(|| {
+                    extension_layout.right.map(|id| {
+                        self.render_extension_tool_panel(id, SidebarPlacement::Right, cx)
+                    })
+                }),
             bottom_panel: layout
                 .bottom
-                .map(|panel| self.render_internal_tool_panel(panel, SidebarPlacement::Bottom, cx)),
+                .map(|panel| {
+                    self.render_internal_tool_panel(panel, SidebarPlacement::Bottom, cx)
+                })
+                .or_else(|| {
+                    extension_layout.bottom.map(|id| {
+                        self.render_extension_tool_panel(id, SidebarPlacement::Bottom, cx)
+                    })
+                }),
         }
     }
 
