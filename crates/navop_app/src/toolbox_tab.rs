@@ -422,6 +422,7 @@ mod tests {
             description: Some("Edit /etc/hosts".into()),
             category: "system".into(),
             keywords: vec!["dns".into(), "resolve".into()],
+            icon_path: None,
         };
         assert!(tool.matches(""));
         assert!(tool.matches("HOSTS"));
