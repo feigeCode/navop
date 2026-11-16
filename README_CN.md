@@ -87,6 +87,8 @@ Navop 是一个面向数据库、服务器与 AI 的原生桌面工作台。数�
 - **AI 与自动化** —— SQL 生成与分析、图表、终端协助、ACP Agent（Codex、Claude Code、OpenCode）、Agent Hub 与 Public MCP。
 - **桌面与团队** —— 原生主题、English/简体中文/繁體中文、加密同步、共享连接、扩展市场与 Markdown 笔记。
 
+Navop 是完整版本。同一份源码还会构建 **Navop Shell**（SSH、终端、端口转发、远程桌面）和 **Navop Data**（SQL、Redis、MongoDB、ER 图）两个范围更小的版本，适合只需要其中一部分能力的安装场景。
+
 ## Public MCP、Navop CLI 与 Agent Skill
 
 Navop 可以把宿主侧的工具开放给 Codex、Claude 和其他 MCP 客户端。在 **设置 > 通用 > MCP > MCP Server** 启用，选择 Safe / Confirm / Auto 权限档位，并在 **Tool Exposure** 中限定工具范围。服务只监听回环地址，客户端需使用仅当前用户可读的发现令牌。

@@ -86,6 +86,8 @@ Why it is built this way:
 - **AI and automation** — SQL generation and analysis, charts, terminal help, ACP agents (Codex, Claude Code, OpenCode), Agent Hub, and Public MCP.
 - **Desktop and teams** — native themes, English/简体中文/繁體中文, encrypted sync, shared connections, extension marketplace, and Markdown notes.
 
+Navop is the complete build. The same source also ships **Navop Shell** (SSH, terminals, port forwarding, remote desktop) and **Navop Data** (SQL, Redis, MongoDB, ER diagrams) as focused editions for narrower installs.
+
 ## Public MCP, Navop CLI, and Agent Skill
 
 Navop can expose host-authoritative tools to Codex, Claude, and other MCP clients. Enable **Settings > General > MCP > MCP Server**, choose Safe / Confirm / Auto, and limit exposed tools under **Tool Exposure**. The server binds to a loopback-only port and authenticates clients with a user-only discovery token.
