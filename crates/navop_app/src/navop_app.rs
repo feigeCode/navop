@@ -2317,32 +2317,38 @@ mod tests {
         let new_fn = &source[start..end];
 
         assert!(new_fn.contains("on_window_should_close"));
-        assert!(new_fn.contains("request_quit(window, cx)"));
+        assert!(new_fn.contains("handle_main_window_close_request(window, cx)"));
     }
 
     #[test]
     fn main_window_close_consults_the_system_tray_policy() {
         let source = include_str!("navop_app.rs");
-        let start = source.find("pub fn new").expect("NavopApp::new");
+        let start = source
+            .find("fn handle_main_window_close_request")
+            .expect("main window close handler");
         let end = source[start..]
-            .find("\n        let tab_container")
+            .find("\n}\n")
             .map(|offset| start + offset)
-            .expect("NavopApp::new setup");
-        let new_fn = &source[start..end];
+            .expect("main window close handler end");
+        let close_fn = &source[start..end];
         // needle 运行时拼接：断言字面量不能把 include_str! 守卫自己命中。
         let policy_fn = ["crate::system_tray::main_window_close_", "action("].concat();
         let availability_fn = ["crate::system_tray::is_", "available()"].concat();
 
         assert!(
-            contains_code(new_fn, &policy_fn),
+            contains_code(close_fn, &policy_fn),
             "关闭按钮必须按托盘可用性分流"
         );
-        assert!(contains_code(new_fn, &availability_fn));
-        assert!(contains_code(new_fn, "MainWindowCloseAction::AskUser"));
-        assert!(contains_code(new_fn, "show_close_choice_prompt"));
-        assert!(contains_code(new_fn, "MainWindowCloseAction::HideToTray"));
-        assert!(contains_code(new_fn, "hide_main_window_to_tray"));
-        assert!(contains_code(new_fn, "MainWindowCloseAction::RequestQuit"));
+        assert!(contains_code(close_fn, &availability_fn));
+        assert!(contains_code(close_fn, "MainWindowCloseAction::AskUser"));
+        assert!(contains_code(close_fn, "show_close_choice_prompt"));
+        assert!(contains_code(close_fn, "MainWindowCloseAction::HideToTray"));
+        assert!(contains_code(close_fn, "hide_main_window_to_tray"));
+        assert!(contains_code(
+            close_fn,
+            "MainWindowCloseAction::RequestQuit"
+        ));
+        assert!(contains_code(close_fn, "request_window_quit(window, cx)"));
     }
 
     /// 弹窗必须真的给用户两条出路（最小化 / 退出），并且「记住我的选择」写回设置；
