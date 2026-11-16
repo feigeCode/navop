@@ -1086,7 +1086,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e"
 dependencies = [
  "aws-lc-sys",
- "untrusted 0.7.1",
  "zeroize",
 ]
 
@@ -4768,7 +4767,6 @@ version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "337d46834ee672ab3e48caca2cb0c78cc174fb12b3a68d0d88f99a0519a5e36e"
 dependencies = [
- "generic-array 0.14.7",
  "rustversion",
  "typenum",
 ]
@@ -9717,7 +9715,7 @@ dependencies = [
 [[package]]
 name = "pageant"
 version = "0.2.5"
-source = "git+https://github.com/feigeCode/russh.git?tag=v0.65.0-navop.1#702f8737abd734b149efa9e7330a3e70af6fb2eb"
+source = "git+https://github.com/feigeCode/russh.git?tag=v0.65.1-navop.1#11ce6b2ca570a374af356b5ac901db0f156ddea1"
 dependencies = [
  "base16ct",
  "byteorder",
@@ -11859,7 +11857,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.2.17",
  "libc",
- "untrusted 0.9.0",
+ "untrusted",
  "windows-sys 0.52.0",
 ]
 
@@ -12075,8 +12073,8 @@ dependencies = [
 
 [[package]]
 name = "russh"
-version = "0.65.0"
-source = "git+https://github.com/feigeCode/russh.git?tag=v0.65.0-navop.1#702f8737abd734b149efa9e7330a3e70af6fb2eb"
+version = "0.65.1"
+source = "git+https://github.com/feigeCode/russh.git?tag=v0.65.1-navop.1#11ce6b2ca570a374af356b5ac901db0f156ddea1"
 dependencies = [
  "aes 0.9.3",
  "aws-lc-rs",
@@ -12146,7 +12144,7 @@ dependencies = [
 [[package]]
 name = "russh-cryptovec"
 version = "0.62.0"
-source = "git+https://github.com/feigeCode/russh.git?tag=v0.65.0-navop.1#702f8737abd734b149efa9e7330a3e70af6fb2eb"
+source = "git+https://github.com/feigeCode/russh.git?tag=v0.65.1-navop.1#11ce6b2ca570a374af356b5ac901db0f156ddea1"
 dependencies = [
  "log",
  "nix 0.31.3",
@@ -12177,7 +12175,7 @@ dependencies = [
 [[package]]
 name = "russh-util"
 version = "0.52.0"
-source = "git+https://github.com/feigeCode/russh.git?tag=v0.65.0-navop.1#702f8737abd734b149efa9e7330a3e70af6fb2eb"
+source = "git+https://github.com/feigeCode/russh.git?tag=v0.65.1-navop.1#11ce6b2ca570a374af356b5ac901db0f156ddea1"
 dependencies = [
  "chrono",
  "tokio",
@@ -12490,7 +12488,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b6275d1ee7a1cd780b64aca7726599a1dbc893b1e64144529e55c3c2f745765"
 dependencies = [
  "ring",
- "untrusted 0.9.0",
+ "untrusted",
 ]
 
 [[package]]
@@ -12502,7 +12500,7 @@ dependencies = [
  "aws-lc-rs",
  "ring",
  "rustls-pki-types",
- "untrusted 0.9.0",
+ "untrusted",
 ]
 
 [[package]]
@@ -12690,7 +12688,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da046153aa2352493d6cb7da4b6e5c0c057d8a1d0a9aa8560baffdd945acd414"
 dependencies = [
  "ring",
- "untrusted 0.9.0",
+ "untrusted",
 ]
 
 [[package]]
@@ -15152,12 +15150,6 @@ name = "unsafe-libyaml"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
-
-[[package]]
-name = "untrusted"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
 
 [[package]]
 name = "untrusted"
