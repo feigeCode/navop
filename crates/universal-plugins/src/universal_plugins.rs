@@ -728,6 +728,7 @@ mod tests {
 ///
 /// 与 DB driver.json 走同一 `ConnectionRepository::resolve_runtime_connection`
 /// 机制;解析副本仅存内存,禁止落盘/同步/日志。仓库不可用时原样返回。
+#[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
 pub(crate) fn resolve_extension_connection_for_runtime(
     connection: one_core::storage::StoredConnection,
     cx: &gpui::App,

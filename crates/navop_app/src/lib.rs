@@ -5,6 +5,13 @@
 
 rust_i18n::i18n!("locales", fallback = "en");
 
+/// 扩展 UI 依赖 nsh 扩展宿主（`nsh-host` feature）。没有宿主时（32 位 Windows
+/// 构建不带该 feature），侧栏、工具箱、新建连接向导、工具暴露设置里的扩展入口
+/// 统一隐藏，而不是留一个点了没反应的壳。
+pub(crate) fn nsh_ui_available() -> bool {
+    cfg!(feature = "nsh-host")
+}
+
 mod auth;
 
 mod ai_chat_acp;
@@ -20,6 +27,7 @@ mod dev_extension_registry;
 #[cfg(feature = "shell")]
 mod dev_host_ops;
 mod env_file;
+#[cfg(feature = "nsh-host")]
 mod extension_update;
 mod file_association;
 mod file_open;
@@ -660,6 +668,8 @@ where
                 // 循环已启动（macOS 的 NSStatusItem 要求如此）。
                 system_tray::init(cx);
                 update::schedule_update_check(cx);
+                // 扩展市场与更新都跑在 nsh 宿主里；没有宿主（32 位 Windows）时不排期。
+                #[cfg(feature = "nsh-host")]
                 extension_update::schedule_plugin_update_check(window, cx);
                 let view = cx.new(|cx| NavopApp::new(window, cx));
                 let root = cx.new(|cx| Root::new(view, window, cx));
