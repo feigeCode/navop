@@ -76,15 +76,6 @@ fn pick_navop_window<T: Copy>(
         .or_else(|| stacked.and_then(|stack| stack.first().copied()))
 }
 
-fn pick_active_non_main_window<T: Copy + PartialEq>(
-    active: Option<T>,
-    registered_main: Option<T>,
-) -> Option<T> {
-    let active = active?;
-    let registered_main = registered_main?;
-    (active != registered_main).then_some(active)
-}
-
 /// 只返回注册时保存的主窗口 handle。
 ///
 /// 托盘恢复必须作用在同一个主窗口上，而且必须幂等，所以刻意不做
@@ -100,10 +91,6 @@ pub(crate) fn resolve_navop_window(cx: &App) -> Option<AnyWindowHandle> {
         MAIN_WINDOW_HANDLE.get().copied(),
         window_stack.as_deref(),
     )
-}
-
-pub(crate) fn resolve_active_non_main_window(cx: &App) -> Option<AnyWindowHandle> {
-    pick_active_non_main_window(cx.active_window(), MAIN_WINDOW_HANDLE.get().copied())
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -424,24 +411,6 @@ mod tests {
         assert_eq!(
             pick_toggle_target(None, Some(&empty), Some(7_u8)),
             Some(7_u8)
-        );
-    }
-
-    #[test]
-    fn pick_active_non_main_window_requires_registered_main_window() {
-        assert_eq!(pick_active_non_main_window(Some(2_u8), None), None);
-    }
-
-    #[test]
-    fn pick_active_non_main_window_ignores_main_window() {
-        assert_eq!(pick_active_non_main_window(Some(1_u8), Some(1_u8)), None);
-    }
-
-    #[test]
-    fn pick_active_non_main_window_returns_auxiliary_window() {
-        assert_eq!(
-            pick_active_non_main_window(Some(2_u8), Some(1_u8)),
-            Some(2_u8)
         );
     }
 

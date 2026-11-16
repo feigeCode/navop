@@ -1330,11 +1330,54 @@ fn init_action_handlers(cx: &mut App) {
 }
 
 fn close_active_window(cx: &mut App) {
-    let Some(active_window) = crate::app_init::resolve_active_non_main_window(cx) else {
+    let Some(active_window) = cx.active_window() else {
         return;
     };
 
+    if Some(active_window) == crate::app_init::main_window_handle() {
+        cx.defer(move |cx| {
+            let _ = active_window.update(cx, |_, window, cx| {
+                handle_main_window_close_request(window, cx);
+            });
+        });
+        return;
+    }
+
     one_core::window_close::request_close_window(active_window, cx);
+}
+
+/// 主窗口关闭统一入口：标题栏、系统关闭事件和“关闭当前窗口”快捷键共用。
+fn handle_main_window_close_request(window: &mut Window, cx: &mut App) {
+    match crate::system_tray::main_window_close_action(
+        crate::system_tray::is_available(),
+        AppSettings::current(cx).close_button_behavior,
+    ) {
+        crate::system_tray::MainWindowCloseAction::AskUser => {
+            let Some(app) = cx
+                .try_global::<GlobalNavopApp>()
+                .map(|global| global.app.clone())
+            else {
+                return;
+            };
+            let _ = app.update(cx, |app, cx| {
+                app.show_close_choice_prompt(window, cx);
+            });
+        }
+        crate::system_tray::MainWindowCloseAction::HideToTray => {
+            let Some(app) = cx
+                .try_global::<GlobalNavopApp>()
+                .map(|global| global.app.clone())
+            else {
+                return;
+            };
+            let _ = app.update(cx, |app, cx| {
+                app.hide_main_window_to_tray(window, cx);
+            });
+        }
+        crate::system_tray::MainWindowCloseAction::RequestQuit => {
+            request_window_quit(window, cx);
+        }
+    }
 }
 
 pub struct NavopApp {
@@ -1374,30 +1417,10 @@ impl NavopApp {
         cx.set_global(GlobalNavopApp {
             app: app_entity.clone(),
         });
-        let app = app_entity.downgrade();
         window.on_window_should_close(cx, move |window, cx| {
-            match crate::system_tray::main_window_close_action(
-                crate::system_tray::is_available(),
-                AppSettings::current(cx).close_button_behavior,
-            ) {
-                crate::system_tray::MainWindowCloseAction::AskUser => {
-                    // 托盘可用但用户还没固化偏好：先问「最小化到托盘还是退出」，
-                    // 窗口一律保留（返回 false），由弹窗里的选择决定下一步。
-                    let _ = app.update(cx, |app, cx| {
-                        app.show_close_choice_prompt(window, cx);
-                    });
-                }
-                crate::system_tray::MainWindowCloseAction::HideToTray => {
-                    let _ = app.update(cx, |app, cx| {
-                        app.hide_main_window_to_tray(window, cx);
-                    });
-                }
-                crate::system_tray::MainWindowCloseAction::RequestQuit => {
-                    let _ = app.update(cx, |app, cx| {
-                        app.request_quit(window, cx);
-                    });
-                }
-            }
+            // 托盘可用但用户还没固化偏好时先询问；窗口一律保留（返回 false），
+            // 由选择决定隐藏到托盘还是走退出确认。
+            handle_main_window_close_request(window, cx);
             false
         });
         cx.observe_window_bounds(window, |app, window, cx| {
@@ -2000,8 +2023,12 @@ mod tests {
     }
 
     #[test]
-    fn platform_close_shortcut_closes_only_the_active_auxiliary_window() {
+    fn platform_close_shortcut_uses_the_same_policy_for_main_and_auxiliary_windows() {
         let source = include_str!("navop_app.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source before tests");
         let keybindings = source
             .split("fn init_keybindings(")
             .nth(1)
@@ -2038,10 +2065,19 @@ mod tests {
             }
         );
         assert!(!keybindings.contains("ClosePanel"));
-        assert!(close_handler.contains("resolve_active_non_main_window(cx)"));
+        assert!(close_handler.contains("cx.active_window()"));
+        assert!(close_handler.contains("crate::app_init::main_window_handle()"));
+        assert!(close_handler.contains("handle_main_window_close_request(window, cx)"));
         assert!(close_handler.contains("one_core::window_close::request_close_window"));
         assert!(!close_handler.contains("remote_file_editor"));
         assert!(!close_handler.contains("window.remove_window()"));
+        assert_eq!(
+            2,
+            production
+                .matches("handle_main_window_close_request(window, cx);")
+                .count(),
+            "系统关闭事件与快捷键必须共用同一个主窗口关闭策略"
+        );
     }
 
     #[test]
