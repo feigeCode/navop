@@ -37,6 +37,17 @@ use tracing::warn;
 const PANEL_MIN_SIZE: Pixels = px(100.0);
 const TREE_PANEL_DEFAULT_SIZE: Pixels = px(250.0);
 
+fn redis_tab_title(
+    workspace_name: Option<&str>,
+    active_connection_name: Option<&str>,
+) -> SharedString {
+    active_connection_name
+        .filter(|name| !name.trim().is_empty())
+        .or_else(|| workspace_name.filter(|name| !name.trim().is_empty()))
+        .unwrap_or("Redis")
+        .into()
+}
+
 fn resized_tree_panel_size(
     mouse_x: Pixels,
     view_bounds: Bounds<Pixels>,
@@ -236,7 +247,11 @@ impl RedisTabView {
                         return;
                     };
 
-                    this.active_connection_id = connection_id.parse().ok();
+                    let next_active_connection_id = connection_id.parse().ok();
+                    if this.active_connection_id != next_active_connection_id {
+                        this.active_connection_id = next_active_connection_id;
+                        cx.emit(TabContentEvent::StateChanged);
+                    }
                     let should_refresh =
                         matches!(event, RedisTreeViewEvent::ConnectionEstablished { .. });
                     for view in &this.tool_views {
@@ -434,14 +449,13 @@ impl TabContent for RedisTabView {
     }
 
     fn title(&self, _cx: &App) -> SharedString {
-        if let Some(workspace) = &self.workspace {
-            workspace.name.clone().into()
-        } else {
+        redis_tab_title(
+            self.workspace
+                .as_ref()
+                .map(|workspace| workspace.name.as_str()),
             self.active_connection()
-                .map(|connection| connection.name.clone())
-                .unwrap_or_else(|| "Redis".to_string())
-                .into()
-        }
+                .map(|connection| connection.name.as_str()),
+        )
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
@@ -567,6 +581,19 @@ impl TabContent for RedisTabView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redis_tab_title_prefers_active_connection_over_workspace() {
+        let title = redis_tab_title(Some("我的"), Some("测试redis"));
+
+        assert_eq!("测试redis", title.as_ref());
+    }
+
+    #[test]
+    fn redis_tab_title_falls_back_to_workspace_then_redis() {
+        assert_eq!("我的", redis_tab_title(Some("我的"), Some("  ")).as_ref());
+        assert_eq!("Redis", redis_tab_title(None, None).as_ref());
+    }
 
     #[test]
     fn redis_tools_sidebar_keeps_toolbar_visible_by_default() {
