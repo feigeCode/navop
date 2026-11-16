@@ -803,6 +803,9 @@ mod tests {
         );
         let notify = probe("native-notify");
         assert_eq!(notify["ok"], serde_json::json!(true), "nativeModule 调用: {notify}");
+        // `probe` 是按引用捕获 `probes` 的 Copy 闭包；这一行只是显式标出它的
+        // 最后一次使用，让 NLL 在下面的 `drop(probes)` 之前结束对 guard 的借用。
+        #[allow(dropping_copy_types)]
         drop(probe);
         drop(probes);
 
