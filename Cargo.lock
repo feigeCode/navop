@@ -8312,7 +8312,7 @@ dependencies = [
 
 [[package]]
 name = "navop_app"
-version = "0.23.2"
+version = "0.23.3"
 dependencies = [
  "agent_runtime",
  "ai_chat_view",
