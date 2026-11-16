@@ -46,9 +46,9 @@ mod settings;
 mod sync_conflict_dialog;
 mod system_tray;
 mod team_tab;
-#[cfg(all(feature = "nsh-host", feature = "database"))]
+#[cfg(all(feature = "nsh-db", feature = "database"))]
 mod db_extension_panels;
-#[cfg(all(feature = "nsh-host", feature = "shell"))]
+#[cfg(all(feature = "nsh-terminal", feature = "shell"))]
 mod terminal_extension_panels;
 mod toolbox_tab;
 mod update;
@@ -590,28 +590,28 @@ where
         // 扩展页面 SQL 调用经它执行；DataDomain::init 已装好 global）。
         // `db` 依赖只在 `database` feature 下存在；navop-shell 这类
         // `nsh-host + shell`（无 database）构建不能引用它。
-        #[cfg(all(feature = "nsh-host", feature = "database"))]
+        #[cfg(all(feature = "nsh-db", feature = "database"))]
         if let Some(db_state) = cx.try_global::<db::GlobalDbState>() {
             universal_plugins::set_nsh_db_state(db_state.clone());
         }
         // 页面请求刷新 DB 树时，回主线程刷新所有打开着的树（db_view 拥有
         // 这些 Entity，nsh 宿主不依赖 db_view，所以用函数指针注入）。
-        #[cfg(all(feature = "nsh-host", feature = "database"))]
+        #[cfg(all(feature = "nsh-db", feature = "database"))]
         universal_plugins::set_nsh_db_tree_refresh(db_view::db_tree_registry::refresh_open_db_trees);
         // 终端侧边栏的扩展面板：catalog 提供面板声明，nsh 宿主提供视图。
         // 必须在 universal_plugins::init 之后（NshHost global 先就位）。
-        #[cfg(all(feature = "nsh-host", feature = "shell"))]
+        #[cfg(all(feature = "nsh-terminal", feature = "shell"))]
         terminal_extension_panels::init_terminal_extension_panels(cx);
         // 数据库侧栏的扩展面板（anchor = "db-sidebar"）：同一套 catalog 声明，
         // 面板视图同样由 nsh 宿主创建。
-        #[cfg(all(feature = "nsh-host", feature = "database"))]
+        #[cfg(all(feature = "nsh-db", feature = "database"))]
         db_extension_panels::init_database_extension_panels(cx);
         // 资源工作台的 terminal 页面需要宿主提供可嵌入终端;未注册时
         // 工作台渲染「此构建不可用」而不是崩溃。
         // dev 工程注册表与 `navop.dev` 操作集：nsh 宿主接管时也要装，
         // 否则开发者工具页拿不到「加载本地工程」这套能力。
         #[cfg(feature = "shell")]
-        #[cfg(any(feature = "nsh-host", feature = "nsh-host"))]
+        #[cfg(feature = "nsh-host")]
         dev_extension_registry::install_dev_host_ops(cx);
 
         let settings = AppSettings::current(cx);

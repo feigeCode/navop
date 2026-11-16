@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+default = []
+# 脚本页面宿主（nsh）：navop.terminal 原生组件、`navop.*` nativeModule 都靠它。
+# 32 位 Windows 的 JS 运行时（quickjs-jit）没有可用 JIT，流水线默认关闭。
+nsh-host = ["dep:nsh-platform-gpui", "universal-plugins/nsh-host"]
+
 [dependencies]
 tool_runtime.workspace = true
 anyhow.workspace = true
@@ -28,8 +34,8 @@ remote_desktop_view.workspace = true
 sftp_view.workspace = true
 terminal.workspace = true
 terminal_view.workspace = true
-universal-plugins = { workspace = true, features = ["nsh-host"] }
-nsh-platform-gpui.workspace = true
+universal-plugins.workspace = true
+nsh-platform-gpui = { workspace = true, optional = true }
 ssh.workspace = true
 ssh_form.workspace = true
 tracing.workspace = true

@@ -163,7 +163,12 @@ github-updates = ["app_kit/github-updates"]
 macos-touchbar-window-hide = ["one-core/macos-touchbar-window-hide"]
 screenshot-safe = []
 # M2 spike：挂一个 nsh AppView tab（nsh 扩展宿主方向验证），默认不开。
-nsh-host = ["universal-plugins/nsh-host", "universal-plugins/nsh-db", "universal-plugins/nsh-terminal"]
+# 能力面按需开：`nsh-host` 只是宿主本身（tab / 面板 / AI 组件）；
+# 数据库与终端两个平面各自一个 feature，避免 navop-shell 被带进 db_view、
+# navop-data 被带进 terminal_view（`tests/product_dependency_isolation.rs` 会称重）。
+nsh-host = ["universal-plugins/nsh-host"]
+nsh-db = ["nsh-host", "universal-plugins/nsh-db"]
+nsh-terminal = ["nsh-host", "universal-plugins/nsh-terminal"]
 wasm-components = ["extension-runtime/wasm-components"]
 windows-native-rdp = ["remote_desktop_view?/windows-native-rdp"]
 

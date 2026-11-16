@@ -364,7 +364,7 @@ test("the embedded webview is an opt-in feature on every platform", () => {
   // host must ask for `default-features = false` and list the modules it wants.
   assert.match(
     mainCargo,
-    /nsh-host = \[\s*"universal-plugins\/nsh-host",\s*"universal-plugins\/nsh-db",\s*"universal-plugins\/nsh-terminal"\s*\]/,
+    /nsh-host = \[\s*"universal-plugins\/nsh-host"\s*\]\s*nsh-db = \[\s*"nsh-host",\s*"universal-plugins\/nsh-db"\s*\]\s*nsh-terminal = \[\s*"nsh-host",\s*"universal-plugins\/nsh-terminal"\s*\]/,
   );
   assert.match(
     universalPluginsCargo,

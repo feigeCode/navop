@@ -8,6 +8,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 mod connection_forms;
 mod connection_openers;
 mod lifecycle;
+#[cfg(feature = "nsh-host")]
 mod native_terminal;
 mod recording;
 mod remote_desktop_window;
@@ -178,6 +179,7 @@ impl Domain for ShellDomain {
         shell_extras::init(cx);
         terminal_view::init(cx);
         remote_desktop_view::init(cx);
+        #[cfg(feature = "nsh-host")]
         native_terminal::install(cx);
         workbench_terminal::install_workbench_terminal_provider();
         Ok(())
