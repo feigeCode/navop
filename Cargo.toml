@@ -441,16 +441,17 @@ gpui-fast-windows          = { git = "https://github.com/feigeCode/gpui-fast.git
 # navop 全量 gpui-fast 后，整套 gpui-fast-* 都进编译图；同名源已在上面
 # [patch.crates-io] 块内统一钉到 release/v0.1.13，此处不再重复声明。
 
-# Legacy devices (e.g. Huawei VRP gear) put redundant leading `0x00` bytes in the
-# RSA exponent/modulus of their `ssh-rsa` host key, which RFC 4251 § 5 forbids but
-# OpenSSH tolerates when reading a peer's message. Without this patch the whole
-# host key fails to parse and the connection dies with
-# `SshKey: \`mpint\` encoding invalid`. Fork of RustCrypto/SSH carrying tag
-# `ssh-encoding/v0.3.0-navop.2`, which backports the `mpint` decoding from
-# upstream #622 (merged for 0.4) to the 0.3 release line; drop once 0.4 is
-# released and russh follows.
+# Legacy devices (e.g. Huawei VRP gear) send non-canonical `mpint` values in
+# their `ssh-rsa` host key: redundant leading `0x00` bytes, or a missing `0x00`
+# sign byte when the MSB is set (so the value looks negative). RFC 4251 § 5
+# forbids both, but OpenSSH-style clients read the payload as an unsigned
+# magnitude. Without this patch the host key fails to parse and the connection
+# dies with `SshKey: \`mpint\` encoding invalid`.
+# Fork of RustCrypto/SSH carrying tag `ssh-encoding/v0.3.0-navop.3`: backports
+# the tolerant `mpint` decoding from upstream #622 to the 0.3 release line, plus
+# legacy sign-padding tolerance; drop once 0.4 is released and russh follows.
 # Regression test: crates/ssh/tests/legacy_hostkey_mpint.rs
-ssh-encoding = { git = "https://github.com/feigeCode/SSH.git", tag = "ssh-encoding/v0.3.0-navop.2" }
+ssh-encoding = { git = "https://github.com/feigeCode/SSH.git", tag = "ssh-encoding/v0.3.0-navop.3" }
 
 # russh 上游（v0.65.1 与 master 现有 ssh-key 0.7.0-rc.12）钉 `rsa = "0.10"`
 # （即 ^0.10.0，排除预发布版），而 quickjs-jit-stdlib 0.14.2（nsh 宿主的

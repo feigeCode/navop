@@ -13574,7 +13574,7 @@ dependencies = [
 [[package]]
 name = "ssh-encoding"
 version = "0.3.0"
-source = "git+https://github.com/feigeCode/SSH.git?tag=ssh-encoding%2Fv0.3.0-navop.2#a9bd478961776478872f9419b123f63f75662a43"
+source = "git+https://github.com/feigeCode/SSH.git?tag=ssh-encoding%2Fv0.3.0-navop.3#6fae9777a99516521529dcc2106155de34ff4917"
 dependencies = [
  "base64ct",
  "bytes",
