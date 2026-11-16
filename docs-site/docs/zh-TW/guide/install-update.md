@@ -30,7 +30,7 @@ navop-<version>-<label>.<ext>
 | Windows x64 | `navop-<version>-windows-x64.msi`、`navop-<version>-windows-x64.exe`、`navop-<version>-windows-x64.zip`、`navop-<version>-windows-x64-portable.zip` |
 | Windows 32 位元 | `navop-<version>-win32.*` |
 | Linux x64 | `navop-<version>-linux-x64.tar.gz`、`navop-<version>-linux-x64-portable.tar.gz`、`navop_<version>_amd64.deb`、`navop-<version>-1.x86_64.rpm`、`navop_<version>_amd64.AppImage`、`navop-<version>-linux-x64-gpu-stack.tar.gz` |
-| Linux ARM64 | `navop-<version>-linux-arm64.tar.gz`、`navop-<version>-linux-arm64-portable.tar.gz`、`navop-<version>-linux-arm64-gpu-stack.tar.gz` |
+| Linux ARM64 | `navop-<version>-linux-arm64.tar.gz`、`navop-<version>-linux-arm64-portable.tar.gz`、`navop_<version>_arm64.deb`、`navop-<version>-1.aarch64.rpm`、`navop_<version>_arm64.AppImage`、`navop-<version>-linux-arm64-gpu-stack.tar.gz` |
 
 另外也提供 Scoop 與 Flatpak，見下文。目前版本號以下載中心或 Releases 頁面為準，本文不硬編碼。
 
@@ -98,13 +98,20 @@ cd navop-<version>-linux-x64
 ### deb / rpm / AppImage
 
 ```bash
+# Linux x64
 sudo apt install ./navop_<version>_amd64.deb
 sudo dnf install ./navop-<version>-1.x86_64.rpm
 chmod +x navop_<version>_amd64.AppImage
 ./navop_<version>_amd64.AppImage
+
+# Linux ARM64
+sudo apt install ./navop_<version>_arm64.deb
+sudo dnf install ./navop-<version>-1.aarch64.rpm
+chmod +x navop_<version>_arm64.AppImage
+./navop_<version>_arm64.AppImage
 ```
 
-這三種套件只隨 Linux x64 目標發佈。
+這三種套件隨 Linux x64 與 ARM64 兩個目標發佈，檔名中的架構後綴不同：x64 用 `amd64`（deb / AppImage）與 `x86_64`（rpm），ARM64 用 `arm64`（deb / AppImage）與 `aarch64`（rpm）。
 
 ### GPU 圖形相依套件
 

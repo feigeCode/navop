@@ -323,8 +323,12 @@ jobs:
             ];
             const target = knownTargets.find((candidate) => fileName.includes(candidate));
             if (target) return target;
-            if (/_(?:[^_]+)_amd64\.(?:deb|AppImage)$/.test(fileName) || /\.x86_64\.rpm$/.test(fileName)) {
-              return "x86_64-unknown-linux-gnu";
+            if (/_(?:[^_]+)_(?:amd64|arm64)\.(?:deb|AppImage)$/.test(fileName) || /\.(?:x86_64|aarch64)\.rpm$/.test(fileName)) {
+              // deb / AppImage 用 dpkg 架构名，rpm 用 aarch64；两者都要映射回
+              // 自更新器认识的 target triple。
+              return /_(?:[^_]+)_arm64\.(?:deb|AppImage)$/.test(fileName) || /\.aarch64\.rpm$/.test(fileName)
+                ? "aarch64-unknown-linux-gnu"
+                : "x86_64-unknown-linux-gnu";
             }
             return "universal";
           }

@@ -30,7 +30,7 @@ navop-<version>-<label>.<ext>
 | Windows x64 | `navop-<version>-windows-x64.msi`, `navop-<version>-windows-x64.exe`, `navop-<version>-windows-x64.zip`, `navop-<version>-windows-x64-portable.zip` |
 | Windows 32-bit | `navop-<version>-win32.*` |
 | Linux x64 | `navop-<version>-linux-x64.tar.gz`, `navop-<version>-linux-x64-portable.tar.gz`, `navop_<version>_amd64.deb`, `navop-<version>-1.x86_64.rpm`, `navop_<version>_amd64.AppImage`, `navop-<version>-linux-x64-gpu-stack.tar.gz` |
-| Linux ARM64 | `navop-<version>-linux-arm64.tar.gz`, `navop-<version>-linux-arm64-portable.tar.gz`, `navop-<version>-linux-arm64-gpu-stack.tar.gz` |
+| Linux ARM64 | `navop-<version>-linux-arm64.tar.gz`, `navop-<version>-linux-arm64-portable.tar.gz`, `navop_<version>_arm64.deb`, `navop-<version>-1.aarch64.rpm`, `navop_<version>_arm64.AppImage`, `navop-<version>-linux-arm64-gpu-stack.tar.gz` |
 
 Scoop and Flatpak are also available, described below. The current version number is shown on the [Download Center](https://navop.dev/en-US/extensions) or the Releases page; it is not hard-coded here.
 
@@ -98,13 +98,20 @@ cd navop-<version>-linux-x64
 ### deb / rpm / AppImage
 
 ```bash
+# Linux x64
 sudo apt install ./navop_<version>_amd64.deb
 sudo dnf install ./navop-<version>-1.x86_64.rpm
 chmod +x navop_<version>_amd64.AppImage
 ./navop_<version>_amd64.AppImage
+
+# Linux ARM64
+sudo apt install ./navop_<version>_arm64.deb
+sudo dnf install ./navop-<version>-1.aarch64.rpm
+chmod +x navop_<version>_arm64.AppImage
+./navop_<version>_arm64.AppImage
 ```
 
-These packages ship only for the Linux x64 target.
+These three package formats ship for both the Linux x64 and ARM64 targets; the architecture suffix differs: x64 uses `amd64` (deb / AppImage) and `x86_64` (rpm), ARM64 uses `arm64` (deb / AppImage) and `aarch64` (rpm).
 
 ### GPU stack package
 
