@@ -7,13 +7,14 @@ use crate::SftpView;
 use crate::left_remote_state::LeftRemoteConnectionState;
 use crate::ssh_config::{self, SshCredentialPromptPolicy};
 use gpui::{
-    Context, Entity, IntoElement, ParentElement, Styled, WeakEntity, Window, div, prelude::*, px,
+    Context, Entity, IntoElement, ParentElement, Styled, Subscription, WeakEntity, Window, div,
+    prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme, WindowExt as _,
     button::{Button, ButtonVariants},
     dialog::DialogFooter,
-    input::{Input, InputState},
+    input::{Input, InputEvent, InputState},
     v_flex,
 };
 use rust_i18n::t;
@@ -39,6 +40,7 @@ pub(crate) struct LeftCredentialInputs {
     pub(crate) username: Option<Entity<InputState>>,
     pub(crate) password: Option<Entity<InputState>>,
     pub(crate) error: Option<String>,
+    _subscriptions: Vec<Subscription>,
 }
 
 /// 空用户名/密码的本地化提示；都合规时返回 `None`。
@@ -81,6 +83,27 @@ impl SftpView {
                     .masked(true)
             })
         });
+        let mut subscriptions = Vec::new();
+        for input in username.iter().chain(password.iter()) {
+            subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                |this, _, event: &InputEvent, window, cx| {
+                    if !is_primary_enter(event) {
+                        return;
+                    }
+                    let Some(target) = this
+                        .left_credential_inputs
+                        .as_ref()
+                        .map(|inputs| inputs.target)
+                    else {
+                        return;
+                    };
+                    let submitted = this.submit_left_credentials(target, cx);
+                    finish_left_credential_submission(submitted, window, cx);
+                },
+            ));
+        }
         self.left_credential_inputs = Some(LeftCredentialInputs {
             target: LeftCredentialPromptTarget {
                 connection_id,
@@ -90,6 +113,7 @@ impl SftpView {
             username: username.clone(),
             password: password.clone(),
             error: None,
+            _subscriptions: subscriptions,
         });
         if let Some(endpoint) = self.left_remote.as_mut() {
             endpoint.state = LeftRemoteConnectionState::AwaitingCredentials;
@@ -179,15 +203,15 @@ impl SftpView {
         &mut self,
         target: LeftCredentialPromptTarget,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if self.close_state.is_closing() {
-            return;
+            return false;
         }
         let Some(inputs) = self.left_credential_inputs.as_ref() else {
-            return;
+            return false;
         };
         if inputs.target != target || !target.is_current(self) {
-            return;
+            return false;
         }
         let policy = inputs.policy;
         let username = inputs
@@ -203,7 +227,7 @@ impl SftpView {
             credential_validation_error(policy, username.as_deref(), password.as_deref())
         {
             self.apply_left_credential_error(error, cx);
-            return;
+            return false;
         }
 
         let applied = self.left_remote.as_mut().map(|endpoint| {
@@ -243,11 +267,13 @@ impl SftpView {
                     inputs.target.generation = self.left_connection_generation.current();
                 }
                 cx.notify();
+                true
             }
             Some(Err(error)) => {
                 self.apply_left_credential_error(error.to_string(), cx);
+                false
             }
-            None => {}
+            None => false,
         }
     }
 
@@ -314,19 +340,43 @@ fn left_credential_prompt_footer(
             .label(t!("Credentials.connect").to_string())
             .primary()
             .on_click(move |_, window, cx| {
-                window.close_dialog(cx);
                 let _ = connect_view.update(cx, |this, cx| {
-                    this.submit_left_credentials(target, cx);
+                    let submitted = this.submit_left_credentials(target, cx);
+                    finish_left_credential_submission(submitted, window, cx);
                 });
             })
             .into_any_element(),
     ])
 }
 
+fn finish_left_credential_submission(
+    submitted: bool,
+    window: &mut Window,
+    cx: &mut Context<SftpView>,
+) {
+    window.close_dialog(cx);
+    if !submitted {
+        cx.defer_in(window, |this, window, cx| {
+            this.show_left_credential_prompt(window, cx);
+        });
+    }
+}
+
+fn is_primary_enter(event: &InputEvent) -> bool {
+    matches!(
+        event,
+        InputEvent::PressEnter {
+            secondary: false,
+            ..
+        }
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::credential_validation_error;
+    use super::{credential_validation_error, is_primary_enter};
     use crate::ssh_config::SshCredentialPromptPolicy;
+    use gpui_component::input::InputEvent;
 
     #[test]
     fn blank_required_fields_are_reported_locally() {
@@ -349,5 +399,18 @@ mod tests {
 
         assert!(credential_validation_error(password_only, Some(""), None).is_none());
         assert!(credential_validation_error(password_only, None, Some("")).is_some());
+    }
+
+    #[test]
+    fn only_plain_enter_submits_credentials() {
+        assert!(is_primary_enter(&InputEvent::PressEnter {
+            secondary: false,
+            shift: false,
+        }));
+        assert!(!is_primary_enter(&InputEvent::PressEnter {
+            secondary: true,
+            shift: false,
+        }));
+        assert!(!is_primary_enter(&InputEvent::Change));
     }
 }

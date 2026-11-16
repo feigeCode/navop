@@ -586,6 +586,13 @@
 - **验证方式**：配置 contract 断言 64 × 256 KiB 与 300 秒；重试测试覆盖成功重试、永久错误、最多一次和退避期间取消；运行 `cargo test -p sftp -p sftp_transfer`，并在真实 SFTP 上批量上传 500 MB 级文件观察吞吐与 finalize 阶段。
 - **适用范围**：`crates/sftp/src/russh_impl.rs`、`crates/sftp_transfer/src/operation.rs` 及所有后台 SFTP 上传入口。
 
+- **标题**：SFTP `READDIR` 名称是不可信输入，下载前必须校验单层组件并检查本地符号链接
+- **触发信号**：恶意或异常服务端返回 `../outside.txt`、`..\outside.txt`、绝对路径或盘符路径，目录下载把文件写到用户选择目录外；或所选目录内预置符号链接后递归下载穿透。
+- **根因 / 约束**：`russh-sftp` 3.0.1 只过滤精确的 `.`/`..`，其余 `filename` 原样进入 `DirEntry`。旧下载逻辑用 `strip_prefix`、`trim_start_matches('/')` 和 `Path::join` 构造本地路径，既不做路径规范化，也不检查最终 containment；GUI 冲突检查只覆盖顶层条目。
+- **正确做法**：在 `sftp` crate 统一用 `is_valid_remote_entry_name` 校验服务器名称：非空、非 `.`/`..`、拒绝 `/`、`\`、NUL，并要求目标平台解析后恰好一个 `Component::Normal`，遇到非法名称失败关闭。递归下载再按 `/` 校验每个相对组件；本地根目录 canonicalize，逐级 `create_dir`，拒绝符号链接，canonicalize 后必须仍 `starts_with(root)`。直接下载也通过 `safe_local_download_path` 复用同一名称校验。
+- **验证方式**：fake SFTP `READDIR` 返回 `../outside.txt`，断言下载失败且目录外 sentinel 不变；覆盖绝对路径、反斜杠、根目录正常下载和符号链接逃逸；运行 `cargo test -p sftp -p ftp -p sftp_view`。
+- **适用范围**：`crates/sftp/src/{lib,russh_impl}.rs`、`crates/sftp_view/src/lib.rs`、`crates/terminal_view/src/sidebar/file_manager_panel.rs`、`crates/ftp/src/listing.rs`，以及所有从远程目录项构造本地路径的下载入口。
+
 - **标题**：批量上传冲突要逐项决策，Apply all 只作用于同类且策略必须绑定到单项
 - **触发信号**：同一批文件/目录存在多个重名项，需要逐个选择跳过、保留两者、合并或覆盖，并允许把当前决定应用到后续同类冲突。
 - **根因 / 约束**：文件与目录支持的策略不同；若只保存最后一次选择并在末尾批量应用，前面目录的 Merge/Replace 决策会被覆盖，可能误删远端独有内容。重连期间旧弹窗的目录快照也不能继续提交到新连接。
