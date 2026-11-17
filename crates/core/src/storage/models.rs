@@ -463,8 +463,8 @@ impl SshAccountExpect {
 pub struct SshElevationExpect {
     /// 是否自动应答会话内的 `su` / `sudo` 密码提示。
     ///
-    /// `None` 表示按登录方式取默认值：密码认证时服务器本来就知道该密码，
-    /// 默认开启；密钥 / Agent 认证默认关闭，避免把密码交给远端伪造的提示。
+    /// 默认关闭：`None` 与 `Some(false)` 都按关闭处理，只有用户在 SSH 表单里
+    /// 手动勾选（落库为 `Some(true)`）才会自动填入，避免把密码交给远端伪造的提示。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_fill: Option<bool>,
     /// 提权密码；为空时使用本次连接的登录密码。
@@ -481,17 +481,15 @@ impl SshElevationExpect {
 
     /// 解析本次连接的生效配置：返回「是否自动应答」与「实际使用的密码」。
     ///
-    /// `login_password` 是本次连接实际使用的登录密码（含用户临时输入）；它同时
-    /// 决定密码认证的默认开关，因为服务器已经知道这个密码时自动填入不增加泄露面。
+    /// 自动应答默认关闭，只有显式开启（`auto_fill == Some(true)`）才生效。
+    /// `login_password` 仅是提权密码为空时的取值来源，不再影响开关。
     pub fn resolve(&self, login_password: Option<&str>) -> (bool, Option<String>) {
         let password = if self.password.is_empty() {
             login_password.map(str::to_string)
         } else {
             Some(self.password.clone())
         };
-        let enabled = self
-            .auto_fill
-            .unwrap_or_else(|| login_password.is_some_and(|value| !value.is_empty()));
+        let enabled = self.auto_fill.unwrap_or(false);
         (enabled && password.is_some(), password)
     }
 }
@@ -5160,15 +5158,28 @@ mod serial_tests {
     }
 
     #[test]
-    fn elevation_expect_defaults_to_the_login_method() {
+    fn elevation_expect_is_disabled_by_default() {
         let default = SshElevationExpect::default();
         assert!(default.is_empty(), "默认配置不携带任何信息");
+        // 默认关闭：即使登录方式本身知道密码，也要用户显式开启才会自动应答。
         assert_eq!(
             default.resolve(Some("login-pass")),
-            (true, Some("login-pass".into()))
+            (false, Some("login-pass".into()))
         );
         assert_eq!(default.resolve(None), (false, None));
         assert_eq!(default.resolve(Some("")), (false, Some(String::new())));
+    }
+
+    #[test]
+    fn elevation_expect_password_alone_does_not_enable_auto_fill() {
+        let elevation = SshElevationExpect {
+            auto_fill: None,
+            password: "root-pass".into(),
+        };
+        assert_eq!(
+            elevation.resolve(Some("login-pass")),
+            (false, Some("root-pass".into()))
+        );
     }
 
     #[test]

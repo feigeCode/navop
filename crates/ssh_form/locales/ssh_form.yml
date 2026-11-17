@@ -338,9 +338,9 @@ SSH:
     zh-CN: 自动填入 su/sudo 密码
     zh-HK: 自動填入 su/sudo 密碼
   sudo_auto_fill_desc:
-    en: Submit the password automatically when su or sudo asks for it. Auto-filling stops for the session after a rejected password.
-    zh-CN: 执行 su 或 sudo 提示输入密码时自动提交密码；密码被拒后本次会话不再自动填写。
-    zh-HK: 執行 su 或 sudo 提示輸入密碼時自動提交密碼；密碼被拒後本次工作階段不再自動填寫。
+    en: Submit the password automatically when su or sudo asks for it. Off by default; turn it on explicitly. Auto-filling stops for the session after a rejected password.
+    zh-CN: 执行 su 或 sudo 提示输入密码时自动提交密码。默认关闭，需手动勾选开启；密码被拒后本次会话不再自动填写。
+    zh-HK: 執行 su 或 sudo 提示輸入密碼時自動提交密碼。預設關閉，需手動勾選開啟；密碼被拒後本次工作階段不再自動填寫。
   sudo_password:
     en: Elevation password
     zh-CN: 提权密码
