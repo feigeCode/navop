@@ -41,6 +41,40 @@ fn stale_git_results_are_rejected_after_workspace_changes() {
 }
 
 #[test]
+fn workspace_header_exposes_hidden_files_toggle() {
+    let source = include_str!("header.rs");
+    assert!(
+        source.contains("\"workspace-toggle-hidden\""),
+        "工作区侧边栏顶部操作区必须有隐藏文件开关"
+    );
+    assert!(
+        source.contains("toggle_show_hidden"),
+        "顶部开关必须复用现有隐藏文件切换逻辑"
+    );
+    assert!(
+        source.contains("show_hidden_files") && source.contains("hide_hidden_files"),
+        "开关提示必须明确当前点击后会显示还是隐藏文件"
+    );
+}
+
+#[test]
+fn blank_workspace_files_area_opens_a_directory_context_menu() {
+    let source = include_str!("render.rs");
+    assert!(
+        source.contains("build_files_context_menu"),
+        "工作区文件区应复用目录级菜单，而不是文件项菜单"
+    );
+    assert!(
+        source.contains(".context_menu("),
+        "目录级菜单必须接在文件区容器上，空白处才能响应右键"
+    );
+    assert!(
+        source.contains("min_h(px(80.0))"),
+        "空目录仍要保留可右键的空白区域"
+    );
+}
+
+#[test]
 fn repository_root_stays_stable_when_terminal_moves_into_a_subdirectory() {
     let root = PathBuf::from("/workspace/repository");
     let child = root.join("src");

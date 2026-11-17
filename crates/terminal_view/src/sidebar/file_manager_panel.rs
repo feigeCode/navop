@@ -5770,6 +5770,148 @@ impl FileManagerPanel {
         menu
     }
 
+    /// 文件列表空白处的目录级菜单。
+    ///
+    /// 重命名、编辑、下载、删除、属性等动作都依赖具体文件项，空白区域没有
+    /// 可作用的目标，因此这里只保留当前目录可执行的动作。
+    fn build_directory_context_menu(
+        menu: PopupMenu,
+        view: &Entity<Self>,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let (current_path, is_connected, can_paste, show_hidden) = {
+            let state = view.read(cx);
+            let is_connected = state.connection_state == ConnectionState::Connected;
+            (
+                state.current_path.clone(),
+                is_connected,
+                can_paste_remote_file_clipboard(state.file_clipboard.as_ref(), is_connected),
+                state.show_hidden,
+            )
+        };
+
+        let view_paste = view.clone();
+        let view_new_file = view.clone();
+        let view_new_folder = view.clone();
+        let view_upload_file = view.clone();
+        let view_upload_folder = view.clone();
+        let view_favorite = view.clone();
+        let view_cd = view.clone();
+        let view_copy_path = view.clone();
+        let view_refresh = view.clone();
+        let view_toggle_hidden = view.clone();
+        let paste_target = current_path.clone();
+        let favorite_path = current_path.clone();
+        let terminal_path = current_path.clone();
+        let copied_path = current_path;
+
+        menu.min_w(px(190.0))
+            .item(
+                PopupMenuItem::new(t!("FileManager.paste"))
+                    .icon(IconName::Paste)
+                    .disabled(!can_paste)
+                    .on_click(
+                        window.listener_for(&view_paste, move |this, _, window, cx| {
+                            this.paste_remote_file_clipboard(paste_target.clone(), window, cx);
+                        }),
+                    ),
+            )
+            .separator()
+            .item(
+                PopupMenuItem::new(t!("FileManager.new_file"))
+                    .icon(IconName::File)
+                    .disabled(!is_connected)
+                    .on_click(
+                        window.listener_for(&view_new_file, move |this, _, window, cx| {
+                            this.show_new_file_dialog(window, cx);
+                        }),
+                    ),
+            )
+            .item(
+                PopupMenuItem::new(t!("FileManager.new_folder"))
+                    .icon(IconName::NewFolder)
+                    .disabled(!is_connected)
+                    .on_click(
+                        window.listener_for(&view_new_folder, move |this, _, window, cx| {
+                            this.show_new_folder_dialog(window, cx);
+                        }),
+                    ),
+            )
+            .separator()
+            .item(
+                PopupMenuItem::new(t!("FileManager.upload_file"))
+                    .icon(IconName::Upload)
+                    .disabled(!is_connected)
+                    .on_click(window.listener_for(
+                        &view_upload_file,
+                        move |this, _, window, cx| {
+                            this.select_and_upload_files(window, cx);
+                        },
+                    )),
+            )
+            .item(
+                PopupMenuItem::new(t!("FileManager.upload_folder"))
+                    .icon(IconName::Upload)
+                    .disabled(!is_connected)
+                    .on_click(window.listener_for(
+                        &view_upload_folder,
+                        move |this, _, window, cx| {
+                            this.select_and_upload_folder(window, cx);
+                        },
+                    )),
+            )
+            .separator()
+            .item(
+                PopupMenuItem::new(t!("FileManager.favorite_add_path"))
+                    .icon(IconName::Star)
+                    .disabled(!is_connected)
+                    .on_click(
+                        window.listener_for(&view_favorite, move |this, _, window, cx| {
+                            this.add_favorite_path(&favorite_path, window, cx);
+                        }),
+                    ),
+            )
+            .item(
+                PopupMenuItem::new(t!("FileManager.cd_to_terminal"))
+                    .icon(IconName::SquareTerminal)
+                    .disabled(!is_connected)
+                    .on_click(window.listener_for(&view_cd, move |_this, _, _, cx| {
+                        cx.emit(FileManagerPanelEvent::CdToTerminal(terminal_path.clone()));
+                    })),
+            )
+            .item(
+                PopupMenuItem::new(t!("FileManager.copy_path"))
+                    .icon(IconName::Copy)
+                    .on_click(
+                        window.listener_for(&view_copy_path, move |_this, _, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(copied_path.clone()));
+                        }),
+                    ),
+            )
+            .separator()
+            .item(
+                PopupMenuItem::new(t!("FileManager.refresh"))
+                    .icon(IconName::Refresh)
+                    .on_click(window.listener_for(&view_refresh, move |this, _, _, cx| {
+                        this.refresh_dir(cx);
+                    })),
+            )
+            .item(
+                PopupMenuItem::new(t!("FileManager.toggle_hidden"))
+                    .icon(IconName::Eye)
+                    .checked(show_hidden)
+                    .on_click(
+                        window.listener_for(&view_toggle_hidden, move |this, _, _, cx| {
+                            this.show_hidden = !this.show_hidden;
+                            this.apply_filter();
+                            this.clear_selection();
+                            cx.notify();
+                        }),
+                    ),
+            )
+    }
+
     /// 渲染底部传输进度条（紧凑型，适合侧边栏窄宽度）
     fn render_transfer_progress(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self
@@ -6090,6 +6232,7 @@ impl FileManagerPanel {
         let background = self.colors.background;
         let foreground = self.colors.foreground;
         let hover = self.colors.muted.opacity(0.72);
+        let directory_menu_view = cx.entity();
 
         v_flex()
             .size_full()
@@ -6245,7 +6388,15 @@ impl FileManagerPanel {
                             foreground,
                             cx.theme().drop_target,
                             cx.theme().drag_border,
-                        )),
+                        ))
+                        .context_menu(move |menu, window, cx| {
+                            Self::build_directory_context_menu(
+                                menu,
+                                &directory_menu_view,
+                                window,
+                                cx,
+                            )
+                        }),
                 )
             })
             // 底部传输进度条
@@ -7623,6 +7774,31 @@ mod tests {
                 "{label}不能把图标写死成次要前景色，否则开/关同色"
             );
         }
+    }
+
+    #[test]
+    fn blank_file_list_surface_opens_a_directory_context_menu() {
+        let source = include_str!("file_manager_panel.rs");
+        assert!(
+            source.contains("fn build_directory_context_menu("),
+            "文件列表空白处需要独立的目录级菜单"
+        );
+        let render_start = source
+            .find("fn render_file_list")
+            .expect("render_file_list definition");
+        let render_tail = &source[render_start..];
+        let render = render_tail
+            .split("\n}\n\nfn render_file_drop_overlay")
+            .next()
+            .expect("render_file_list body");
+        assert!(
+            render.contains("build_directory_context_menu"),
+            "文件列表容器必须挂上目录级右键菜单"
+        );
+        assert!(
+            render.contains(".context_menu("),
+            "只有把菜单接在容器上，空白区域才能响应右键"
+        );
     }
 
     #[test]
