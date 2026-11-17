@@ -19,6 +19,28 @@ impl fmt::Display for LegacyAlgorithmRequired {
 
 impl StdError for LegacyAlgorithmRequired {}
 
+/// A private key loading/decoding failure with an actionable remediation hint.
+#[derive(Debug)]
+pub(crate) struct PrivateKeyLoadFailed {
+    message: String,
+}
+
+impl fmt::Display for PrivateKeyLoadFailed {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl StdError for PrivateKeyLoadFailed {}
+
+/// Wrap private-key loading failures so the terminal does not reduce a wrong
+/// passphrase or malformed key to russh's opaque `SshKey: cryptographic error`.
+pub(crate) fn add_private_key_load_hint(error: Error) -> Error {
+    Error::new(PrivateKeyLoadFailed {
+        message: format!("{}\n\n{error:#}", t!("Ssh.private_key_load_failed")),
+    })
+}
+
 /// Add an actionable hint when russh reports that no common legacy-key
 /// algorithm exists and this connection has not enabled legacy algorithms.
 ///
