@@ -1,18 +1,24 @@
-//! 从全量产品（或同构）sqlite 库只读读取连接。
+//! 从全量产品（或同构）sqlite 库只读读取连接与钥匙串凭据。
 //!
 //! 只读打开，避免误改用户现有数据；列用 `PRAGMA table_info` 自适应，方便跨
-//! 版本读取（老库缺 `workspace_id`、`remark` 等列也能导入）。
+//! 版本读取（老库缺 `workspace_id`、`remark` 等列也能导入）。源库的密码/密钥
+//! 可能由另一套主密钥加密，导入时按需用 `source_key` 解开后再交给目标端重新加密。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use chrono::Utc;
+use one_core::crypto;
+use one_core::storage::{
+    SshAccountExpect, decrypt_sensitive_params_with_key, has_encrypted_sensitive_fields,
+};
 use rusqlite::{Connection, OpenFlags};
 
 use super::bundle::{
-    BUNDLE_VERSION, BundleConnection, BundleWorkspace, ConnectionBundle, workspace_bundle_id,
+    BUNDLE_VERSION, BundleConnection, BundleCredential, BundleWorkspace, ConnectionBundle,
+    workspace_bundle_id,
 };
 /// 三个产品共用的数据库文件名（与全量产品 `get_db_path` 同源，仅测试断言用）。
 #[cfg(test)]
@@ -111,7 +117,231 @@ pub fn read_bundle_from_sqlite(path: &Path) -> Result<ConnectionBundle> {
         app_id: Some(SOURCE_APP_ID.to_string()),
         workspaces,
         connections,
+        encrypted_credentials: None,
     })
+}
+
+/// 全量产品数据库直读结果：连接/工作区 + 被连接引用的钥匙串条目。
+///
+/// 与迁移包不同，源库里的密码/密钥是用**源环境主密钥**加密的，因此读取时
+/// 必须提供源主密钥；没有加密字段的旧库可以直接迁移。
+#[derive(Debug)]
+pub struct SqliteMigration {
+    pub bundle: ConnectionBundle,
+    pub credentials: Vec<BundleCredential>,
+}
+
+/// 读取源库的连接、工作区，以及被引用到的钥匙串条目。
+///
+/// `source_key` 为空时退回当前会话已解锁的主密钥（同机迁移通常就是同一把）；
+/// 源库确实存在加密字段但仍解不开时会明确报错，而不是把不可用的密文搬过去。
+pub fn read_migration_from_sqlite(
+    path: &Path,
+    source_key: Option<&str>,
+) -> Result<SqliteMigration> {
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("无法只读打开数据库：{}", path.display()))?;
+    let source_key = source_key
+        .map(str::to_owned)
+        .or_else(crypto::get_raw_master_key);
+    let (workspaces, workspace_names) = read_workspaces(&connection)?;
+    let mut connections = read_connections(&connection, &workspace_names)?;
+    for connection in &mut connections {
+        if !has_encrypted_sensitive_fields(&connection.params) {
+            continue;
+        }
+        let Some(source_key) = source_key.as_deref() else {
+            bail!(
+                "源库连接「{}」包含已加密的密码/密钥，请输入源环境主密钥后再导入",
+                connection.name
+            );
+        };
+        connection.params = decrypt_sensitive_params_with_key(&connection.params, source_key)
+            .with_context(|| {
+                format!(
+                    "无法解密源库连接「{}」的密码/密钥，请确认源环境主密钥",
+                    connection.name
+                )
+            })?;
+    }
+
+    let (referenced_ids, referenced_cloud_ids) =
+        super::collect_references_from_params(connections.iter().map(|item| item.params.as_str()));
+    let credentials = if referenced_ids.is_empty() && referenced_cloud_ids.is_empty() {
+        Vec::new()
+    } else {
+        read_credentials(
+            &connection,
+            &referenced_ids,
+            &referenced_cloud_ids,
+            source_key.as_deref(),
+        )?
+    };
+    validate_migration_references(&connections, &credentials)?;
+
+    Ok(SqliteMigration {
+        bundle: ConnectionBundle {
+            version: BUNDLE_VERSION,
+            exported_at: Utc::now().timestamp(),
+            app_id: Some(SOURCE_APP_ID.to_string()),
+            workspaces,
+            connections,
+            encrypted_credentials: None,
+        },
+        credentials,
+    })
+}
+
+fn validate_migration_references(
+    connections: &[BundleConnection],
+    credentials: &[BundleCredential],
+) -> Result<()> {
+    let available_ids: HashSet<i64> = credentials.iter().map(|credential| credential.id).collect();
+    let available_cloud_ids: HashSet<&str> = credentials
+        .iter()
+        .filter_map(|credential| credential.cloud_id.as_deref())
+        .collect();
+    for connection in connections {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&connection.params) else {
+            continue;
+        };
+        if let Some((credential_id, cloud_id)) =
+            super::unresolved_credential_reference(&value, &available_ids, &available_cloud_ids)
+        {
+            match cloud_id {
+                Some(cloud_id) => bail!(
+                    "源库连接「{}」引用了不存在的钥匙串条目（cloud id：{cloud_id}），请先在源环境修复该凭据",
+                    connection.name
+                ),
+                None => bail!(
+                    "源库连接「{}」引用了不存在的钥匙串条目（id：{credential_id}），请先在源环境修复该凭据",
+                    connection.name
+                ),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_credentials(
+    conn: &Connection,
+    referenced_ids: &HashSet<i64>,
+    referenced_cloud_ids: &HashSet<String>,
+    source_key: Option<&str>,
+) -> Result<Vec<BundleCredential>> {
+    let columns = table_columns(conn, "credential_entries")?;
+    if columns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = format!(
+        "SELECT {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {} FROM credential_entries ORDER BY {}",
+        column_expr(&columns, "id", "rowid"),
+        column_expr(&columns, "name", "NULL"),
+        column_expr(&columns, "username", "NULL"),
+        column_expr(&columns, "password", "NULL"),
+        column_expr(&columns, "private_key_path", "NULL"),
+        column_expr(&columns, "private_key_content", "NULL"),
+        column_expr(&columns, "passphrase", "NULL"),
+        column_expr(&columns, "ssh_expect", "NULL"),
+        column_expr(&columns, "sync_enabled", "0"),
+        column_expr(&columns, "forward_to_agent", "0"),
+        column_expr(&columns, "cloud_id", "NULL"),
+        column_expr(&columns, "id", "rowid"),
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| {
+        Ok(RawCredential {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            username: row.get(2)?,
+            password: row.get(3)?,
+            private_key_path: row.get(4)?,
+            private_key_content: row.get(5)?,
+            passphrase: row.get(6)?,
+            ssh_expect: row.get(7)?,
+            sync_enabled: row.get(8)?,
+            forward_to_agent: row.get(9)?,
+            cloud_id: row.get(10)?,
+        })
+    })?;
+    let mut credentials = Vec::new();
+    for row in rows {
+        let raw = row?;
+        let cloud_id = non_empty(raw.cloud_id);
+        if !referenced_ids.contains(&raw.id)
+            && !cloud_id
+                .as_ref()
+                .is_some_and(|cloud_id| referenced_cloud_ids.contains(cloud_id))
+        {
+            continue;
+        }
+        let name = non_empty(raw.name).unwrap_or_else(|| format!("凭据 {}", raw.id));
+        let password = decrypt_secret(raw.password, source_key, &name, "password")?;
+        let private_key_content = decrypt_secret(
+            raw.private_key_content,
+            source_key,
+            &name,
+            "private_key_content",
+        )?;
+        let passphrase = decrypt_secret(raw.passphrase, source_key, &name, "passphrase")?;
+        let ssh_expect = match decrypt_secret(raw.ssh_expect, source_key, &name, "ssh_expect")? {
+            Some(serialized) if !serialized.is_empty() => {
+                serde_json::from_str::<SshAccountExpect>(&serialized)
+                    .with_context(|| format!("源库钥匙串条目「{name}」的自动登录配置已损坏"))?
+            }
+            _ => SshAccountExpect::default(),
+        };
+        credentials.push(BundleCredential {
+            id: raw.id,
+            name,
+            username: raw.username,
+            password,
+            private_key_path: raw.private_key_path,
+            private_key_content,
+            passphrase,
+            ssh_expect,
+            sync_enabled: raw.sync_enabled.unwrap_or_default() != 0,
+            forward_to_agent: raw.forward_to_agent.unwrap_or_default() != 0,
+            cloud_id,
+        });
+    }
+    Ok(credentials)
+}
+
+fn decrypt_secret(
+    value: Option<String>,
+    source_key: Option<&str>,
+    credential: &str,
+    field: &str,
+) -> Result<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if !value.starts_with("ENC:") {
+        return Ok(Some(value));
+    }
+    let Some(source_key) = source_key else {
+        bail!("源库钥匙串条目「{credential}」包含已加密的凭据，请输入源环境主密钥后再导入");
+    };
+    crypto::decrypt_with_key(&value, source_key)
+        .map(Some)
+        .with_context(|| {
+            format!("无法解密源库钥匙串条目「{credential}」的 {field}，请确认源环境主密钥")
+        })
+}
+
+struct RawCredential {
+    id: i64,
+    name: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    private_key_path: Option<String>,
+    private_key_content: Option<String>,
+    passphrase: Option<String>,
+    ssh_expect: Option<String>,
+    sync_enabled: Option<i64>,
+    forward_to_agent: Option<i64>,
+    cloud_id: Option<String>,
 }
 
 fn read_workspaces(conn: &Connection) -> Result<(Vec<BundleWorkspace>, HashMap<i64, String>)> {
@@ -437,6 +667,79 @@ mod tests {
             pick_candidate(vec![newer.0.clone(), older.0.clone()]),
             Some(newer.0.clone())
         );
+    }
+
+    #[test]
+    fn migration_reads_referenced_plaintext_credentials() {
+        let db = TempDb::create(
+            "CREATE TABLE connections (id INTEGER PRIMARY KEY, name TEXT, connection_type TEXT, params TEXT);
+             CREATE TABLE credential_entries (id INTEGER PRIMARY KEY, name TEXT, username TEXT, password TEXT, cloud_id TEXT);
+             INSERT INTO connections (id, name, connection_type, params) VALUES (
+                 1, '主库', 'Database',
+                 '{\"credential_reference\":{\"credential_id\":9,\"credential_cloud_id\":null,\"username\":true,\"password\":true,\"private_key\":false,\"passphrase\":false}}'
+             );
+             INSERT INTO credential_entries (id, name, username, password) VALUES (9, '生产库', 'root', 'plain-pass');
+             INSERT INTO credential_entries (id, name, username, password) VALUES (10, '未引用', 'root', 'unused');",
+        );
+        let migration = read_migration_from_sqlite(&db.0, None).expect("读取失败");
+        assert_eq!(migration.credentials.len(), 1);
+        assert_eq!(migration.credentials[0].id, 9);
+        assert_eq!(
+            migration.credentials[0].password.as_deref(),
+            Some("plain-pass")
+        );
+    }
+
+    #[test]
+    fn migration_decrypts_source_credentials_with_source_key() {
+        let encrypted = crypto::encrypt_with_key("source-secret", "source-master");
+        let db = TempDb::create(&format!(
+            "CREATE TABLE connections (id INTEGER PRIMARY KEY, name TEXT, connection_type TEXT, params TEXT);
+             CREATE TABLE credential_entries (id INTEGER PRIMARY KEY, name TEXT, password TEXT, ssh_expect TEXT, cloud_id TEXT);
+             INSERT INTO connections (id, name, connection_type, params) VALUES (
+                 1, '主库', 'Database',
+                 '{{\"credential_reference\":{{\"credential_id\":9,\"credential_cloud_id\":null,\"username\":true,\"password\":true,\"private_key\":false,\"passphrase\":false}}}}'
+             );
+             INSERT INTO credential_entries (id, name, password) VALUES (9, '生产库', '{encrypted}');"
+        ));
+        let migration = read_migration_from_sqlite(&db.0, Some("source-master")).expect("应能解密");
+        assert_eq!(
+            migration.credentials[0].password.as_deref(),
+            Some("source-secret")
+        );
+
+        let error =
+            read_migration_from_sqlite(&db.0, Some("wrong-master")).expect_err("错误主密钥应失败");
+        assert!(error.to_string().contains("无法解密"), "{error}");
+    }
+
+    #[test]
+    fn migration_decrypts_encrypted_connection_params_with_source_key() {
+        let encrypted = crypto::encrypt_with_key("db-pass", "source-master");
+        let db = TempDb::create(&format!(
+            "CREATE TABLE connections (id INTEGER PRIMARY KEY, name TEXT, connection_type TEXT, params TEXT);
+             INSERT INTO connections (id, name, connection_type, params) VALUES (
+                 1, '主库', 'Database', '{{\"host\":\"db.internal\",\"password\":\"{encrypted}\"}}'
+             );"
+        ));
+        let migration = read_migration_from_sqlite(&db.0, Some("source-master")).expect("应能解密");
+        let params: serde_json::Value =
+            serde_json::from_str(&migration.bundle.connections[0].params).unwrap();
+        assert_eq!(params["password"], "db-pass");
+    }
+
+    #[test]
+    fn migration_rejects_dangling_credential_reference() {
+        let db = TempDb::create(
+            "CREATE TABLE connections (id INTEGER PRIMARY KEY, name TEXT, connection_type TEXT, params TEXT);
+             CREATE TABLE credential_entries (id INTEGER PRIMARY KEY, name TEXT, password TEXT);
+             INSERT INTO connections (id, name, connection_type, params) VALUES (
+                 1, '主库', 'Database',
+                 '{\"credential_reference\":{\"credential_id\":9,\"credential_cloud_id\":null,\"username\":true,\"password\":true,\"private_key\":false,\"passphrase\":false}}'
+             );",
+        );
+        let error = read_migration_from_sqlite(&db.0, None).expect_err("悬空引用应失败");
+        assert!(error.to_string().contains("不存在的钥匙串条目"), "{error}");
     }
 
     #[test]

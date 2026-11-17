@@ -3629,6 +3629,137 @@ fn decrypt_json_passwords(json_str: &str) -> String {
     }
 }
 
+/// 导出迁移包时脱敏 `params`：把敏感字段的值替换为空串。
+///
+/// 迁移包里的可见参数只用于展示与排重，真正的密码/密钥会另行用导出密码加密
+/// 后放在包内的独立密文里。扩展连接的敏感字段名由扩展自定义，统一收敛在
+/// `secrets` 对象里，因此整组脱敏；其余连接按 [`is_sensitive_field`] 递归处理。
+/// 只替换字符串值，布尔/数字等普通配置保持原样。
+pub fn redact_sensitive_params(json_str: &str) -> String {
+    match serde_json::from_str::<Value>(json_str) {
+        Ok(mut value) => {
+            redact_sensitive_value(&mut value);
+            serde_json::to_string(&value).unwrap_or_else(|_| json_str.to_string())
+        }
+        Err(_) => json_str.to_string(),
+    }
+}
+
+fn redact_sensitive_value(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, val) in map.iter_mut() {
+                if is_sensitive_field(key) {
+                    if matches!(val, Value::String(_)) {
+                        *val = Value::String(String::new());
+                    }
+                } else if key == "secrets" && val.is_object() {
+                    if let Value::Object(secrets) = val {
+                        for secret in secrets.values_mut() {
+                            if matches!(secret, Value::String(_)) {
+                                *secret = Value::String(String::new());
+                            }
+                        }
+                    }
+                } else {
+                    redact_sensitive_value(val);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                redact_sensitive_value(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 判断 `params` 里是否还有用主密钥加密的敏感字段。
+///
+/// 全量产品数据库直读时用它决定是否需要向用户索取源环境主密钥；扩展连接的
+/// 敏感字段统一在 `secrets` 对象里，因此整组检查。
+pub fn has_encrypted_sensitive_fields(json_str: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(json_str) else {
+        return false;
+    };
+    encrypted_sensitive_value(&value)
+}
+
+fn encrypted_sensitive_value(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => map.iter().any(|(key, value)| {
+            if key == "secrets" && value.is_object() {
+                value
+                    .as_object()
+                    .is_some_and(|secrets| secrets.values().any(encrypted_sensitive_string))
+            } else if is_sensitive_field(key) {
+                encrypted_sensitive_string(value)
+            } else {
+                encrypted_sensitive_value(value)
+            }
+        }),
+        Value::Array(values) => values.iter().any(encrypted_sensitive_value),
+        _ => false,
+    }
+}
+
+fn encrypted_sensitive_string(value: &Value) -> bool {
+    value.as_str().is_some_and(|text| text.starts_with("ENC:"))
+}
+
+/// 用显式主密钥解密 `params` 里的敏感字段，供全量产品环境迁移使用。
+///
+/// 与 [`StoredConnection::decrypt_params`] 不同，这里不依赖当前会话的主密钥，
+/// 因此可以解开从另一套环境拷贝过来的数据库；普通字段原样保留。
+pub fn decrypt_sensitive_params_with_key(
+    json_str: &str,
+    master_key: &str,
+) -> anyhow::Result<String> {
+    let mut value: Value = serde_json::from_str(json_str)?;
+    decrypt_sensitive_value_with_key(&mut value, master_key)?;
+    Ok(serde_json::to_string(&value)?)
+}
+
+fn decrypt_sensitive_value_with_key(value: &mut Value, master_key: &str) -> anyhow::Result<()> {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map.iter_mut() {
+                if key == "secrets" && value.is_object() {
+                    if let Some(secrets) = value.as_object_mut() {
+                        for secret in secrets.values_mut() {
+                            decrypt_sensitive_string_with_key(secret, master_key)?;
+                        }
+                    }
+                } else if is_sensitive_field(key) {
+                    decrypt_sensitive_string_with_key(value, master_key)?;
+                } else {
+                    decrypt_sensitive_value_with_key(value, master_key)?;
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                decrypt_sensitive_value_with_key(value, master_key)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn decrypt_sensitive_string_with_key(value: &mut Value, master_key: &str) -> anyhow::Result<()> {
+    let Value::String(secret) = value else {
+        return Ok(());
+    };
+    if !secret.starts_with("ENC:") {
+        return Ok(());
+    }
+    *secret = crypto::decrypt_with_key(secret, master_key)
+        .map_err(|error| anyhow::anyhow!("敏感字段解密失败：{error}"))?;
+    Ok(())
+}
+
 pub(crate) fn re_encrypt_sensitive_json(
     json_str: &str,
     old_key: &str,
@@ -5235,5 +5366,81 @@ mod serial_tests {
                 "elevation": { "auto_fill": true, "password": "root-pass" }
             })
         );
+    }
+
+    #[test]
+    fn redact_sensitive_params_hides_secrets_but_keeps_readable_fields() {
+        let params = serde_json::json!({
+            "host": "db.internal",
+            "port": 5432,
+            "password": "p@ss",
+            "nested": { "private_key": "key", "passphrase": "phrase" },
+            "login_script": [{ "send": "enable-pass" }],
+            "api_password": "token",
+            "secrets": { "api_key": "extension-secret", "region": "cn" },
+            "save_password": true
+        })
+        .to_string();
+
+        let redacted = redact_sensitive_params(&params);
+        let value: Value = serde_json::from_str(&redacted).unwrap();
+
+        assert_eq!(value["host"], "db.internal");
+        assert_eq!(value["port"], 5432);
+        assert_eq!(value["save_password"], true, "非字符串配置不应被改写");
+        for (pointer, expected) in [
+            ("/password", ""),
+            ("/nested/private_key", ""),
+            ("/nested/passphrase", ""),
+            ("/login_script/0/send", ""),
+            ("/api_password", ""),
+            ("/secrets/api_key", ""),
+            ("/secrets/region", ""),
+        ] {
+            assert_eq!(
+                value.pointer(pointer).and_then(Value::as_str),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn redact_sensitive_params_keeps_invalid_json_unchanged() {
+        assert_eq!(redact_sensitive_params("{not json"), "{not json");
+    }
+
+    #[test]
+    fn decrypt_sensitive_params_with_explicit_key_restores_only_secrets() {
+        let params = serde_json::json!({
+            "host": "db.internal",
+            "password": crypto::encrypt_with_key("p@ss", "source-master"),
+            "nested": {"private_key_content": crypto::encrypt_with_key("key", "source-master")},
+            "save_password": true
+        })
+        .to_string();
+        assert!(has_encrypted_sensitive_fields(&params));
+
+        let decrypted =
+            decrypt_sensitive_params_with_key(&params, "source-master").expect("应能解密");
+        let value: Value = serde_json::from_str(&decrypted).unwrap();
+        assert_eq!(value["host"], "db.internal");
+        assert_eq!(value["password"], "p@ss");
+        assert_eq!(value["nested"]["private_key_content"], "key");
+        assert_eq!(value["save_password"], true);
+        assert!(!has_encrypted_sensitive_fields(&decrypted));
+
+        let error = decrypt_sensitive_params_with_key(&params, "wrong-master").unwrap_err();
+        assert!(error.to_string().contains("解密失败"), "{error}");
+    }
+
+    #[test]
+    fn decrypt_sensitive_params_keeps_plaintext_and_invalid_json() {
+        let params = r#"{"host":"127.0.0.1","password":"plain"}"#;
+        assert!(!has_encrypted_sensitive_fields(params));
+        assert_eq!(
+            decrypt_sensitive_params_with_key(params, "unused").unwrap(),
+            params
+        );
+        assert!(decrypt_sensitive_params_with_key("{not json", "unused").is_err());
     }
 }

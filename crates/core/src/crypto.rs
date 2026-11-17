@@ -1069,6 +1069,38 @@ pub fn decrypt_with_key(encrypted: &str, master_key: &str) -> Result<String, Cry
     }
 }
 
+/// 使用调用方提供的口令加密数据（不依赖当前主密钥状态）。
+///
+/// 与主密钥加密使用同一套算法（AES-256-GCM + Argon2id），但每次都生成随机盐，
+/// 写成自描述密文；因此迁移包换设备、重启后仍能靠同一口令解开。用于「导出连接
+/// 迁移包」这类由用户自定义口令保护、且必须能在另一台机器上导入的数据。
+///
+/// 空口令会被拒绝，避免导出包出现「无密码也能解」的凭据。
+pub fn encrypt_with_passphrase(plaintext: &str, passphrase: &str) -> Result<String, CryptoError> {
+    if passphrase.is_empty() {
+        return Err(CryptoError::EmptyNewPassword);
+    }
+    let spec = default_kdf_spec();
+    encrypt_blob_with_spec(plaintext, passphrase, &spec).ok_or(CryptoError::EncodingFailed)
+}
+
+/// 使用调用方提供的口令解密 [`encrypt_with_passphrase`] 生成的密文。
+///
+/// 只接受带 Argon2id 参数与随机盐的自描述格式；旧版固定盐密文无法跨设备还原，
+/// 因此明确拒绝，避免把「格式不认识的密文」误判成「密码错误」。
+pub fn decrypt_with_passphrase(encrypted: &str, passphrase: &str) -> Result<String, CryptoError> {
+    if passphrase.is_empty() {
+        return Err(CryptoError::EmptyNewPassword);
+    }
+    let Some((spec, nonce, ciphertext)) = parse_encrypted_blob(encrypted) else {
+        return Err(CryptoError::InvalidDataFormat);
+    };
+    let key = derive_key_with_spec(passphrase, &spec).ok_or(CryptoError::DecryptionFailed)?;
+    let plaintext =
+        decrypt_fields(&nonce, &ciphertext, &[key]).ok_or(CryptoError::DecryptionFailed)?;
+    String::from_utf8(plaintext).map_err(|_| CryptoError::EncodingFailed)
+}
+
 /// 重新加密数据（从旧密钥迁移到新密钥）
 ///
 /// 用于修改主密钥时重新加密已加密的数据。
@@ -1880,5 +1912,49 @@ mod tests {
 
         assert!(parse_verification_data("not-base64!!").is_none());
         assert!(!verify_master_key("any", "not-base64!!"));
+    }
+
+    #[test]
+    fn passphrase_round_trip_uses_self_describing_envelope() {
+        let ciphertext = encrypt_with_passphrase("迁移包里的密码", "export-password")
+            .expect("导出密码加密应成功");
+
+        assert!(ciphertext.starts_with(ENCRYPTED_PREFIX));
+        assert!(
+            parse_encrypted_blob(&ciphertext).is_some(),
+            "导出密文必须是带 KDF 参数的自描述格式，才能跨设备解密"
+        );
+        assert_eq!(
+            "迁移包里的密码",
+            decrypt_with_passphrase(&ciphertext, "export-password").expect("正确密码应能解密")
+        );
+    }
+
+    #[test]
+    fn passphrase_decryption_rejects_wrong_and_empty_password() {
+        let ciphertext = encrypt_with_passphrase("secret", "right-password").expect("加密应成功");
+
+        assert_eq!(
+            Err(CryptoError::DecryptionFailed),
+            decrypt_with_passphrase(&ciphertext, "wrong-password")
+        );
+        assert_eq!(
+            Err(CryptoError::EmptyNewPassword),
+            decrypt_with_passphrase(&ciphertext, "")
+        );
+        assert_eq!(
+            Err(CryptoError::EmptyNewPassword),
+            encrypt_with_passphrase("secret", "")
+        );
+    }
+
+    #[test]
+    fn passphrase_decryption_rejects_legacy_fixed_salt_ciphertext() {
+        let legacy = encrypt_blob_with_spec("secret", "password", &KdfSpec::LegacySha256)
+            .expect("旧格式密文");
+        assert_eq!(
+            Err(CryptoError::InvalidDataFormat),
+            decrypt_with_passphrase(&legacy, "password")
+        );
     }
 }
