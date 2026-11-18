@@ -635,20 +635,24 @@ struct FontOptionsCache {
 }
 
 impl SettingsPanel {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_with_initial_page(InitialPage::First, cx)
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_initial_page(InitialPage::First, window, cx)
     }
 
-    pub fn new_sync(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_with_initial_page(InitialPage::Sync, cx)
+    pub fn new_sync(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_initial_page(InitialPage::Sync, window, cx)
     }
 
-    pub fn new_llm_providers(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_with_initial_page(InitialPage::LlmProviders, cx)
+    pub fn new_llm_providers(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_initial_page(InitialPage::LlmProviders, window, cx)
     }
 
-    fn new_with_initial_page(initial_page: InitialPage, cx: &mut Context<Self>) -> Self {
-        let llm_providers_view = cx.new(|cx| LlmProvidersView::new(cx));
+    fn new_with_initial_page(
+        initial_page: InitialPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let llm_providers_view = cx.new(|cx| LlmProvidersView::new(window, cx));
         let acp_agents_view = cx.new(|cx| AcpAgentsView::new(cx));
         // 检查更新状态由 app 持有（启动时的自动检查可能早于设置页打开），这里只观察它，
         // 让「检查中」和「上次检查结果」能驱动设置页重绘。
@@ -1335,14 +1339,16 @@ impl SettingsPanel {
                     .keywords(shortcut_search_texts()),
                 ),
             ),
-            SettingPage::new(t!("LlmProviders.title")).group(
-                SettingGroup::new().item(
-                    SettingItem::render(move |_options, _window, _cx| {
-                        llm_view.clone().into_any_element()
-                    })
-                    .keywords([t!("LlmProviders.title").to_string()]),
+            SettingPage::new(t!("LlmProviders.title"))
+                .description(t!("LlmProviders.description"))
+                .group(
+                    SettingGroup::new().item(
+                        SettingItem::render(move |_options, _window, _cx| {
+                            llm_view.clone().into_any_element()
+                        })
+                        .keywords([t!("LlmProviders.title").to_string()]),
+                    ),
                 ),
-            ),
             // 账户设置页：账户信息与主密钥是两件独立的事——没有账户也可以有主密钥，
             // 所以拆成两个并列分组，关系与「关于 / 更新」一致。
             SettingPage::new(t!("Settings.Account.title"))

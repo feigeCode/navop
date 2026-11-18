@@ -1,28 +1,106 @@
+//! LLM 供应商设置页：左侧列表 + 右侧详情（master-detail），空态是热门供应商画廊。
+
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, AsyncApp, Context, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, SharedString, Styled, WeakEntity, Window, div, px,
+    AnyElement, App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, FontWeight,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, WindowExt,
     button::{Button, ButtonVariant, ButtonVariants},
     dialog::DialogButtonProps,
-    h_flex, v_flex,
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    v_flex,
 };
+use one_assets::IconName;
 use one_core::llm::{
-    GlobalProviderState, notifier::emit_provider_config_changed, storage::ProviderRepository,
-    types::ProviderConfig,
+    GlobalProviderState,
+    notifier::emit_provider_config_changed,
+    storage::ProviderRepository,
+    types::{ProviderConfig, ProviderType},
 };
 use one_core::storage::{GlobalStorageState, StorageManager, traits::Repository};
 use rust_i18n::t;
 
-use super::provider_form_dialog::ProviderForm;
+use super::provider_badge::{provider_badge, provider_status_dot};
+use super::provider_detail::{ProviderDetail, ProviderDetailEvent};
+
+/// 空态画廊的分组：热门海外 / 国内 / 本地与自托管 / 自定义。
+struct PresetGroup {
+    title: &'static str,
+    types: &'static [ProviderType],
+}
+
+const PRESET_GROUPS: &[PresetGroup] = &[
+    PresetGroup {
+        title: "LlmProviders.gallery_group_global",
+        types: &[
+            ProviderType::OpenAI,
+            ProviderType::Anthropic,
+            ProviderType::Google,
+            ProviderType::OpenRouter,
+            ProviderType::AzureOpenAI,
+        ],
+    },
+    PresetGroup {
+        title: "LlmProviders.gallery_group_cn",
+        types: &[
+            ProviderType::DeepSeek,
+            ProviderType::Zhipu,
+            ProviderType::Aliyun,
+            ProviderType::Volcengine,
+            ProviderType::Moonshot,
+            ProviderType::SiliconFlow,
+            ProviderType::TencentHunyuan,
+            ProviderType::Xiaomi,
+            ProviderType::MiniMax,
+        ],
+    },
+    PresetGroup {
+        title: "LlmProviders.gallery_group_local",
+        types: &[
+            ProviderType::Ollama,
+            ProviderType::Xinference,
+            ProviderType::OpenCodeGo,
+        ],
+    },
+    PresetGroup {
+        title: "LlmProviders.gallery_group_custom",
+        types: &[ProviderType::OpenAICompatible],
+    },
+];
+
+/// 列表搜索：名称、供应商类型、任一模型命中即可（大小写不敏感）。
+pub fn provider_matches_query(provider: &ProviderConfig, query: &str) -> bool {
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    provider.name.to_ascii_lowercase().contains(&query)
+        || provider
+            .provider_type
+            .display_name()
+            .to_ascii_lowercase()
+            .contains(&query)
+        || provider
+            .models
+            .iter()
+            .any(|model| model.to_ascii_lowercase().contains(&query))
+}
 
 pub struct LlmProvidersView {
     focus_handle: FocusHandle,
     storage_manager: StorageManager,
     providers: Vec<ProviderConfig>,
     loading: bool,
+    search_input: Entity<InputState>,
+    search_query: String,
+    /// 当前选中的供应商；`None` 表示在编辑一个还没保存的新供应商。
+    selected_id: Option<i64>,
+    detail: Option<Entity<ProviderDetail>>,
+    detail_subscription: Option<Subscription>,
 }
 
 impl LlmProvidersView {
@@ -33,16 +111,36 @@ impl LlmProvidersView {
         emit_provider_config_changed(cx);
     }
 
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         let storage_state = cx.global::<GlobalStorageState>();
         let storage_manager = storage_state.storage.clone();
+
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("LlmProviders.search_placeholder"))
+                .clean_on_escape()
+        });
+        let search_subscription = cx.subscribe(
+            &search_input,
+            |view: &mut Self, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    view.search_query = view.search_input.read(cx).value().to_string();
+                    cx.notify();
+                }
+            },
+        );
 
         let instance = Self {
             focus_handle,
             storage_manager,
             providers: vec![],
             loading: false,
+            search_input,
+            search_query: String::new(),
+            selected_id: None,
+            detail: None,
+            detail_subscription: Some(search_subscription),
         };
         cx.spawn(async move |entity: WeakEntity<Self>, cx: &mut AsyncApp| {
             let _ = entity.update(cx, |this, cx| {
@@ -73,94 +171,170 @@ impl LlmProvidersView {
             }
         }
         self.loading = false;
+
+        if let Some(selected_id) = self.selected_id {
+            if !self
+                .providers
+                .iter()
+                .any(|provider| provider.id == selected_id)
+            {
+                self.selected_id = None;
+                self.detail = None;
+            }
+        }
         cx.notify();
     }
 
+    fn filtered_providers(&self) -> Vec<&ProviderConfig> {
+        self.providers
+            .iter()
+            .filter(|provider| provider_matches_query(provider, &self.search_query))
+            .collect()
+    }
+
+    fn default_or_first(&self) -> Option<&ProviderConfig> {
+        self.providers
+            .iter()
+            .find(|provider| provider.is_default)
+            .or_else(|| self.providers.first())
+    }
+
+    fn select_provider(&mut self, provider_id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(provider) = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .cloned()
+        else {
+            return;
+        };
+        self.selected_id = Some(provider_id);
+        self.open_detail(Some(provider), window, cx);
+    }
+
     fn add_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_provider_form(None, cx, window);
+        self.selected_id = None;
+        self.open_detail(None, window, cx);
     }
 
-    fn edit_provider(&mut self, provider_id: i64, window: &mut Window, cx: &mut Context<Self>) {
-        let provider = self.providers.iter().find(|p| p.id == provider_id).cloned();
-        self.open_provider_form(provider, cx, window);
+    fn add_preset(
+        &mut self,
+        provider_type: ProviderType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let detail = cx.new(|cx| ProviderDetail::for_preset(provider_type, window, cx));
+        self.attach_detail(detail, window, cx);
     }
 
-    fn open_provider_form(
+    fn open_detail(
         &mut self,
         provider: Option<ProviderConfig>,
-        cx: &mut Context<Self>,
         window: &mut Window,
+        cx: &mut Context<Self>,
     ) {
-        let is_update = provider.is_some();
-        let storage_manager = self.storage_manager.clone();
-        let form = cx.new(|cx| ProviderForm::new_with_config(provider, window, cx));
-        let form_for_ok = form.clone();
-        let view = cx.entity().clone();
+        let detail = cx.new(|cx| ProviderDetail::new(provider, window, cx));
+        self.attach_detail(detail, window, cx);
+    }
 
-        window.open_dialog(cx, move |dialog, _, _| {
-            let form_clone = form_for_ok.clone();
-            let storage_clone = storage_manager.clone();
-            let view_clone = view.clone();
+    fn attach_detail(
+        &mut self,
+        detail: Entity<ProviderDetail>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let subscription = cx.subscribe_in(
+            &detail,
+            window,
+            |view: &mut Self, _, event: &ProviderDetailEvent, window, cx| match event {
+                ProviderDetailEvent::Submit => view.save_detail(window, cx),
+                ProviderDetailEvent::Cancel => view.cancel_edit(window, cx),
+                ProviderDetailEvent::Delete => view.request_delete(window, cx),
+            },
+        );
+        self.detail = Some(detail);
+        self.detail_subscription = Some(subscription);
+        cx.notify();
+    }
 
-            dialog
-                .title(if is_update {
-                    t!("LlmProviders.dialog_edit_title").to_string()
-                } else {
-                    t!("LlmProviders.dialog_add_title").to_string()
-                })
-                .child(form.clone())
-                .confirm()
-                .button_props(DialogButtonProps::default().ok_text(if is_update {
-                    t!("Common.save")
-                } else {
-                    t!("LlmProviders.dialog_add_action")
-                }))
-                .on_ok(move |_, window, cx: &mut App| {
-                    let config_opt = form_clone.update(cx, |form, cx| form.get_config(cx));
+    fn save_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(detail) = self.detail.clone() else {
+            return;
+        };
+        let Some(mut config) = detail.update(cx, |detail, cx| detail.get_config(cx)) else {
+            return;
+        };
 
-                    let Some(mut config) = config_opt else {
-                        window
-                            .push_notification(t!("LlmProviders.required_notice").to_string(), cx);
-                        return false;
-                    };
+        let is_update = self
+            .providers
+            .iter()
+            .any(|provider| provider.id == config.id);
+        let repo = self
+            .storage_manager
+            .get::<ProviderRepository>()
+            .expect("ProviderRepository not found");
 
-                    let repo = storage_clone
-                        .get::<ProviderRepository>()
-                        .expect("ProviderRepository not found");
-
-                    if config.is_default {
-                        if let Ok(existing) = repo.list() {
-                            for mut item in existing {
-                                if item.id != config.id && item.is_default {
-                                    item.is_default = false;
-                                    if let Err(e) = repo.update(&item) {
-                                        tracing::error!("Failed to unset default provider: {}", e);
-                                    }
-                                }
-                            }
+        if config.is_default {
+            if let Ok(existing) = repo.list() {
+                for mut item in existing {
+                    if item.id != config.id && item.is_default {
+                        item.is_default = false;
+                        if let Err(e) = repo.update(&item) {
+                            tracing::error!("Failed to unset default provider: {}", e);
                         }
                     }
+                }
+            }
+        }
 
-                    let result = if is_update {
-                        repo.update(&config)
-                    } else {
-                        repo.insert(&mut config).map(|_| ())
-                    };
+        let result = if is_update {
+            repo.update(&config)
+        } else {
+            repo.insert(&mut config).map(|_| ())
+        };
 
-                    match result {
-                        Ok(_) => {
-                            Self::notify_provider_configs_changed(cx);
-                            _ = view_clone.update(cx, |view, cx| {
-                                view.load_providers(cx);
-                            });
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to save provider: {}", e);
-                        }
-                    }
-                    true
-                })
-        });
+        match result {
+            Ok(()) => {
+                Self::notify_provider_configs_changed(cx);
+                self.reload_providers(cx);
+                self.selected_id = Some(config.id);
+                self.open_detail(Some(config), window, cx);
+            }
+            Err(e) => {
+                tracing::error!("Failed to save provider: {}", e);
+            }
+        }
+    }
+
+    fn cancel_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.selected_id {
+            Some(provider_id) => self.select_provider(provider_id, window, cx),
+            None => {
+                self.detail = None;
+                self.detail_subscription = None;
+                // 还有别的供应商时回到默认那家，否则停在空态画廊。
+                if let Some(provider) = self.default_or_first() {
+                    let provider = provider.clone();
+                    self.selected_id = Some(provider.id);
+                    self.open_detail(Some(provider), window, cx);
+                } else {
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    fn request_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(provider_id) = self.selected_id else {
+            return;
+        };
+        let name = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .map(|provider| provider.name.clone())
+            .unwrap_or_default();
+        self.confirm_delete_provider(provider_id, name, window, cx);
     }
 
     fn delete_provider(&mut self, provider_id: i64, cx: &mut Context<Self>) {
@@ -172,6 +346,9 @@ impl LlmProvidersView {
         match repo.delete(provider_id) {
             Ok(_) => {
                 Self::notify_provider_configs_changed(cx);
+                self.selected_id = None;
+                self.detail = None;
+                self.detail_subscription = None;
                 self.load_providers(cx);
             }
             Err(e) => tracing::error!("Failed to delete provider: {}", e),
@@ -214,341 +391,233 @@ impl LlmProvidersView {
         });
     }
 
-    fn toggle_default(&mut self, provider: &ProviderConfig, cx: &mut Context<Self>) {
-        let repo = self
-            .storage_manager
-            .get::<ProviderRepository>()
-            .expect("ProviderRepository not found");
-
-        let new_default = !provider.is_default;
-
-        // 取消所有其他 provider 的默认标记
-        if new_default {
-            if let Ok(existing) = repo.list() {
-                for mut item in existing {
-                    if item.id != provider.id && item.is_default {
-                        item.is_default = false;
-                        if let Err(e) = repo.update(&item) {
-                            tracing::error!("Failed to unset default provider: {}", e);
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut updated = provider.clone();
-        updated.is_default = new_default;
-
-        match repo.update(&updated) {
-            Ok(_) => {
-                Self::notify_provider_configs_changed(cx);
-                self.load_providers(cx);
-            }
-            Err(e) => tracing::error!("Failed to toggle default provider: {}", e),
-        }
-    }
-
-    fn toggle_provider(&mut self, provider: &ProviderConfig, cx: &mut Context<Self>) {
-        let mut updated = provider.clone();
-        updated.enabled = !updated.enabled;
-
-        let repo = self
-            .storage_manager
-            .get::<ProviderRepository>()
-            .expect("ProviderRepository not found");
-
-        match repo.update(&updated) {
-            Ok(_) => {
-                Self::notify_provider_configs_changed(cx);
-                self.load_providers(cx);
-            }
-            Err(e) => tracing::error!("Failed to toggle provider: {}", e),
-        }
-    }
-}
-
-impl Render for LlmProvidersView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .size_full()
-            .gap_4()
-            .p_6()
-            .child(
-                h_flex()
-                    .justify_between()
-                    .items_center()
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xl()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .child(t!("LlmProviders.title").to_string()),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(t!("LlmProviders.description").to_string()),
-                            ),
-                    )
-                    .child(
-                        Button::new("add-provider")
-                            .with_variant(ButtonVariant::Primary)
-                            .label(t!("LlmProviders.add_provider"))
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.add_provider(window, cx);
-                            })),
-                    ),
-            )
-            .child(if self.loading {
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(t!("LlmProviders.loading").to_string())
-                    .into_any_element()
-            } else if self.providers.is_empty() {
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        v_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(t!("LlmProviders.empty_title").to_string())
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(t!("LlmProviders.empty_description").to_string()),
-                            ),
-                    )
-                    .into_any_element()
-            } else {
-                let mut cards = v_flex().gap_3();
-                for provider in &self.providers {
-                    cards = cards.child(self.render_provider_card(provider, cx));
-                }
-                cards.into_any_element()
-            })
-    }
-}
-
-impl LlmProvidersView {
-    fn render_provider_card(
+    fn render_provider_row(
         &self,
         provider: &ProviderConfig,
+        selected: bool,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
         let provider_id = provider.id;
-        let provider_for_default = provider.clone();
-        let provider_for_toggle = provider.clone();
-
-        let info = v_flex()
-            .w_full()
-            .min_w_0()
-            .gap_2()
-            .child(self.render_provider_header(provider, cx))
-            .child(self.render_provider_details(provider, cx));
-
-        let actions = self
-            .render_custom_actions(provider_id, &provider_for_toggle, &provider_for_default, cx)
-            .into_any_element();
-
-        v_flex()
-            .w_full()
-            .p_4()
-            .gap_3()
-            .rounded_lg()
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
-            .child(info)
-            .child(actions)
-    }
-
-    fn render_provider_header(
-        &self,
-        provider: &ProviderConfig,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        h_flex()
-            .gap_2()
-            .items_center()
-            .flex_wrap()
-            .child(
-                div()
-                    .text_lg()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child(provider.name.clone()),
-            )
-            .child(
-                div()
-                    .px_2()
-                    .py(px(2.0))
-                    .rounded_md()
-                    .bg(cx.theme().secondary)
-                    .text_xs()
-                    .child(provider.provider_type.display_name()),
-            )
-            .when(provider.is_default, |this| {
-                this.child(
-                    div()
-                        .px_2()
-                        .py(px(2.0))
-                        .rounded_md()
-                        .bg(cx.theme().primary)
-                        .text_xs()
-                        .text_color(cx.theme().primary_foreground)
-                        .child(t!("LlmProviders.default_label").to_string()),
-                )
-            })
-            .when(!provider.enabled, |this| {
-                this.child(
-                    div()
-                        .px_2()
-                        .py(px(2.0))
-                        .rounded_md()
-                        .bg(cx.theme().muted)
-                        .text_xs()
-                        .child(t!("LlmProviders.disabled_label").to_string()),
-                )
-            })
-    }
-
-    fn render_provider_details(
-        &self,
-        provider: &ProviderConfig,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let api_base_display = provider.api_base.clone();
-        let api_version_display = provider.api_version.clone();
-        let default_model_display = if provider.model.is_empty() {
+        let is_default = provider.is_default;
+        let provider_type = provider.provider_type;
+        let enabled = provider.enabled;
+        let subtitle = if provider.model.trim().is_empty() {
             t!("LlmProviders.default_model_auto").to_string()
         } else {
-            t!(
-                "LlmProviders.default_model",
-                model = provider.model.as_str()
-            )
-            .to_string()
+            provider.model.clone()
         };
-
-        v_flex()
-            .gap_1()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(default_model_display),
-            )
-            .when(!provider.models.is_empty(), |this| {
-                this.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(
-                            t!(
-                                "LlmProviders.optional_models_count",
-                                count = provider.models.len()
-                            )
-                            .to_string(),
-                        ),
-                )
-            })
-            .when_some(api_base_display, |this, base| {
-                this.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(t!("LlmProviders.api_base", value = base.as_str()).to_string()),
-                )
-            })
-            .when_some(api_version_display, |this, version| {
-                this.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(
-                            t!("LlmProviders.api_version", value = version.as_str()).to_string(),
-                        ),
-                )
-            })
-    }
-
-    /// provider 支持启用/禁用、设置默认、编辑、删除
-    fn render_custom_actions(
-        &self,
-        provider_id: i64,
-        provider_for_toggle: &ProviderConfig,
-        provider_for_default: &ProviderConfig,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let toggle_clone = provider_for_toggle.clone();
-        let default_clone = provider_for_default.clone();
-        let provider_name = provider_for_toggle.name.clone();
-        let is_enabled = provider_for_toggle.enabled;
-        let is_default = provider_for_default.is_default;
+        let theme = cx.theme().clone();
 
         h_flex()
+            .id(SharedString::from(format!("provider-row-{provider_id}")))
             .gap_2()
             .items_center()
-            .w_full()
-            .flex_wrap()
-            .justify_end()
+            .px_2()
+            .py_2()
+            .rounded_md()
+            .cursor_pointer()
+            .when(selected, |this| this.bg(theme.secondary))
+            .hover(|style| style.bg(theme.muted))
+            .on_click(cx.listener(move |view, _, window, cx| {
+                view.select_provider(provider_id, window, cx);
+            }))
+            .child(provider_badge(provider_type, 28.))
             .child(
-                Button::new(SharedString::from(format!("default-{}", provider_id)))
-                    .with_variant(if is_default {
-                        ButtonVariant::Secondary
-                    } else {
-                        ButtonVariant::Primary
-                    })
-                    .label(if is_default {
-                        t!("LlmProviders.action_unset_default")
-                    } else {
-                        t!("LlmProviders.action_set_default")
-                    })
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.toggle_default(&default_clone, cx);
-                    })),
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_0p5()
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(provider.name.clone()),
+                            )
+                            .when(is_default, |this| {
+                                this.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.primary)
+                                        .child(t!("LlmProviders.default_badge").to_string()),
+                                )
+                            }),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(provider_status_dot(provider_type, enabled, cx))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(subtitle),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let providers: Vec<ProviderConfig> =
+            self.filtered_providers().into_iter().cloned().collect();
+        let selected_id = self.selected_id;
+
+        let mut list = v_flex().gap_0p5();
+        for provider in &providers {
+            list = list.child(self.render_provider_row(
+                provider,
+                selected_id == Some(provider.id),
+                cx,
+            ));
+        }
+        if providers.is_empty() && !self.providers.is_empty() {
+            list = list.child(
+                div()
+                    .p_3()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("LlmProviders.search_no_result").to_string()),
+            );
+        }
+
+        v_flex()
+            .w(px(248.))
+            .h_full()
+            .flex_shrink_0()
+            .gap_2()
+            .child(Input::new(&self.search_input).prefix(IconName::Search))
+            .child(
+                div()
+                    .id("provider-list")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(list),
             )
             .child(
-                Button::new(SharedString::from(format!("toggle-{}", provider_id)))
+                Button::new("add-provider")
                     .with_variant(ButtonVariant::Secondary)
-                    .label(if is_enabled {
-                        t!("LlmProviders.action_disable")
-                    } else {
-                        t!("LlmProviders.action_enable")
-                    })
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.toggle_provider(&toggle_clone, cx);
+                    .icon(IconName::Plus)
+                    .label(t!("LlmProviders.add_provider"))
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        view.add_provider(window, cx);
                     })),
             )
+            .into_any_element()
+    }
+
+    fn render_gallery(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let mut groups = v_flex().gap_5();
+        for group in PRESET_GROUPS {
+            let mut cards = h_flex().gap_2().flex_wrap();
+            for provider_type in group.types {
+                let provider_type = *provider_type;
+                cards = cards.child(
+                    h_flex()
+                        .id(SharedString::from(format!(
+                            "gallery-{}",
+                            provider_type.as_str()
+                        )))
+                        .gap_2()
+                        .items_center()
+                        .w(px(190.))
+                        .p_3()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .cursor_pointer()
+                        .hover(|style| style.bg(cx.theme().muted))
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            view.add_preset(provider_type, window, cx);
+                        }))
+                        .child(provider_badge(provider_type, 30.))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_sm()
+                                .child(provider_type.display_name()),
+                        ),
+                );
+            }
+            groups = groups.child(
+                v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!(group.title).to_string()),
+                    )
+                    .child(cards),
+            );
+        }
+
+        v_flex()
+            .flex_1()
+            .h_full()
+            .gap_4()
             .child(
-                Button::new(SharedString::from(format!("edit-{}", provider_id)))
-                    .with_variant(ButtonVariant::Secondary)
-                    .label(t!("LlmProviders.action_edit"))
-                    .on_click(cx.listener(move |view, _, window, cx| {
-                        view.edit_provider(provider_id, window, cx);
-                    })),
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t!("LlmProviders.gallery_title").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("LlmProviders.gallery_description").to_string()),
+                    ),
             )
-            .child(
-                Button::new(SharedString::from(format!("delete-{}", provider_id)))
-                    .danger()
-                    .label(t!("LlmProviders.action_delete"))
-                    .on_click(cx.listener(move |view, _, window, cx| {
-                        view.confirm_delete_provider(
-                            provider_id,
-                            provider_name.clone(),
-                            window,
-                            cx,
-                        );
-                    })),
-            )
+            .child(groups)
+            .into_any_element()
+    }
+
+    fn render_detail(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        match self.detail.clone() {
+            Some(detail) => div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(detail)
+                .into_any_element(),
+            None => v_flex()
+                .flex_1()
+                .h_full()
+                .items_center()
+                .justify_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("LlmProviders.select_provider_hint").to_string()),
+                )
+                .child(
+                    Button::new("add-provider-empty")
+                        .with_variant(ButtonVariant::Primary)
+                        .icon(IconName::Plus)
+                        .label(t!("LlmProviders.add_provider"))
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            view.add_provider(window, cx);
+                        })),
+                )
+                .into_any_element(),
+        }
     }
 }
 
@@ -558,39 +627,74 @@ impl Focusable for LlmProvidersView {
     }
 }
 
-impl EventEmitter<()> for LlmProvidersView {}
+impl Render for LlmProvidersView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.loading && self.providers.is_empty() {
+            return v_flex().size_full().items_center().justify_center().child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("LlmProviders.loading").to_string()),
+            );
+        }
+
+        if self.providers.is_empty() && self.detail.is_none() {
+            return v_flex()
+                .size_full()
+                .h(px(560.))
+                .child(self.render_gallery(cx));
+        }
+
+        let list = self.render_list(cx);
+        let detail = self.render_detail(cx);
+
+        h_flex()
+            .size_full()
+            .h(px(560.))
+            .gap_4()
+            .items_start()
+            .child(list)
+            .child(detail)
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    fn body_before<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
-        source
-            .split(start)
-            .nth(1)
-            .and_then(|source| source.split(end).next())
-            .unwrap_or_else(|| panic!("missing {start} before {end}"))
+    use super::{PRESET_GROUPS, provider_matches_query};
+    use one_core::llm::types::{ProviderConfig, ProviderType};
+
+    #[test]
+    fn gallery_covers_every_provider_type_exactly_once() {
+        let mut listed: Vec<ProviderType> = PRESET_GROUPS
+            .iter()
+            .flat_map(|group| group.types.iter().copied())
+            .collect();
+        listed.sort_by_key(|provider_type| provider_type.as_str());
+        listed.dedup();
+
+        let mut all = ProviderType::all();
+        all.sort_by_key(|provider_type| provider_type.as_str());
+
+        assert_eq!(listed, all, "画廊应覆盖全部供应商类型且不重复");
+    }
+
+    fn sample(name: &str, provider_type: ProviderType, models: &[&str]) -> ProviderConfig {
+        ProviderConfig {
+            name: name.to_string(),
+            provider_type,
+            models: models.iter().map(|model| model.to_string()).collect(),
+            ..ProviderConfig::default()
+        }
     }
 
     #[test]
-    fn provider_card_actions_wrap_instead_of_clipping() {
-        let source = include_str!("llm_providers_view.rs");
-        let card = body_before(
-            source,
-            "fn render_provider_card(",
-            "fn render_provider_header(",
-        );
-        let actions = body_before(
-            source,
-            "fn render_custom_actions(",
-            "impl Focusable for LlmProvidersView",
-        );
+    fn list_search_matches_name_type_and_models() {
+        let provider = sample("Work OpenAI", ProviderType::OpenRouter, &["gpt-5.5", "o4"]);
 
-        assert!(
-            card.contains("v_flex()") && card.contains(".w_full()"),
-            "provider 卡片必须采用可收缩的纵向布局"
-        );
-        assert!(
-            actions.contains(".flex_wrap()") && actions.contains(".justify_end()"),
-            "provider 操作按钮必须在窄宽度下换行，不能裁切最后一个按钮"
-        );
+        assert!(provider_matches_query(&provider, ""));
+        assert!(provider_matches_query(&provider, "openai"));
+        assert!(provider_matches_query(&provider, "OPENROUTER"));
+        assert!(provider_matches_query(&provider, "5.5"));
+        assert!(!provider_matches_query(&provider, "claude"));
     }
 }
