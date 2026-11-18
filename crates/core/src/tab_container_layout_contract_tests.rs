@@ -76,6 +76,37 @@ fn settings_entry_stays_after_background_tasks_and_before_window_controls() {
 }
 
 #[test]
+fn github_entry_stays_after_settings_and_before_window_controls() {
+    let source = include_str!("tab_container.rs");
+    let settings = source
+        .find(".id(\"tab-bar-settings-entry\")")
+        .expect("settings entry");
+    let github = source[settings..]
+        .find(".id(\"tab-bar-github-entry\")")
+        .map(|offset| settings + offset)
+        .expect("github entry");
+    let controls = source[github..]
+        .find("self.render_window_controls(window, cx)")
+        .map(|offset| github + offset)
+        .expect("window controls");
+
+    assert!(
+        settings < github,
+        "the GitHub button must follow the settings entry"
+    );
+    assert!(
+        github < controls,
+        "the GitHub button must precede native window controls"
+    );
+
+    let button_boundary = &source[github..controls];
+    assert!(button_boundary.contains("\"tab-bar-github\""));
+    assert!(button_boundary.contains("IconName::GitHub"));
+    assert!(button_boundary.contains(".flex_shrink_0()"));
+    assert!(source.contains("with_github_button("));
+}
+
+#[test]
 fn active_tab_intrinsic_size_cannot_shrink_the_window_chrome() {
     let source = include_str!("tab_container.rs");
     let render_start = source

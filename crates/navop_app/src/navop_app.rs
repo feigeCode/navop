@@ -157,6 +157,13 @@ fn settings_button_handler() -> Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>
     })
 }
 
+/// 右上角 GitHub 图标入口：用系统浏览器打开开源仓库。
+fn github_button_handler() -> Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> {
+    Arc::new(|_window: &mut Window, cx: &mut App| {
+        cx.open_url(crate::setting_tab::GITHUB_URL);
+    })
+}
+
 /// Await bounded application-owned resource teardown before invoking GPUI's
 /// platform quit routine. Native RDP hosts drain before their shared SSH
 /// transports so COM/child-window cleanup retains a live application owner.
@@ -1472,7 +1479,8 @@ impl NavopApp {
                 .with_tab_bar_when_empty(true)
                 .with_add_tab_button(add_tab_button_handler())
                 .with_tab_quick_open(tab_quick_open_resolver())
-                .with_settings_button(settings_button_handler());
+                .with_settings_button(settings_button_handler())
+                .with_github_button(github_button_handler());
 
             container = container.with_navigation_sidebar_toggle(connection_sidebar_expanded);
 
