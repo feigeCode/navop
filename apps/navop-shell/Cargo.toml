@@ -1,6 +1,6 @@
 [package]
 name = "navop-shell"
-version = "0.23.4"
+version = "0.23.5"
 edition.workspace = true
 publish = false
 

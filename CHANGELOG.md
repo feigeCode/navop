@@ -4,6 +4,32 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.23.5] - 2026-11-18
+
+#### 更新内容
+
+- 自定义 AI 提供商的「API 基础地址」现在同时接受 API 根地址与完整的 `/chat/completions` 地址：填写完整地址（例如火山方舟的 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`）不再被二次拼接路径，设置页的帮助文案与占位提示也补充了豆包根地址示例。
+
+#### 修复与优化
+
+- 修复自定义 AI 请求头导致部分服务商拒绝请求的问题：此前配置的 `Content-Type` 会与 JSON 编码器自动添加的重复，现在统一去重合并，SSE 流式请求的 `Accept` / `Cache-Control` / `Connection` 头同样不再重复。
+- 非 macOS 平台「关闭当前标签页」补上 `Ctrl+F4` 默认快捷键（保留 `Alt+Shift+W`），与桌面应用惯例对齐。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.5) 下载桌面端安装包。
+
+---
+
+#### What's New
+
+- The "API base URL" of a custom AI provider now accepts both the API root and a complete `/chat/completions` URL: pasting the full endpoint (for example Volcano Ark's `https://ark.cn-beijing.volces.com/api/v3/chat/completions`) no longer appends the path a second time, and the settings help text and placeholder now include a Doubao root-URL example.
+
+#### Fixes and Improvements
+
+- Fixed custom AI request headers being rejected by some providers: a configured `Content-Type` used to duplicate the one the JSON encoder adds automatically. Headers are now merged and deduplicated, and the `Accept` / `Cache-Control` / `Connection` headers of SSE streaming requests are no longer duplicated either.
+- "Close active tab" on non-macOS platforms now has `Ctrl+F4` as an additional default shortcut (`Alt+Shift+W` kept), aligning with desktop conventions.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.23.4...v0.23.5
+
 ## [v0.23.4] - 2026-11-18
 
 本版本把连接迁移包升级为密码保护格式，并补齐文件面板的隐藏文件入口与一批 SSH、构建侧修复。
