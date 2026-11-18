@@ -193,6 +193,27 @@ impl HomePage {
         });
     }
 
+    pub(crate) fn add_llm_providers_settings_tab(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_container = self.active_tab_container(cx);
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |tc, cx| {
+                tc.activate_or_add_tab_lazy(
+                    "settings-llm-providers",
+                    |win, cx| {
+                        let settings = cx.new(|cx| SettingsPanel::new_llm_providers(win, cx));
+                        TabItem::new("settings-llm-providers", "home", settings)
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
     /// 打开原生「团队」tab（团队资料 / 成员 / 团队密钥）。
     ///
     /// 过去这里跳浏览器 dashboard，URL 里还带着 access_token / refresh_token；

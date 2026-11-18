@@ -74,7 +74,7 @@ use crate::agent_cards::{
 };
 use crate::agent_skills::AgentSkillState;
 use crate::agent_transcript::AgentTranscript;
-use crate::bridge::build_runtime_from_llm_provider;
+use crate::bridge::{build_runtime_from_llm_provider, build_unconfigured_runtime};
 use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
 use crate::command_palette::{
     CloseCommandPalette, PALETTE_PAGE_STEP, PaletteSelectFirst, PaletteSelectLast,
@@ -1196,8 +1196,9 @@ impl AgentChatViewConfig {
         provider_configs: Vec<ProviderConfig>,
         registry: ToolRegistry,
     ) -> anyhow::Result<Self> {
+        let fallback_registry = registry.clone();
         let specs = runtime_specs_from_provider_configs(provider_configs, registry)?;
-        Self::from_runtime_specs(resources, mentions, specs)
+        Self::from_runtime_specs(resources, mentions, specs, fallback_registry)
     }
 
     /// 用 `GlobalProviderState` 创建 Agent tab 配置,复用 provider 缓存与全局代理设置。
@@ -1208,22 +1209,34 @@ impl AgentChatViewConfig {
         registry: ToolRegistry,
         provider_state: GlobalProviderState,
     ) -> anyhow::Result<Self> {
+        let fallback_registry = registry.clone();
         let specs =
             runtime_specs_from_provider_state(provider_configs, registry, provider_state).await?;
-        Self::from_runtime_specs(resources, mentions, specs)
+        Self::from_runtime_specs(resources, mentions, specs, fallback_registry)
     }
 
     fn from_runtime_specs(
         resources: ResourceContext,
         mentions: Vec<MentionItem>,
         specs: Vec<RuntimeBuildSpec>,
+        fallback_registry: ToolRegistry,
     ) -> anyhow::Result<Self> {
-        let initial = specs
+        let Some(initial) = specs
             .iter()
             .find(|spec| spec.is_default)
             .or_else(|| specs.first())
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!(t!("AgentUi.no_model_config").to_string()))?;
+        else {
+            // 没有已启用 provider 时仍返回完整聊天配置：ACP 只看
+            // `acp_agents`，会话壳 / 历史 / 输入框也不依赖本地模型。本地真正
+            // 发消息时才由占位 runtime 明确报「先配置供应商」。
+            let runtime = build_unconfigured_runtime(fallback_registry)?;
+            let mut config = Self::new(runtime, resources, mentions);
+            config.model_options.clear();
+            config.selected_model_id = None;
+            config.runtime_factory = None;
+            return Ok(config);
+        };
         let runtime = initial.build()?;
         let selected_model_id = selected_provider_model_id(&specs);
         let model_options = specs.iter().map(|spec| spec.option.clone()).collect();
@@ -3512,6 +3525,14 @@ impl AgentChatView {
         submission: &PendingSubmission,
         cx: &mut Context<Self>,
     ) -> SubmissionStart {
+        if self.model_options.is_empty() {
+            self.reject_submission_before_start(
+                session_uid,
+                t!("AgentUi.configure_model_before_send").to_string(),
+                cx,
+            );
+            return SubmissionStart::Rejected;
+        }
         let session_id = SessionId::from_string(session_uid.to_string());
         let Some(session) = self.runtime.session(&session_id) else {
             self.reject_submission_before_start(

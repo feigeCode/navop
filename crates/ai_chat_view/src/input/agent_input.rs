@@ -40,10 +40,10 @@ use crate::input::PromptHistory;
 use crate::input::attachment::ImageAttachment;
 use crate::input::completion::ComposerCompletionProvider;
 use crate::input::composer_chrome::{
-    action_button_radius, action_button_size, capability_chip, composer_capability_row,
-    composer_capability_slot, composer_card, composer_editor_frame, composer_model_chip,
-    composer_permission_slot, composer_popover_surface, composer_root, composer_toolbar,
-    ghost_chip, model_menu_width,
+    CHIP_HEIGHT, MODEL_TRIGGER_MAX_WIDTH, action_button_radius, action_button_size,
+    capability_chip, composer_capability_row, composer_capability_slot, composer_card,
+    composer_editor_frame, composer_model_chip, composer_permission_slot, composer_popover_surface,
+    composer_root, composer_toolbar, ghost_chip, model_menu_width,
 };
 use crate::input::context::{
     AgentComposerContext, ComposerMenuOption, ComposerModelOption, ComposerPlanItem,
@@ -1119,8 +1119,36 @@ impl AgentInput {
     ///
     /// 外壳与 ACP 那份共用 [`composer_model_chip`]：透明底、26 高、6 圆角、hover
     /// overlay，弹层宽度按最长候选估，名字被省略时 tooltip 给全名。
-    fn render_model_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_model_menu(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = self.local_theme(cx);
+        if self.model_options.is_empty() {
+            return div()
+                .id("agent-model-control")
+                .debug_selector(|| "agent-input-model-control".to_string())
+                .flex_shrink(1.0)
+                .max_w(sp(MODEL_TRIGGER_MAX_WIDTH))
+                .h(sp(CHIP_HEIGHT))
+                .overflow_hidden()
+                .child(
+                    ghost_chip(
+                        Button::new("agent-model-provider-settings")
+                            .debug_selector(|| "agent-model-provider-settings".to_string())
+                            .small()
+                            .icon(IconName::AILine)
+                            .label(t!("AgentUi.no_model_provider"))
+                            .tooltip(t!("AgentUi.open_provider_settings").to_string())
+                            .on_click(|_, window, cx| {
+                                window
+                                    .dispatch_action(Box::new(crate::OpenLlmProviderSettings), cx);
+                            }),
+                        &theme,
+                        cx,
+                    )
+                    .flex_shrink(1.0)
+                    .max_w(sp(MODEL_TRIGGER_MAX_WIDTH)),
+                )
+                .into_any_element();
+        }
         let model_label = self
             .context
             .model
@@ -1137,6 +1165,7 @@ impl AgentInput {
             self.is_running,
             &theme,
         )
+        .into_any_element()
     }
 
     fn render_queued_submissions(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
@@ -2645,6 +2674,14 @@ mod tests {
             root
         }
 
+        fn with_empty_models(window: &mut Window, cx: &mut Context<Self>) -> Self {
+            let root = Self::with_width(px(NARROW_USABLE_WIDTH), window, cx);
+            root.input.update(cx, |input, cx| {
+                input.set_menu_options(Vec::new(), Vec::new(), cx);
+            });
+            root
+        }
+
         fn with_width(width: Pixels, window: &mut Window, cx: &mut Context<Self>) -> Self {
             let input = cx.new(|cx| {
                 AgentInput::with_mentions(Vec::new(), "描述目标，输入 @ 引用资源…", window, cx)
@@ -2796,6 +2833,34 @@ mod tests {
                 "controls must stay on one row at narrow width: {bounds:?} (row_y={row_y:?})"
             );
         }
+    }
+
+    #[gpui::test]
+    fn empty_model_menu_offers_provider_settings(cx: &mut TestAppContext) {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let opened = Rc::new(Cell::new(false));
+        let opened_for_action = opened.clone();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+            cx.on_action(move |_: &crate::OpenLlmProviderSettings, _cx| {
+                opened_for_action.set(true);
+            });
+        });
+        let (_root, cx) = cx.add_window_view(AgentInputLayoutRoot::with_empty_models);
+        let cx: &mut VisualTestContext = cx;
+        let trigger = cx
+            .debug_bounds("agent-model-provider-settings")
+            .expect("empty model list must render the provider settings entry");
+
+        cx.simulate_click(trigger.center(), Modifiers::default());
+
+        assert!(
+            opened.get(),
+            "clicking the empty model chip opens provider settings"
+        );
     }
 
     /// 能力 chip 单独占卡片顶部一行：侧栏被拖窄时它们不必和模型 / 权限 / 发送

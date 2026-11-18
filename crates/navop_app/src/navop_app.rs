@@ -1336,6 +1336,23 @@ fn init_action_handlers(cx: &mut App) {
             });
         });
     });
+    cx.on_action(|_: &ai_chat_view::OpenLlmProviderSettings, cx| {
+        let Some(active_window) = cx.active_window() else {
+            return;
+        };
+        let Some(home) = cx.try_global::<GlobalHomePage>() else {
+            return;
+        };
+        let home_page = home.home_page.clone();
+        cx.defer(move |cx| {
+            _ = active_window.update(cx, |_, window, cx| {
+                if home_page.read(cx).startup_master_key_lock_active(cx) {
+                    return;
+                }
+                home_page.update(cx, |hp, cx| hp.add_llm_providers_settings_tab(window, cx));
+            });
+        });
+    });
 }
 
 fn close_active_window(cx: &mut App) {
@@ -2024,10 +2041,11 @@ mod tests {
             .expect("init_action_handlers source");
 
         assert_eq!(
-            3,
+            4,
             handlers
                 .matches("home_page.read(cx).startup_master_key_lock_active(cx)")
-                .count()
+                .count(),
+            "连接、终端与 AI 供应商设置入口都必须先让启动主密钥锁对话框"
         );
     }
 

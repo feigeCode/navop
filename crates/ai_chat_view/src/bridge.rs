@@ -30,6 +30,7 @@ use one_core::llm::{
     ChatRequest, GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig,
     extract_stream_text_parts,
 };
+use rust_i18n::t;
 
 mod model_policy;
 mod stream_tools;
@@ -37,6 +38,29 @@ mod stream_tools;
 mod tests;
 
 const DEBUG_PREVIEW_CHARS: usize = 1200;
+
+/// 没有任何已启用 provider 时仍需要一个可创建会话的 Runtime。
+///
+/// 聊天壳、会话历史和 ACP 都不依赖本地模型真正可用；只有本地后端发起一轮
+/// 采样时才需要。这里把失败推迟到采样点，避免空配置直接把整个 AI 页面挡住。
+struct UnconfiguredModelClient;
+
+#[async_trait]
+impl ModelClient for UnconfiguredModelClient {
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, RuntimeError> {
+        Err(RuntimeError::model(
+            t!("AgentUi.configure_model_before_send").to_string(),
+        ))
+    }
+
+    fn model_name(&self) -> &str {
+        "unconfigured"
+    }
+}
+
+pub(crate) fn build_unconfigured_runtime(registry: ToolRegistry) -> anyhow::Result<Arc<Runtime>> {
+    build_runtime(Arc::new(UnconfiguredModelClient), registry)
+}
 
 /// 把 [`LlmProvider`] 适配为 agent_runtime 的 [`ModelClient`]。
 ///

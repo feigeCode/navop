@@ -15,6 +15,8 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 use gpui::App;
 
+gpui::actions!(ai_chat_view, [OpenLlmProviderSettings]);
+
 pub use agent_runtime::{
     AgentResourceScope, DefaultTargetReason, ResourceCatalog, ResourceContext, ResourceId,
     ResourceScope,
