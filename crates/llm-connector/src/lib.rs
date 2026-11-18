@@ -120,6 +120,8 @@ pub mod core;
 pub mod error;
 pub mod protocols;
 pub mod providers;
+/// `/chat/completions` 与 `/responses` 之间的请求/响应/流式互转。
+pub mod responses_chat;
 pub mod types;
 
 // Server-Sent Events (SSE) utilities

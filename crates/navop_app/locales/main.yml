@@ -5866,6 +5866,22 @@ LlmProviders:
     en: "Use the API root (for Doubao: https://ark.cn-beijing.volces.com/api/v3) or a complete /chat/completions URL. Leave empty to use the provider default."
     zh-CN: "填写 API 根地址（豆包示例：https://ark.cn-beijing.volces.com/api/v3）或完整的 /chat/completions 地址；留空则使用提供商默认地址。"
     zh-HK: "填寫 API 根地址（豆包示例：https://ark.cn-beijing.volces.com/api/v3）或完整的 /chat/completions 地址；留空則使用提供商預設位址。"
+  api_mode_label:
+    en: API endpoint
+    zh-CN: 接口协议
+    zh-HK: 介面協議
+  api_mode_help:
+    en: "Chat Completions uses POST /chat/completions; Responses uses POST /responses. Providers that do not support the Responses API keep using their own chat channel."
+    zh-CN: "Chat Completions 走 POST /chat/completions；Responses 走 POST /responses。不支持 Responses API 的提供商会继续使用自己的 chat 通道。"
+    zh-HK: "Chat Completions 走 POST /chat/completions；Responses 走 POST /responses。不支援 Responses API 的提供商會繼續使用自己的 chat 通道。"
+  api_mode_chat_completions:
+    en: Chat Completions (/chat/completions)
+    zh-CN: Chat Completions（/chat/completions）
+    zh-HK: Chat Completions（/chat/completions）
+  api_mode_responses:
+    en: Responses (/responses)
+    zh-CN: Responses（/responses）
+    zh-HK: Responses（/responses）
   select_provider_hint:
     en: Select a provider on the left, or add a new one
     zh-CN: 选择左侧的提供商，或新增一个

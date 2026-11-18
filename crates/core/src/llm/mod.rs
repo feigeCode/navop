@@ -10,7 +10,7 @@ pub mod usage_history;
 pub use composer_draft::{ComposerDraft, ComposerDraftRepository};
 pub use connector::{ChatStream, LlmConnector, LlmProvider, default_api_base};
 pub use manager::{GlobalProviderState, ProviderManager};
-pub use types::{ProviderConfig, ProviderType, ReasoningEffort};
+pub use types::{ApiMode, ProviderConfig, ProviderType, ReasoningEffort};
 pub use usage_history::{AgentUsageRepository, AgentUsageSample};
 
 pub use llm_connector::types::{ChatRequest, Message, MessageBlock, Role, StreamingResponse};

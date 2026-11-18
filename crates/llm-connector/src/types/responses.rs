@@ -268,25 +268,49 @@ pub fn chat_response_to_responses_response(chat: &ChatResponse) -> ResponsesResp
         extra: HashMap::new(),
     });
 
+    let mut output = vec![ResponsesOutputItem {
+        item_type: "message".to_string(),
+        id: Some(format!("msg_{}", chat.id)),
+        role: Some("assistant".to_string()),
+        content: Some(vec![ResponsesOutputContent {
+            content_type: "output_text".to_string(),
+            text: Some(text.clone()),
+            extra: HashMap::new(),
+        }]),
+        name: None,
+        arguments: None,
+        extra: HashMap::new(),
+    }];
+
+    // 回退路径（`/responses` 404 后退回 chat）也要保留工具调用，否则上层会丢掉
+    // 助手发起的功能调用。
+    for tool_call in chat
+        .choices
+        .first()
+        .and_then(|choice| choice.message.tool_calls.as_ref())
+        .into_iter()
+        .flatten()
+    {
+        let mut extra = HashMap::new();
+        extra.insert("call_id".to_string(), serde_json::json!(tool_call.id));
+        output.push(ResponsesOutputItem {
+            item_type: "function_call".to_string(),
+            id: Some(tool_call.id.clone()),
+            role: None,
+            content: None,
+            name: Some(tool_call.function.name.clone()),
+            arguments: Some(tool_call.function.arguments.clone()),
+            extra,
+        });
+    }
+
     ResponsesResponse {
         id: chat.id.clone(),
         object: "response".to_string(),
         created_at: chat.created,
         model: Some(chat.model.clone()),
         status: Some("completed".to_string()),
-        output: Some(vec![ResponsesOutputItem {
-            item_type: "message".to_string(),
-            id: Some(format!("msg_{}", chat.id)),
-            role: Some("assistant".to_string()),
-            content: Some(vec![ResponsesOutputContent {
-                content_type: "output_text".to_string(),
-                text: Some(text.clone()),
-                extra: HashMap::new(),
-            }]),
-            name: None,
-            arguments: None,
-            extra: HashMap::new(),
-        }]),
+        output: Some(output),
         output_text: text,
         usage,
         extra: HashMap::new(),

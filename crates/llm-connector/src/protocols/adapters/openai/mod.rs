@@ -142,7 +142,11 @@ impl Protocol for OpenAIProtocol {
     }
 
     fn responses_endpoint(&self, base_url: &str, _model: &str) -> Option<String> {
-        Some(resolve_endpoint(base_url, "", "/responses"))
+        // 用户常把完整的 `/chat/completions` 地址粘进 API Base；切到 Responses
+        // 时先剥掉这一段，避免拼成 `.../chat/completions/responses`。
+        let base = base_url.trim_end_matches('/');
+        let base = base.strip_suffix("/chat/completions").unwrap_or(base);
+        Some(resolve_endpoint(base, "", "/responses"))
     }
 
     fn build_request(&self, request: &ChatRequest) -> Result<Self::Request, LlmConnectorError> {
@@ -415,6 +419,17 @@ mod tests {
         assert_eq!(
             Some("https://llm.example.com/v1/models".to_string()),
             protocol.models_endpoint("https://llm.example.com/v1")
+        );
+    }
+
+    #[test]
+    fn responses_endpoint_replaces_a_pasted_chat_completions_leaf() {
+        let protocol = OpenAIProtocol::with_service("test-key", "custom");
+        let endpoint = "https://ark.cn-beijing.volces.com/api/v3/chat/completions";
+
+        assert_eq!(
+            Some("https://ark.cn-beijing.volces.com/api/v3/responses".to_string()),
+            protocol.responses_endpoint(endpoint, "doubao-seed")
         );
     }
 

@@ -25,7 +25,7 @@ use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::llm::default_api_base;
 use one_core::llm::manager::GlobalProviderState;
-use one_core::llm::types::{ProviderConfig, ProviderType, ReasoningEffort};
+use one_core::llm::types::{ApiMode, ProviderConfig, ProviderType, ReasoningEffort};
 use rust_i18n::t;
 
 use super::provider_badge::{provider_accent, provider_badge};
@@ -308,6 +308,44 @@ fn reasoning_effort_label(effort: Option<ReasoningEffort>) -> SharedString {
     }
 }
 
+/// 「接口协议」选择项：`/chat/completions` 或 `/responses`（issue #565）。
+#[derive(Clone, Debug)]
+pub struct ApiModeItem {
+    api_mode: ApiMode,
+}
+
+impl ApiModeItem {
+    pub fn new(api_mode: ApiMode) -> Self {
+        Self { api_mode }
+    }
+}
+
+impl SelectItem for ApiModeItem {
+    type Value = ApiMode;
+
+    fn title(&self) -> SharedString {
+        api_mode_label(self.api_mode)
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.api_mode
+    }
+}
+
+fn api_mode_label(api_mode: ApiMode) -> SharedString {
+    match api_mode {
+        ApiMode::ChatCompletions => t!("LlmProviders.api_mode_chat_completions")
+            .to_string()
+            .into(),
+        ApiMode::Responses => t!("LlmProviders.api_mode_responses").to_string().into(),
+    }
+}
+
+/// 「接口协议」下拉的全部选项：先 chat/completions（默认），后 responses。
+fn api_mode_items() -> Vec<ApiModeItem> {
+    ApiMode::all().into_iter().map(ApiModeItem::new).collect()
+}
+
 /// 思考级别下拉的全部档位：自动 / 关闭 / 低 / 中 / 高。
 fn reasoning_effort_items() -> Vec<EffortItem> {
     [
@@ -372,6 +410,8 @@ pub struct ProviderDetail {
     api_version_input: Entity<InputState>,
     /// 思考级别选择器：请求里要不要带 `reasoning_effort` 以及带哪一档。
     effort_select: Entity<SelectState<Vec<EffortItem>>>,
+    /// 「接口协议」：`/chat/completions` 或 `/responses`。
+    api_mode_select: Entity<SelectState<Vec<ApiModeItem>>>,
     extra_headers_input: Entity<TextareaState>,
     /// 供应商级代理地址；留空表示跟随全局代理。
     proxy_input: Entity<InputState>,
@@ -503,6 +543,21 @@ impl ProviderDetail {
             .or(Some(IndexPath::new(0)));
         let effort_select = cx.new(|cx| SelectState::new(effort_items, effort_index, window, cx));
 
+        let api_mode_options = api_mode_items();
+        let api_mode_index = config
+            .as_ref()
+            .map(|cfg| cfg.api_mode)
+            .and_then(|mode| {
+                api_mode_options
+                    .iter()
+                    .position(|item| item.api_mode == mode)
+            })
+            .map(IndexPath::new)
+            // 老配置没有该字段，落在默认的 chat/completions。
+            .or(Some(IndexPath::new(0)));
+        let api_mode_select =
+            cx.new(|cx| SelectState::new(api_mode_options, api_mode_index, window, cx));
+
         let extra_headers_input = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx)
                 .auto_grow(2, 7)
@@ -623,6 +678,7 @@ impl ProviderDetail {
             api_base_input,
             api_version_input,
             effort_select,
+            api_mode_select,
             extra_headers_input,
             proxy_input,
             model_filter_input,
@@ -799,6 +855,12 @@ impl ProviderDetail {
                 .selected_value()
                 .copied()
                 .flatten(),
+            api_mode: self
+                .api_mode_select
+                .read(cx)
+                .selected_value()
+                .copied()
+                .unwrap_or_default(),
             model,
             models,
             max_tokens: self.max_tokens,
@@ -1138,6 +1200,18 @@ impl ProviderDetail {
             t!("LlmProviders.api_version_label").to_string().into(),
             Input::new(&self.api_version_input),
         );
+        let api_mode_field = Self::field(
+            t!("LlmProviders.api_mode_label").to_string().into(),
+            v_flex()
+                .gap_1()
+                .child(Select::new(&self.api_mode_select))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("LlmProviders.api_mode_help").to_string()),
+                ),
+        );
         let headers_field = Self::field(
             t!("LlmProviders.extra_headers_label").to_string().into(),
             v_flex()
@@ -1165,6 +1239,7 @@ impl ProviderDetail {
             v_flex()
                 .gap_3()
                 .child(key_field)
+                .child(api_mode_field)
                 .child(Self::two_columns(base_field, version_field))
                 .child(headers_field)
                 .child(proxy_field),
@@ -1526,13 +1601,25 @@ fn non_empty(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiBaseAction, EffortItem, SelectionAction, api_base_action_on_type_change,
-        apply_selection_action, filter_loaded_models, filter_models, format_header_lines,
-        merge_models, parse_header_lines, parse_headers_for_provider, reasoning_effort_items,
-        toggle_model,
+        ApiBaseAction, ApiModeItem, EffortItem, SelectionAction, api_base_action_on_type_change,
+        api_mode_items, apply_selection_action, filter_loaded_models, filter_models,
+        format_header_lines, merge_models, parse_header_lines, parse_headers_for_provider,
+        reasoning_effort_items, toggle_model,
     };
     use gpui_component::select::SelectItem;
-    use one_core::llm::types::{ProviderType, ReasoningEffort};
+    use one_core::llm::types::{ApiMode, ProviderType, ReasoningEffort};
+
+    /// 「接口协议」下拉的顺序与取值：先 chat/completions（默认），后 /responses。
+    #[test]
+    fn api_mode_items_offer_chat_completions_then_responses() {
+        let items = api_mode_items();
+        assert_eq!(2, items.len());
+        assert_eq!(&ApiMode::ChatCompletions, items[0].value());
+        assert_eq!(&ApiMode::Responses, items[1].value());
+
+        let responses = ApiModeItem::new(ApiMode::Responses);
+        assert_eq!(&ApiMode::Responses, responses.value());
+    }
 
     #[test]
     fn reasoning_effort_items_cover_all_levels_in_order() {

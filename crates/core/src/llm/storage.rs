@@ -8,7 +8,7 @@ use crate::storage::row_mapping::FromSqliteRow;
 use crate::storage::traits::{Entity, Repository};
 use crate::storage::{GlobalStorageState, now};
 
-use super::types::{ProviderConfig, ProviderType, ReasoningEffort};
+use super::types::{ApiMode, ProviderConfig, ProviderType, ReasoningEffort};
 
 struct ProviderConfigRow {
     id: i64,
@@ -20,6 +20,7 @@ struct ProviderConfigRow {
     extra_headers: Option<String>,
     proxy: Option<String>,
     reasoning_effort: Option<String>,
+    api_mode: Option<String>,
     model: String,
     models: Option<String>,
     max_tokens: Option<i32>,
@@ -42,6 +43,7 @@ impl FromSqliteRow for ProviderConfigRow {
             extra_headers: row.get("extra_headers")?,
             proxy: row.get("proxy")?,
             reasoning_effort: row.get("reasoning_effort")?,
+            api_mode: row.get("api_mode")?,
             model: row.get("model")?,
             models: row.get("models")?,
             max_tokens: row.get("max_tokens")?,
@@ -73,6 +75,12 @@ impl TryFrom<ProviderConfigRow> for ProviderConfig {
             .reasoning_effort
             .as_deref()
             .and_then(ReasoningEffort::parse);
+        // 老配置没有这一列值（NULL），按默认的 chat/completions 处理。
+        let api_mode = row
+            .api_mode
+            .as_deref()
+            .and_then(ApiMode::from_str)
+            .unwrap_or_default();
         let proxy = row
             .proxy
             .map(|value| value.trim().to_string())
@@ -96,6 +104,7 @@ impl TryFrom<ProviderConfigRow> for ProviderConfig {
             extra_headers,
             proxy,
             reasoning_effort,
+            api_mode,
             model: row.model,
             models,
             max_tokens: row.max_tokens,
@@ -158,6 +167,7 @@ impl Repository for ProviderRepository {
         let reasoning_effort = item
             .reasoning_effort
             .map(|effort| effort.as_str().to_string());
+        let api_mode = item.api_mode.as_str().to_string();
         let model = item.model.clone();
         let models = if item.models.is_empty() && !item.model.is_empty() {
             vec![item.model.clone()]
@@ -174,9 +184,9 @@ impl Repository for ProviderRepository {
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO llm_providers (id, name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
-                params![id, name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, model, models_json, max_tokens, temperature, enabled, is_default, created_at, updated_at],
+                "INSERT INTO llm_providers (id, name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, api_mode, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                params![id, name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, api_mode, model, models_json, max_tokens, temperature, enabled, is_default, created_at, updated_at],
             )?;
             Ok(())
         })?;
@@ -202,6 +212,7 @@ impl Repository for ProviderRepository {
         let reasoning_effort = item
             .reasoning_effort
             .map(|effort| effort.as_str().to_string());
+        let api_mode = item.api_mode.as_str().to_string();
         let model = item.model.clone();
         let models = if item.models.is_empty() && !item.model.is_empty() {
             vec![item.model.clone()]
@@ -217,8 +228,8 @@ impl Repository for ProviderRepository {
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "UPDATE llm_providers SET name = ?1, provider_type = ?2, api_key = ?3, api_base = ?4, api_version = ?5, extra_headers = ?6, proxy = ?7, reasoning_effort = ?8, model = ?9, models = ?10, max_tokens = ?11, temperature = ?12, enabled = ?13, is_default = ?14, updated_at = ?15 WHERE id = ?16",
-                params![name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, model, models_json, max_tokens, temperature, enabled, is_default, updated_at, id],
+                "UPDATE llm_providers SET name = ?1, provider_type = ?2, api_key = ?3, api_base = ?4, api_version = ?5, extra_headers = ?6, proxy = ?7, reasoning_effort = ?8, api_mode = ?9, model = ?10, models = ?11, max_tokens = ?12, temperature = ?13, enabled = ?14, is_default = ?15, updated_at = ?16 WHERE id = ?17",
+                params![name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, api_mode, model, models_json, max_tokens, temperature, enabled, is_default, updated_at, id],
             )?;
             Ok(())
         })
@@ -234,7 +245,7 @@ impl Repository for ProviderRepository {
     fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at FROM llm_providers WHERE id = ?1",
+                "SELECT id, name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, api_mode, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at FROM llm_providers WHERE id = ?1",
             )?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
@@ -249,7 +260,7 @@ impl Repository for ProviderRepository {
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at FROM llm_providers ORDER BY created_at DESC",
+                "SELECT id, name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, api_mode, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at FROM llm_providers ORDER BY created_at DESC",
             )?;
             let rows = stmt.query_map([], |row| ProviderConfigRow::from_row(row))?;
             let mut results = Vec::new();
@@ -318,6 +329,7 @@ mod tests {
             extra_headers: None,
             proxy: None,
             reasoning_effort: None,
+            api_mode: None,
             model: String::new(),
             models: Some(serde_json::to_string(&["qwen-max", "deepseek-v3"]).unwrap()),
             max_tokens: None,
@@ -344,6 +356,7 @@ mod tests {
             extra_headers: None,
             proxy: None,
             reasoning_effort: None,
+            api_mode: None,
             model: String::new(),
             models: None,
             max_tokens: None,
@@ -374,6 +387,7 @@ mod tests {
             extra_headers: Some(serde_json::to_string(&headers).unwrap()),
             proxy: None,
             reasoning_effort: None,
+            api_mode: None,
             model: "deepseek-v4.1-flash".into(),
             models: None,
             max_tokens: None,
@@ -400,6 +414,7 @@ mod tests {
             extra_headers: Some("not-json".into()),
             proxy: None,
             reasoning_effort: None,
+            api_mode: None,
             model: "custom-model".into(),
             models: None,
             max_tokens: None,
@@ -488,6 +503,46 @@ mod tests {
             .expect("load provider")
             .expect("provider exists");
         assert_eq!(None, stored.reasoning_effort, "「自动」应存成 NULL");
+    }
+
+    #[test]
+    fn provider_repository_round_trips_api_mode_after_migration() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let connection = SqliteConnection::open_with_pool_size(temp.path().join("providers.db"), 1)
+            .expect("open sqlite");
+        connection
+            .with_connection(run_migrations)
+            .expect("run migrations");
+        let repository = ProviderRepository::new(connection);
+        let mut config = ProviderConfig {
+            id: 45,
+            name: "responses".to_string(),
+            provider_type: ProviderType::OpenAICompatible,
+            api_key: Some("sk-test".to_string()),
+            api_base: Some("https://ark.cn-beijing.volces.com/api/v3".to_string()),
+            model: "doubao-seed-2-0".to_string(),
+            models: vec!["doubao-seed-2-0".to_string()],
+            api_mode: ApiMode::Responses,
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            ..Default::default()
+        };
+
+        repository.insert(&mut config).expect("insert provider");
+        let stored = repository
+            .get(config.id)
+            .expect("load provider")
+            .expect("provider exists");
+        assert_eq!(ApiMode::Responses, stored.api_mode);
+
+        config.api_mode = ApiMode::ChatCompletions;
+        repository.update(&config).expect("update provider");
+        let stored = repository
+            .get(config.id)
+            .expect("load provider")
+            .expect("provider exists");
+        assert_eq!(ApiMode::ChatCompletions, stored.api_mode);
     }
 
     #[test]
