@@ -759,6 +759,14 @@ fn default_shortcut(macos: &'static str, other: &'static str) -> &'static str {
     }
 }
 
+fn close_active_tab_default_shortcuts() -> &'static [&'static str] {
+    if cfg!(target_os = "macos") {
+        &["cmd-shift-w"]
+    } else {
+        &["ctrl-f4", "alt-shift-w"]
+    }
+}
+
 fn close_active_window_default_shortcut() -> &'static str {
     default_shortcut("cmd-w", "ctrl-shift-w")
 }
@@ -1153,7 +1161,7 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         shortcuts_for(
             cx,
             action_id::APP_CLOSE_ACTIVE_TAB,
-            &[default_shortcut("cmd-shift-w", "alt-shift-w")],
+            close_active_tab_default_shortcuts(),
         )
         .into_iter()
         .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, CloseActiveTab, None, cx)),
@@ -1243,7 +1251,7 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
     keybindings.extend(rebind_keybindings(
         cx,
         action_id::APP_CLOSE_ACTIVE_TAB,
-        &[default_shortcut("cmd-shift-w", "alt-shift-w")],
+        close_active_tab_default_shortcuts(),
         None,
         CloseActiveTab,
     ));
@@ -2137,10 +2145,8 @@ mod tests {
         assert!(keybindings.contains("action_id::APP_CLOSE_ACTIVE_TAB"));
         assert!(keybindings.contains("CloseActiveTab"));
         assert!(refreshable_keybindings.contains("action_id::APP_CLOSE_ACTIVE_TAB"));
-        assert!(keybindings.contains(r#"default_shortcut("cmd-shift-w", "alt-shift-w")"#));
-        assert!(
-            refreshable_keybindings.contains(r#"default_shortcut("cmd-shift-w", "alt-shift-w")"#)
-        );
+        assert!(keybindings.contains("close_active_tab_default_shortcuts()"));
+        assert!(refreshable_keybindings.contains("close_active_tab_default_shortcuts()"));
         assert!(close_tab_handler.contains("hp.close_active_tab(window, cx)"));
     }
 
