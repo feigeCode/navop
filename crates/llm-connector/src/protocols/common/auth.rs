@@ -56,16 +56,27 @@ pub fn merge_metadata_policies(
 
 /// Create standard Bearer token header
 pub fn bearer_auth(api_key: &str) -> Vec<(String, String)> {
-    vec![
-        ("Authorization".to_string(), format!("Bearer {}", api_key)),
-        ("Content-Type".to_string(), "application/json".to_string()),
-    ]
+    vec![("Authorization".to_string(), format!("Bearer {}", api_key))]
 }
 
 /// Create standard API Key header (e.g. for Anthropic)
 pub fn api_key_header(api_key: &str, header_name: &str) -> Vec<(String, String)> {
-    vec![
-        (header_name.to_string(), api_key.to_string()),
-        ("Content-Type".to_string(), "application/json".to_string()),
-    ]
+    vec![(header_name.to_string(), api_key.to_string())]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{api_key_header, bearer_auth};
+
+    #[test]
+    fn auth_headers_leave_content_type_to_the_json_body_encoder() {
+        assert_eq!(
+            vec![("Authorization".to_string(), "Bearer sk-test".to_string())],
+            bearer_auth("sk-test")
+        );
+        assert_eq!(
+            vec![("x-api-key".to_string(), "sk-test".to_string())],
+            api_key_header("sk-test", "x-api-key")
+        );
+    }
 }

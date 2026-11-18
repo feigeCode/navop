@@ -419,6 +419,14 @@ mod tests {
     }
 
     #[test]
+    fn full_chat_completions_url_is_not_appended_twice() {
+        let protocol = OpenAIProtocol::with_service("test-key", "custom");
+        let endpoint = "https://ark.cn-beijing.volces.com/api/v3/chat/completions";
+
+        assert_eq!(endpoint, protocol.chat_endpoint(endpoint, "doubao-seed"));
+    }
+
+    #[test]
     fn test_openai_request_downgrade_for_deepseek() {
         let protocol = OpenAIProtocol::new("test-key");
         let request = ChatRequest {

@@ -151,12 +151,13 @@ impl HttpClient {
         url: &str,
         body: &T,
     ) -> Result<reqwest::Response, LlmConnectorError> {
-        let mut request = self.client.post(url).json(body);
-
-        // Add all configured request headers
+        let mut final_headers = reqwest::header::HeaderMap::new();
         for (key, value) in &self.headers {
-            request = request.header(key, value);
+            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes()) {
+                final_headers.insert(header_name, header_value(value));
+            }
         }
+        let request = self.client.post(url).json(body).headers(final_headers);
 
         request.send().await.map_err(|e| {
             if e.is_timeout() {
@@ -180,17 +181,25 @@ impl HttpClient {
         url: &str,
         body: &T,
     ) -> Result<reqwest::Response, LlmConnectorError> {
-        let mut request = self.client.post(url).json(body);
-
-        // Add streaming-specific headers
-        request = request.header("Accept", "text/event-stream");
-        request = request.header("Cache-Control", "no-cache");
-        request = request.header("Connection", "keep-alive");
-
-        // Add all configured request headers
+        let mut final_headers = reqwest::header::HeaderMap::new();
+        final_headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("text/event-stream"),
+        );
+        final_headers.insert(
+            reqwest::header::CACHE_CONTROL,
+            reqwest::header::HeaderValue::from_static("no-cache"),
+        );
+        final_headers.insert(
+            reqwest::header::CONNECTION,
+            reqwest::header::HeaderValue::from_static("keep-alive"),
+        );
         for (key, value) in &self.headers {
-            request = request.header(key, value);
+            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes()) {
+                final_headers.insert(header_name, header_value(value));
+            }
         }
+        let request = self.client.post(url).json(body).headers(final_headers);
 
         request.send().await
             .map_err(|e| {
@@ -211,17 +220,18 @@ impl HttpClient {
         body: &T,
         custom_headers: &HashMap<String, String>,
     ) -> Result<reqwest::Response, LlmConnectorError> {
-        let mut request = self.client.post(url).json(body);
-
-        // Add custom headers first
+        let mut final_headers = reqwest::header::HeaderMap::new();
         for (key, value) in custom_headers {
-            request = request.header(key, sanitize_header_value(value).as_ref());
+            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes()) {
+                final_headers.insert(header_name, header_value(value));
+            }
         }
-
-        // Then add configured headers (may override custom headers)
         for (key, value) in &self.headers {
-            request = request.header(key, value);
+            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes()) {
+                final_headers.insert(header_name, header_value(value));
+            }
         }
+        let request = self.client.post(url).json(body).headers(final_headers);
 
         request.send().await.map_err(|e| {
             if e.is_timeout() {
@@ -497,6 +507,69 @@ mod tests {
             )
             .await
             .expect("stream request should connect")
+    }
+
+    async fn content_type_count_for_json_request(use_stream: bool) -> usize {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("local addr");
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            loop {
+                let read = socket.read(&mut chunk).await.expect("read request");
+                assert!(read > 0, "client closed before sending headers");
+                request.extend_from_slice(&chunk[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+
+            let head = String::from_utf8_lossy(&request);
+            let content_type_count = head
+                .lines()
+                .filter(|line| {
+                    line.split_once(':')
+                        .is_some_and(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                })
+                .count();
+
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+                )
+                .await
+                .expect("write response");
+            content_type_count
+        });
+
+        let base = format!("http://{address}");
+        let client = HttpClient::new(&base)
+            .expect("client")
+            .with_header("Content-Type".to_string(), "application/json".to_string());
+        let url = format!("{base}/v1/chat/completions");
+        let body = serde_json::json!({});
+        let response = if use_stream {
+            client.stream(&url, &body).await.expect("stream request")
+        } else {
+            client.post(&url, &body).await.expect("POST request")
+        };
+
+        assert!(response.status().is_success());
+        server.await.expect("server task")
+    }
+
+    #[tokio::test]
+    async fn post_deduplicates_configured_content_type_header() {
+        assert_eq!(1, content_type_count_for_json_request(false).await);
+    }
+
+    #[tokio::test]
+    async fn stream_deduplicates_configured_content_type_header() {
+        assert_eq!(1, content_type_count_for_json_request(true).await);
     }
 
     #[tokio::test]

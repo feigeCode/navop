@@ -5615,9 +5615,9 @@ LlmProviders:
     zh-CN: API 基础地址（可选）
     zh-HK: API 基礎地址（可選）
   api_base_placeholder:
-    en: API base URL (optional)
-    zh-CN: API 基础地址（可选）
-    zh-HK: API 基礎地址（可選）
+    en: "API base URL (optional), e.g. https://api.example.com/v1"
+    zh-CN: "API 基础地址（可选），例如 https://api.example.com/v1"
+    zh-HK: "API 基礎地址（可選），例如 https://api.example.com/v1"
   api_version_label:
     en: API version (optional)
     zh-CN: API 版本（可选）
@@ -5863,9 +5863,9 @@ LlmProviders:
     zh-CN: 设为默认模型
     zh-HK: 設為預設模型
   api_base_help:
-    en: Leave empty to use the provider's default endpoint
-    zh-CN: 留空则使用该提供商的默认地址
-    zh-HK: 留空則使用該提供者嘅預設位址
+    en: "Use the API root (for Doubao: https://ark.cn-beijing.volces.com/api/v3) or a complete /chat/completions URL. Leave empty to use the provider default."
+    zh-CN: "填写 API 根地址（豆包示例：https://ark.cn-beijing.volces.com/api/v3）或完整的 /chat/completions 地址；留空则使用提供商默认地址。"
+    zh-HK: "填寫 API 根地址（豆包示例：https://ark.cn-beijing.volces.com/api/v3）或完整的 /chat/completions 地址；留空則使用提供商預設位址。"
   select_provider_hint:
     en: Select a provider on the left, or add a new one
     zh-CN: 选择左侧的提供商，或新增一个
