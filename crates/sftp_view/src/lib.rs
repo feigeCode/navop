@@ -1184,6 +1184,16 @@ fn server_copy_conflict_flags(
     (conflict_count, has_mergeable_directory, has_type_mismatch)
 }
 
+/// 解析「默认本地目录」设置；为空、目录不存在或不可读时返回 `None`，由调用方回退家目录。
+fn resolve_initial_local_directory(configured: &str) -> Option<PathBuf> {
+    let trimmed = configured.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    path.is_dir().then_some(path)
+}
+
 fn upload_directory_conflict_policy(
     transfer: &PendingTransfer,
     selected_policy: DirectoryConflictPolicy,
@@ -1746,7 +1756,11 @@ impl SftpView {
             };
 
         let focus_handle = cx.focus_handle();
-        let local_current_path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        let local_current_path = resolve_initial_local_directory(
+            &AppSettings::global(cx).transfer_default_local_directory,
+        )
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("/"));
 
         let local_panel = cx.new(|cx| {
             FileListPanel::new(
@@ -7930,11 +7944,11 @@ mod tests {
         breadcrumb_item_min_width, is_valid_entry_name, join_remote_path,
         mark_server_copy_directory_replacements, prepare_global_download,
         prepare_global_remote_delete, prepare_global_upload, reconcile_global_transfer_snapshot,
-        release_transfer_client, remote_path_parent, resolve_upload_conflict,
-        resolve_upload_conflicts, safe_local_download_path, server_copy_conflict_flags,
-        should_apply_local_listing, should_apply_remote_listing, should_refresh_transfer_target,
-        tab_connection_status, transfer_error_summary, transfer_task_state_from_global,
-        upload_directory_conflict_policy,
+        release_transfer_client, remote_path_parent, resolve_initial_local_directory,
+        resolve_upload_conflict, resolve_upload_conflicts, safe_local_download_path,
+        server_copy_conflict_flags, should_apply_local_listing, should_apply_remote_listing,
+        should_refresh_transfer_target, tab_connection_status, transfer_error_summary,
+        transfer_task_state_from_global, upload_directory_conflict_policy,
     };
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
@@ -9278,6 +9292,22 @@ mod tests {
         assert_eq!(
             (2, true, true),
             server_copy_conflict_flags(&items, &existing_entries)
+        );
+    }
+
+    #[test]
+    fn initial_local_directory_falls_back_unless_configured_directory_exists() {
+        assert_eq!(None, resolve_initial_local_directory(""));
+        assert_eq!(None, resolve_initial_local_directory("   "));
+        assert_eq!(
+            None,
+            resolve_initial_local_directory("/definitely/not/a/real/dir")
+        );
+
+        let temp = std::env::temp_dir();
+        assert_eq!(
+            Some(temp.clone()),
+            resolve_initial_local_directory(&temp.to_string_lossy())
         );
     }
 

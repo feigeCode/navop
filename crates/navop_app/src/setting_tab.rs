@@ -961,6 +961,33 @@ impl SettingsPanel {
                                 )
                                 .to_string(),
                             ),
+                        )
+                        .item(
+                            SettingItem::new(
+                                t!("Settings.General.FileTransfer.default_local_directory"),
+                                SettingField::input(
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx)
+                                                .transfer_default_local_directory
+                                                .clone(),
+                                        )
+                                    },
+                                    |val: SharedString, cx: &mut App| {
+                                        let directory = val.trim().to_string();
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.transfer_default_local_directory = directory;
+                                        });
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.transfer_default_local_directory.clone(),
+                                )),
+                            )
+                            .description(
+                                t!("Settings.General.FileTransfer.default_local_directory_desc")
+                                    .to_string(),
+                            ),
                         ),
                     close_behavior_setting_group(default_settings.close_button_behavior),
                     notes_setting_group(font_options.clone()),

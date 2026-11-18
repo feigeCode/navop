@@ -2929,6 +2929,14 @@ Settings:
         en: Highlight Overwrite in the transfer conflict dialog. Overwrite replaces the existing file with the same name. Folder conflicts still use the Merge preference.
         zh-CN: 传输冲突提示框里默认推荐「覆盖」。覆盖会用同名文件替换目标位置的文件；文件夹冲突仍按「合并」偏好处理。
         zh-HK: 傳輸衝突提示框裡預設推薦「覆蓋」。覆蓋會用同名檔案替換目標位置的檔案；文件夾衝突仍按「合併」偏好處理。
+      default_local_directory:
+        en: Default Local Folder
+        zh-CN: 默认本地文件夹
+        zh-HK: 預設本機文件夾
+      default_local_directory_desc:
+        en: Folder the file transfer panel opens on start. Leave empty to use your home folder; the path must exist.
+        zh-CN: 文件传输面板启动时打开的本地文件夹。留空则使用用户家目录；路径必须已存在。
+        zh-HK: 檔案傳輸面板啟動時開啟的本機文件夾。留空則使用使用者家目錄；路徑必須已存在。
 
     # 关闭主窗口行为
     CloseBehavior:

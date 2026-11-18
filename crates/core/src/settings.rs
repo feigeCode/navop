@@ -1480,6 +1480,9 @@ pub struct AppSettings {
     /// 文件传输发生同名文件冲突时，默认把「覆盖」作为推荐选项（issue #176）。
     #[serde(default = "default_true")]
     pub transfer_prefer_overwrite_for_files: bool,
+    /// 文件传输面板默认打开的本地目录；为空时使用用户家目录（issue #176）。
+    #[serde(default)]
+    pub transfer_default_local_directory: String,
     #[serde(default)]
     pub database_open_mode: DatabaseOpenMode,
     #[serde(default)]
@@ -1886,6 +1889,7 @@ impl Default for AppSettings {
             direct_server_transfer_enabled: true,
             transfer_prefer_merge_for_directories: true,
             transfer_prefer_overwrite_for_files: true,
+            transfer_default_local_directory: String::new(),
             database_open_mode: DatabaseOpenMode::default(),
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             startup_default_page: StartupDefaultPage::default(),
@@ -2734,6 +2738,15 @@ mod tests {
 
         assert!(settings.transfer_prefer_merge_for_directories);
         assert!(settings.transfer_prefer_overwrite_for_files);
+    }
+
+    #[test]
+    fn transfer_default_local_directory_is_empty_by_default() {
+        assert!(
+            AppSettings::default()
+                .transfer_default_local_directory
+                .is_empty()
+        );
     }
 
     #[test]
