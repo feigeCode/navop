@@ -555,34 +555,60 @@ fn commit_all_rejects_blank_messages() {
 }
 
 #[test]
-fn checkpoints_survive_restart_via_anchored_refs() {
+fn session_baseline_survives_restart_and_stays_per_session() {
     let root = initialized_repository();
     let repository = discover_repository(&root).unwrap().unwrap();
     std::fs::write(root.join("turn1.txt"), "one\n").unwrap();
 
     let snapshot = capture_worktree_snapshot(&repository).unwrap();
-    anchor_checkpoint(&repository, &snapshot).unwrap();
+    anchor_session_baseline(&repository, "session-a", &snapshot).unwrap();
 
     // "重启"：只从仓库 ref 恢复，不再依赖内存值。
-    let restored = anchored_checkpoint(&repository)
+    let restored = session_baseline(&repository, "session-a")
         .unwrap()
-        .expect("checkpoint should survive via ref");
+        .expect("baseline should survive via ref");
     assert_eq!(snapshot, restored);
+
+    // 新会话没有自己的基线：拿 session-a 的现场去 diff，就会把它的改动算成「本轮改动」。
+    assert_eq!(
+        None,
+        session_baseline(&repository, "session-b").unwrap(),
+        "别的会话的基线不能借给新会话"
+    );
 
     // ref 不占分支名空间。
     let branches = run_git_stdout(&root, &["branch", "--list"]);
     assert!(
-        !branches.contains("navop/checkpoints"),
-        "checkpoint ref 不应出现在分支列表: {branches}"
+        !branches.contains("navop/session-baselines"),
+        "baseline ref 不应出现在分支列表: {branches}"
     );
 }
 
 #[test]
-fn anchored_checkpoint_is_none_before_first_capture() {
+fn session_baseline_ref_rejects_unsafe_session_ids() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    let snapshot = capture_worktree_snapshot(&repository).unwrap();
+
+    for session_id in ["", "../escape", "session/1", "session 1", "session~1"] {
+        assert!(
+            session_baseline_ref_name(&repository, session_id).is_err(),
+            "`{session_id}` 应被拒绝"
+        );
+        assert!(
+            anchor_session_baseline(&repository, session_id, &snapshot).is_err(),
+            "`{session_id}` 不该被写成 ref"
+        );
+    }
+    assert!(session_baseline_ref_name(&repository, "session_1a2b3c").is_ok());
+}
+
+#[test]
+fn session_baseline_is_none_before_first_capture() {
     let root = initialized_repository();
     let repository = discover_repository(&root).unwrap().unwrap();
 
-    assert_eq!(None, anchored_checkpoint(&repository).unwrap());
+    assert_eq!(None, session_baseline(&repository, "session-a").unwrap());
 }
 
 #[test]
@@ -843,7 +869,7 @@ fn restore_backup_slot_holds_the_latest_pre_restore_state() {
     )
     .unwrap();
     let snapshot = capture_worktree_snapshot(&repository).unwrap();
-    anchor_checkpoint(&repository, &snapshot).unwrap();
+    anchor_session_baseline(&repository, "session-a", &snapshot).unwrap();
     assert_eq!(None, restore_backup(&repository).unwrap());
 
     std::fs::write(
@@ -860,7 +886,7 @@ fn restore_backup_slot_holds_the_latest_pre_restore_state() {
     );
     assert_eq!(
         Some(snapshot),
-        anchored_checkpoint(&repository).unwrap(),
+        session_baseline(&repository, "session-a").unwrap(),
         "恢复动作不能改写基线 ref"
     );
 }
@@ -870,13 +896,16 @@ fn turn_checkpoints_are_isolated_from_the_baseline_ref() {
     let root = initialized_repository();
     let repository = discover_repository(&root).unwrap().unwrap();
     let snapshot = capture_worktree_snapshot(&repository).unwrap();
-    anchor_checkpoint(&repository, &snapshot).unwrap();
+    anchor_session_baseline(&repository, "session-a", &snapshot).unwrap();
 
     assert!(
         turn_checkpoints(&repository).unwrap().is_empty(),
         "基线 ref 不能被当成某一轮"
     );
-    assert_eq!(Some(snapshot), anchored_checkpoint(&repository).unwrap());
+    assert_eq!(
+        Some(snapshot),
+        session_baseline(&repository, "session-a").unwrap()
+    );
 }
 
 #[test]
@@ -887,13 +916,18 @@ fn turn_checkpoints_and_backups_coexist_with_the_baseline_ref() {
 
     // git 不允许同一路径既是 ref 又是目录：基线、逐轮、撤销槽位三者必须能同时存在。
     // 逐轮 ref 曾经挂在基线 ref 之下，这条就是那个坑的回归守卫。
-    anchor_checkpoint(&repository, &snapshot).unwrap();
+    anchor_session_baseline(&repository, "session-a", &snapshot).unwrap();
+    anchor_session_baseline(&repository, "session-b", &snapshot).unwrap();
     anchor_turn_checkpoint(&repository, "turn_cafe", &snapshot).unwrap();
     anchor_restore_backup(&repository, &snapshot).unwrap();
 
     assert_eq!(
         Some(snapshot.clone()),
-        anchored_checkpoint(&repository).unwrap()
+        session_baseline(&repository, "session-a").unwrap()
+    );
+    assert_eq!(
+        Some(snapshot.clone()),
+        session_baseline(&repository, "session-b").unwrap()
     );
     assert_eq!(
         Some(snapshot.clone()),
