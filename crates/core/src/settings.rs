@@ -127,10 +127,11 @@ pub enum MasterKeyStorage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HomeConnectionLayout {
-    #[default]
     Card,
     List,
     Tree,
+    /// 全局导航是默认布局：左侧固定连接树，右侧主页功能入口（issue #560）。
+    #[default]
     Navigation,
 }
 
@@ -3217,10 +3218,13 @@ mod tests {
     }
 
     #[test]
-    fn app_settings_defaults_to_modern_home_with_cards_and_expanded_sidebar() {
+    fn app_settings_defaults_to_global_navigation_and_expanded_sidebar() {
         let settings = AppSettings::default();
 
-        assert_eq!(HomeConnectionLayout::Card, settings.home_connection_layout);
+        assert_eq!(
+            HomeConnectionLayout::Navigation,
+            settings.home_connection_layout
+        );
         assert_eq!(ConnectionSortOrder::Natural, settings.connection_sort_order);
         assert!(settings.connection_sidebar_expanded);
     }
