@@ -172,6 +172,12 @@ impl DragSelection {
         toggled
     }
 
+    /// 当前是否处于一次有效拖动中（仅测试用于断言拖动状态机）。
+    #[cfg(test)]
+    pub(crate) fn is_dragging(&self) -> bool {
+        self.started
+    }
+
     /// 结束一次拖动；返回 true 表示发生过拖动，调用方需要吞掉随后的 click。
     pub(crate) fn finish(&mut self) -> bool {
         let started = self.started;
