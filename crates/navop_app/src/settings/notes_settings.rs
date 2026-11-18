@@ -11,14 +11,53 @@ use gpui_component::{
 };
 use notes::NotesStorage;
 use one_assets::IconName;
-use one_core::settings::AppSettings;
+use one_core::settings::{AppSettings, MarkdownDefaultViewMode};
 use rust_i18n::t;
 
 pub fn notes_setting_group(font_options: Vec<(SharedString, SharedString)>) -> SettingGroup {
     SettingGroup::new()
         .title(t!("Settings.General.Notes.group_title"))
         .item(notes_path_item())
+        .item(default_view_mode_item())
         .item(markdown_code_font_item(font_options))
+}
+
+/// 笔记默认视图：所见即所得，或纯 Markdown 源码（#132）。
+fn default_view_mode_item() -> SettingItem {
+    let default_settings = AppSettings::default();
+    SettingItem::new(
+        t!("Settings.General.Notes.default_view_mode"),
+        SettingField::dropdown(
+            vec![
+                (
+                    MarkdownDefaultViewMode::Wysiwyg.as_str().into(),
+                    t!("Settings.General.Notes.default_view_mode_wysiwyg").into(),
+                ),
+                (
+                    MarkdownDefaultViewMode::Source.as_str().into(),
+                    t!("Settings.General.Notes.default_view_mode_source").into(),
+                ),
+            ],
+            |cx: &App| {
+                SharedString::from(
+                    AppSettings::global(cx)
+                        .notes_markdown_default_view_mode
+                        .as_str(),
+                )
+            },
+            |value: SharedString, cx: &mut App| {
+                let mode = MarkdownDefaultViewMode::from_str(&value)
+                    .unwrap_or(MarkdownDefaultViewMode::Wysiwyg);
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.notes_markdown_default_view_mode = mode;
+                });
+            },
+        )
+        .default_value(SharedString::from(
+            default_settings.notes_markdown_default_view_mode.as_str(),
+        )),
+    )
+    .description(t!("Settings.General.Notes.default_view_mode_desc").to_string())
 }
 
 /// Markdown 代码字体：行内代码、代码块与表格内代码统一取这一项。

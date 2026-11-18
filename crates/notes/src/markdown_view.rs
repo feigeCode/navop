@@ -1,6 +1,7 @@
 use crate::markdown_file_store::MarkdownFileStore;
 use crate::markdown_mode::{
-    editor_view_mode, focus_markdown_editor, markdown_view_mode, switch_markdown_mode,
+    default_markdown_view_mode, editor_view_mode, focus_markdown_editor, markdown_view_mode,
+    switch_markdown_mode,
 };
 use crate::markdown_session::{MarkdownSession, MarkdownSessionState, MarkdownSyncState};
 use crate::notes_notifications::notify_operation_error;
@@ -21,12 +22,15 @@ impl NotesView {
     ) -> anyhow::Result<()> {
         let document_id = descriptor.document_id.clone();
         if !self.markdown_sessions.contains_key(&document_id) {
+            // 没有记住过的文档用设置里的默认视图，而不是固定所见即所得（#132）。
+            let configured_default =
+                one_core::settings::AppSettings::current(cx).notes_markdown_default_view_mode;
             let mode = self
                 .tree
                 .markdown_view_modes
                 .get(&document_id)
                 .copied()
-                .unwrap_or_default();
+                .unwrap_or_else(|| default_markdown_view_mode(configured_default));
             self.tree
                 .markdown_view_modes
                 .entry(document_id.clone())

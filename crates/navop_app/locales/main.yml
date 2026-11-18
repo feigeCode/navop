@@ -2999,6 +2999,22 @@ Settings:
         en: "Failed to update notes location: %{error}"
         zh-CN: 更新笔记路径失败：%{error}
         zh-HK: 更新筆記路徑失敗：%{error}
+      default_view_mode:
+        en: Default Markdown View
+        zh-CN: 笔记默认视图
+        zh-HK: 筆記預設檢視
+      default_view_mode_desc:
+        en: View used when a Markdown note is opened for the first time. Switch any note between WYSIWYG and source with the toolbar button.
+        zh-CN: 首次打开 Markdown 笔记时使用的视图。单个笔记随时可用工具栏按钮在「所见即所得」与「源码」之间切换。
+        zh-HK: 首次開啟 Markdown 筆記時使用的檢視。單篇筆記可隨時用工具列按鈕在「所見即所得」與「原始碼」之間切換。
+      default_view_mode_wysiwyg:
+        en: WYSIWYG
+        zh-CN: 所见即所得
+        zh-HK: 所見即所得
+      default_view_mode_source:
+        en: Markdown source
+        zh-CN: Markdown 源码
+        zh-HK: Markdown 原始碼
       markdown_code_font_family:
         en: Markdown Code Font
         zh-CN: Markdown 代码字体
