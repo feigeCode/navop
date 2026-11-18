@@ -1895,6 +1895,22 @@ impl DbConnectionConfig {
         }
     }
 
+    /// 去掉主机字段首尾的空白与不可见控制字符。
+    ///
+    /// 主机地址经常是从聊天工具、网页或终端里粘贴过来的，末尾可能夹带 NUL
+    /// 之类的控制字符。这类字符会让地址解析（`getaddrinfo`）直接失败，并报出
+    /// 与文件名相关的误导性错误 `file name contained an unexpected NUL byte`，
+    /// 因此在保存连接与读取连接时都统一清洗一次。
+    pub fn sanitize_host(&mut self) {
+        let sanitized = self
+            .host
+            .trim_matches(|c: char| c.is_whitespace() || c.is_control())
+            .to_string();
+        if sanitized != self.host {
+            self.host = sanitized;
+        }
+    }
+
     pub fn is_change(&self, other: &DbConnectionConfig) -> bool {
         self.host != other.host
             || self.port != other.port
@@ -2427,9 +2443,10 @@ impl StoredConnection {
 
     pub fn new_database(
         name: String,
-        params: DbConnectionConfig,
+        mut params: DbConnectionConfig,
         workspace_id: Option<i64>,
     ) -> Self {
+        params.sanitize_host();
         let name = default_database_name(name, &params);
         Self {
             ai_access_level: AiAccessLevel::Allowed,
@@ -2751,6 +2768,7 @@ impl StoredConnection {
 
     pub fn to_db_connection(&self) -> Result<DbConnectionConfig, serde_json::Error> {
         let mut params: DbConnectionConfig = serde_json::from_str(&self.params)?;
+        params.sanitize_host();
         params.name = self.name.clone();
         params.workspace_id = self.workspace_id;
         params.id = self.id.unwrap_or(0).to_string();
@@ -3056,6 +3074,41 @@ mod tests {
         let config: DbConnectionConfig = serde_json::from_str(json).unwrap();
 
         assert!(config.proxy.is_none());
+    }
+
+    #[test]
+    fn sanitize_host_trims_whitespace_and_control_characters() {
+        let mut config = database_config_with_ssh_ref(7);
+        config.host = "\t 172.31.1.8\r\n\u{0}".to_string();
+        config.sanitize_host();
+        assert_eq!("172.31.1.8", config.host);
+
+        // 正常主机不受影响
+        config.host = "mysql.internal".to_string();
+        config.sanitize_host();
+        assert_eq!("mysql.internal", config.host);
+    }
+
+    #[test]
+    fn database_connection_host_is_sanitized_on_save_and_load() {
+        let mut config = database_config_with_ssh_ref(7);
+        config.host = "172.31.1.8\u{0}".to_string();
+
+        // 保存：落库的参数里不能留下 NUL
+        let stored = StoredConnection::new_database("prod".into(), config.clone(), None);
+        assert!(
+            !stored.params.contains("\\u0000"),
+            "保存的连接参数不应包含 NUL: {}",
+            stored.params
+        );
+
+        // 读取：旧版本已经落库的脏数据同样要清洗，避免地址解析报
+        // `file name contained an unexpected NUL byte`
+        let mut legacy = stored.clone();
+        legacy.params = serde_json::to_string(&config).expect("序列化脏参数");
+        assert!(legacy.params.contains("\\u0000"));
+        let loaded = legacy.to_db_connection().expect("to_db_connection");
+        assert_eq!("172.31.1.8", loaded.host);
     }
 
     #[test]
