@@ -142,6 +142,9 @@ pub struct ProviderConfig {
     /// Extra HTTP headers for OpenAI-compatible gateways, stored in display order.
     #[serde(default)]
     pub extra_headers: Vec<(String, String)>,
+    /// 供应商级代理地址；`None` 表示跟随全局代理设置。
+    #[serde(default)]
+    pub proxy: Option<String>,
     /// 默认思考级别；`None` 表示不传该参数，跟随上游默认。
     #[serde(default)]
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -165,6 +168,7 @@ impl Default for ProviderConfig {
             api_base: None,
             api_version: None,
             extra_headers: Vec::new(),
+            proxy: None,
             reasoning_effort: None,
             model: String::new(),
             models: Vec::new(),

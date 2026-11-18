@@ -7,7 +7,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px,
 };
 use gpui_component::{
@@ -16,6 +16,7 @@ use gpui_component::{
     checkbox::Checkbox,
     h_flex,
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
+    scroll::{Scrollbar, ScrollbarMode},
     select::{Select, SelectEvent, SelectItem, SelectState},
     switch::Switch,
     v_flex,
@@ -109,16 +110,14 @@ fn format_header_lines(headers: &[(String, String)]) -> String {
         .join("\n")
 }
 
+/// 解析「自定义请求头」输入。
+///
+/// 请求头对所有供应商类型都生效：`LlmConnector` 会把它们并入每次聊天请求，
+/// 因此这里不再按类型丢弃用户输入。
 fn parse_headers_for_provider(
-    provider_type: ProviderType,
+    _provider_type: ProviderType,
     input: &str,
 ) -> Result<Vec<(String, String)>, String> {
-    if !matches!(
-        provider_type,
-        ProviderType::OpenAICompatible | ProviderType::OpenCodeGo
-    ) {
-        return Ok(Vec::new());
-    }
     parse_header_lines(input)
 }
 
@@ -177,6 +176,41 @@ pub fn toggle_model(selected: &mut Vec<String>, model: &str, checked: bool) {
         (true, false) => selected.push(model.to_string()),
         (false, true) => selected.retain(|item| item != model),
         _ => {}
+    }
+}
+
+/// 批量选择动作；作用范围是**当前过滤结果**，这样「全选」不会把搜索外的模型
+/// 也一起勾上。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionAction {
+    /// 勾选过滤结果里的全部模型。
+    SelectAll,
+    /// 取消勾选过滤结果里的全部模型。
+    Clear,
+    /// 反转过滤结果里每个模型的勾选状态。
+    Invert,
+}
+
+/// 对 `query` 过滤出的模型批量应用 `action`，原地更新 `selected`。
+fn apply_selection_action(
+    available: &[String],
+    query: &str,
+    selected: &mut Vec<String>,
+    action: SelectionAction,
+) {
+    let scope: Vec<String> = filter_models(available, query)
+        .into_iter()
+        .cloned()
+        .collect();
+    for model in scope {
+        match action {
+            SelectionAction::SelectAll => toggle_model(selected, &model, true),
+            SelectionAction::Clear => toggle_model(selected, &model, false),
+            SelectionAction::Invert => {
+                let checked = selected.iter().any(|item| item == &model);
+                toggle_model(selected, &model, !checked);
+            }
+        }
     }
 }
 
@@ -339,6 +373,8 @@ pub struct ProviderDetail {
     /// 思考级别选择器：请求里要不要带 `reasoning_effort` 以及带哪一档。
     effort_select: Entity<SelectState<Vec<EffortItem>>>,
     extra_headers_input: Entity<TextareaState>,
+    /// 供应商级代理地址；留空表示跟随全局代理。
+    proxy_input: Entity<InputState>,
     model_filter_input: Entity<InputState>,
     model_filter: String,
     custom_model_input: Entity<InputState>,
@@ -350,8 +386,10 @@ pub struct ProviderDetail {
     default_model: String,
     is_default: bool,
     enabled: bool,
-    advanced_open: bool,
     models_loading: bool,
+    /// 详情主体与模型列表各自的滚动句柄，用来给 `overflow_y_scroll` 挂可见滚动条。
+    body_scroll: ScrollHandle,
+    model_scroll: ScrollHandle,
     status: Option<Status>,
     validation_error: Option<SharedString>,
     /// 当前 api_base 输入框里是不是上一次自动预填的值（用于判断能否安全改写）。
@@ -477,6 +515,17 @@ impl ProviderDetail {
             state
         });
 
+        let proxy_input = cx.new(|cx| {
+            let mut state =
+                InputState::new(window, cx).placeholder(t!("LlmProviders.proxy_placeholder"));
+            if let Some(ref cfg) = config
+                && let Some(ref proxy) = cfg.proxy
+            {
+                state = state.default_value(proxy);
+            }
+            state
+        });
+
         let model_filter_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t!("LlmProviders.model_search_placeholder"))
         });
@@ -575,6 +624,7 @@ impl ProviderDetail {
             api_version_input,
             effort_select,
             extra_headers_input,
+            proxy_input,
             model_filter_input,
             model_filter: String::new(),
             custom_model_input,
@@ -583,8 +633,9 @@ impl ProviderDetail {
             default_model,
             is_default: config.as_ref().map(|cfg| cfg.is_default).unwrap_or(false),
             enabled: config.as_ref().map(|cfg| cfg.enabled).unwrap_or(true),
-            advanced_open: false,
             models_loading: false,
+            body_scroll: ScrollHandle::new(),
+            model_scroll: ScrollHandle::new(),
             status: None,
             validation_error: None,
             last_applied_preset,
@@ -622,19 +673,48 @@ impl ProviderDetail {
     }
 
     fn select_all_models(&mut self, cx: &mut Context<Self>) {
-        for model in self.available_models.clone() {
-            toggle_model(&mut self.selected_models, &model, true);
-        }
-        if self.default_model.is_empty() {
-            self.default_model = self.selected_models.first().cloned().unwrap_or_default();
-        }
+        apply_selection_action(
+            &self.available_models,
+            &self.model_filter,
+            &mut self.selected_models,
+            SelectionAction::SelectAll,
+        );
+        self.reconcile_default_model();
         cx.notify();
     }
 
     fn clear_models(&mut self, cx: &mut Context<Self>) {
-        self.selected_models.clear();
-        self.default_model.clear();
+        apply_selection_action(
+            &self.available_models,
+            &self.model_filter,
+            &mut self.selected_models,
+            SelectionAction::Clear,
+        );
+        self.reconcile_default_model();
         cx.notify();
+    }
+
+    fn invert_models(&mut self, cx: &mut Context<Self>) {
+        apply_selection_action(
+            &self.available_models,
+            &self.model_filter,
+            &mut self.selected_models,
+            SelectionAction::Invert,
+        );
+        self.reconcile_default_model();
+        cx.notify();
+    }
+
+    /// 默认模型必须始终是已勾选的模型；勾选集合变了就顺手纠正。
+    fn reconcile_default_model(&mut self) {
+        if self
+            .selected_models
+            .iter()
+            .any(|item| item == &self.default_model)
+        {
+            return;
+        }
+        self.default_model = self.selected_models.first().cloned().unwrap_or_default();
     }
 
     fn add_custom_model(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -712,6 +792,7 @@ impl ProviderDetail {
             api_base: non_empty(api_base),
             api_version: non_empty(api_version),
             extra_headers,
+            proxy: non_empty(self.proxy_input.read(cx).value().to_string()),
             reasoning_effort: self
                 .effort_select
                 .read(cx)
@@ -1057,13 +1138,36 @@ impl ProviderDetail {
             t!("LlmProviders.api_version_label").to_string().into(),
             Input::new(&self.api_version_input),
         );
+        let headers_field = Self::field(
+            t!("LlmProviders.extra_headers_label").to_string().into(),
+            v_flex()
+                .gap_1()
+                .child(Textarea::new(&self.extra_headers_input))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("LlmProviders.extra_headers_help").to_string()),
+                ),
+        );
+        let proxy_field = Self::field(
+            t!("LlmProviders.proxy_label").to_string().into(),
+            v_flex().gap_1().child(Input::new(&self.proxy_input)).child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("LlmProviders.proxy_help").to_string()),
+            ),
+        );
 
         self.section(
             t!("LlmProviders.section_connection").to_string().into(),
             v_flex()
                 .gap_3()
                 .child(key_field)
-                .child(Self::two_columns(base_field, version_field)),
+                .child(Self::two_columns(base_field, version_field))
+                .child(headers_field)
+                .child(proxy_field),
             cx,
         )
     }
@@ -1153,14 +1257,51 @@ impl ProviderDetail {
             );
         }
 
-        let summary = t!(
-            "LlmProviders.model_selected_summary",
-            selected = self.selected_models.len(),
-            total = self.available_models.len()
-        )
-        .to_string();
+        let summary = if self.model_filter.trim().is_empty() {
+            t!(
+                "LlmProviders.model_selected_summary",
+                selected = self.selected_models.len(),
+                total = self.available_models.len()
+            )
+            .to_string()
+        } else {
+            format!(
+                "{} · {}",
+                t!(
+                    "LlmProviders.model_selected_summary",
+                    selected = self.selected_models.len(),
+                    total = self.available_models.len()
+                ),
+                t!("LlmProviders.model_filter_summary", count = filtered.len())
+            )
+        };
 
-        let tools = h_flex()
+        let bulk_actions = h_flex()
+            .gap_1()
+            .items_center()
+            .child(
+                Button::new("detail-select-all-models")
+                    .with_variant(ButtonVariant::Ghost)
+                    .compact()
+                    .label(t!("LlmProviders.model_select_all"))
+                    .on_click(cx.listener(|this, _, _, cx| this.select_all_models(cx))),
+            )
+            .child(
+                Button::new("detail-invert-models")
+                    .with_variant(ButtonVariant::Ghost)
+                    .compact()
+                    .label(t!("LlmProviders.model_invert"))
+                    .on_click(cx.listener(|this, _, _, cx| this.invert_models(cx))),
+            )
+            .child(
+                Button::new("detail-clear-models")
+                    .with_variant(ButtonVariant::Ghost)
+                    .compact()
+                    .label(t!("LlmProviders.model_clear"))
+                    .on_click(cx.listener(|this, _, _, cx| this.clear_models(cx))),
+            );
+
+        let filter_row = h_flex()
             .gap_2()
             .items_center()
             .child(
@@ -1170,20 +1311,8 @@ impl ProviderDetail {
                     .child(summary),
             )
             .child(div().flex_1())
-            .child(
-                Button::new("detail-select-all-models")
-                    .with_variant(ButtonVariant::Ghost)
-                    .compact()
-                    .label(t!("LlmProviders.model_select_all"))
-                    .on_click(cx.listener(|this, _, _, cx| this.select_all_models(cx))),
-            )
-            .child(
-                Button::new("detail-clear-models")
-                    .with_variant(ButtonVariant::Ghost)
-                    .compact()
-                    .label(t!("LlmProviders.model_clear"))
-                    .on_click(cx.listener(|this, _, _, cx| this.clear_models(cx))),
-            );
+            .child(bulk_actions)
+            .child(Input::new(&self.model_filter_input).w(px(200.)));
 
         let custom_row = h_flex()
             .gap_2()
@@ -1206,29 +1335,45 @@ impl ProviderDetail {
 
         let body = v_flex()
             .gap_2()
-            .child(tools)
+            .child(filter_row)
             .child(
                 div()
-                    .id("provider-model-list")
+                    .relative()
                     .max_h(px(240.))
-                    .overflow_y_scroll()
-                    .child(rows),
+                    .child(
+                        // `occlude` 让外层设置页与详情页自己的滚动区在鼠标位于列表上时
+                        // 都不参与滚动，避免一次滚轮同时带动多个滚动容器。
+                        div()
+                            .id("provider-model-list")
+                            .occlude()
+                            .max_h(px(240.))
+                            .overflow_y_scroll()
+                            .track_scroll(&self.model_scroll)
+                            .child(rows),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .bottom_0()
+                            .w(px(12.))
+                            .child(
+                                Scrollbar::vertical(&self.model_scroll).mode(ScrollbarMode::Always),
+                            ),
+                    ),
             )
             .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("detail-load-models")
-                            .with_variant(ButtonVariant::Secondary)
-                            .icon(IconName::Refresh)
-                            .label(load_label)
-                            .disabled(self.models_loading)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.load_models(window, cx);
-                            })),
-                    )
-                    .child(div().flex_1())
-                    .child(Input::new(&self.model_filter_input).w(px(200.))),
+                h_flex().gap_2().items_center().child(
+                    Button::new("detail-load-models")
+                        .with_variant(ButtonVariant::Secondary)
+                        .icon(IconName::Refresh)
+                        .label(load_label)
+                        .disabled(self.models_loading)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.load_models(window, cx);
+                        })),
+                ),
             )
             .child(custom_row);
 
@@ -1237,84 +1382,6 @@ impl ProviderDetail {
             body,
             cx,
         )
-    }
-
-    fn render_advanced(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let provider_type = self.selected_type(cx);
-        let supports_extra_headers = matches!(
-            provider_type,
-            ProviderType::OpenAICompatible | ProviderType::OpenCodeGo
-        );
-        let is_opencode_go = provider_type == ProviderType::OpenCodeGo;
-        let open = self.advanced_open;
-
-        let header = h_flex()
-            .id("provider-advanced-toggle")
-            .gap_2()
-            .items_center()
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.advanced_open = !this.advanced_open;
-                cx.notify();
-            }))
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(t!("LlmProviders.section_advanced").to_string()),
-            )
-            .child(div().flex_1())
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(if open {
-                        t!("LlmProviders.section_collapse").to_string()
-                    } else {
-                        t!("LlmProviders.section_expand").to_string()
-                    }),
-            );
-
-        let mut content = v_flex().gap_3();
-        if supports_extra_headers {
-            content = content.child(Self::field(
-                t!("LlmProviders.extra_headers_label").to_string().into(),
-                v_flex()
-                    .gap_1()
-                    .child(Textarea::new(&self.extra_headers_input))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t!("LlmProviders.extra_headers_help").to_string()),
-                    ),
-            ));
-            if is_opencode_go {
-                content = content.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(t!("LlmProviders.opencode_go_help").to_string()),
-                );
-            }
-        } else {
-            content = content.child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t!("LlmProviders.advanced_empty").to_string()),
-            );
-        }
-
-        v_flex()
-            .gap_3()
-            .p_4()
-            .rounded_lg()
-            .border_1()
-            .border_color(cx.theme().border)
-            .child(header)
-            .when(open, |this| this.child(content))
-            .into_any_element()
     }
 
     fn render_footer(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -1387,7 +1454,6 @@ impl Render for ProviderDetail {
         let basic = self.render_basic(cx);
         let connection = self.render_connection(cx);
         let models = self.render_models(cx);
-        let advanced = self.render_advanced(cx);
         let footer = self.render_footer(cx);
 
         v_flex()
@@ -1397,18 +1463,38 @@ impl Render for ProviderDetail {
             .child(header)
             .child(
                 div()
-                    .id("provider-detail-body")
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .pr_2()
                     .child(
-                        v_flex()
-                            .gap_4()
-                            .child(basic)
-                            .child(connection)
-                            .child(models)
-                            .child(advanced),
+                        // 滚动区自己持有 hitbox + 滚轮监听，`occlude` 只挡住外层设置页的
+                        // 滚动容器，不会连自己的滚动一起挡掉（不要换成 `overflow_y_scrollbar`，
+                        // 它会把滚动 hitbox 移到包装层，occlude 就会把自己的滚动也禁掉）。
+                        div()
+                            .id("provider-detail-body")
+                            .occlude()
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.body_scroll)
+                            .pr_2()
+                            .child(
+                                v_flex()
+                                    .gap_4()
+                                    .child(basic)
+                                    .child(connection)
+                                    .child(models),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .bottom_0()
+                            .w(px(12.))
+                            .child(
+                                Scrollbar::vertical(&self.body_scroll).mode(ScrollbarMode::Always),
+                            ),
                     ),
             )
             .child(div().h(px(1.)).w_full().bg(cx.theme().border))
@@ -1440,9 +1526,10 @@ fn non_empty(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiBaseAction, EffortItem, api_base_action_on_type_change, filter_loaded_models,
-        filter_models, format_header_lines, merge_models, parse_header_lines,
-        parse_headers_for_provider, reasoning_effort_items, toggle_model,
+        ApiBaseAction, EffortItem, SelectionAction, api_base_action_on_type_change,
+        apply_selection_action, filter_loaded_models, filter_models, format_header_lines,
+        merge_models, parse_header_lines, parse_headers_for_provider, reasoning_effort_items,
+        toggle_model,
     };
     use gpui_component::select::SelectItem;
     use one_core::llm::types::{ProviderType, ReasoningEffort};
@@ -1522,6 +1609,29 @@ mod tests {
     }
 
     #[test]
+    fn bulk_selection_actions_only_touch_filtered_models() {
+        let models = vec![
+            "gpt-5".to_string(),
+            "gpt-4.1".to_string(),
+            "o4-mini".to_string(),
+        ];
+
+        let mut selected: Vec<String> = Vec::new();
+        apply_selection_action(&models, "gpt", &mut selected, SelectionAction::SelectAll);
+        assert_eq!(selected, vec!["gpt-5".to_string(), "gpt-4.1".to_string()]);
+
+        apply_selection_action(&models, "gpt", &mut selected, SelectionAction::Invert);
+        assert!(selected.is_empty());
+
+        apply_selection_action(&models, "", &mut selected, SelectionAction::SelectAll);
+        assert_eq!(selected.len(), 3);
+        apply_selection_action(&models, "gpt", &mut selected, SelectionAction::Clear);
+        assert_eq!(selected, vec!["o4-mini".to_string()]);
+        apply_selection_action(&models, "", &mut selected, SelectionAction::Clear);
+        assert!(selected.is_empty());
+    }
+
+    #[test]
     fn custom_headers_parse_one_name_value_pair_per_line() {
         let headers =
             parse_header_lines("x-opencode-session: ses_test\nUser-Agent: opencode-navop\r\n\r\n")
@@ -1567,10 +1677,10 @@ mod tests {
     }
 
     #[test]
-    fn hidden_header_text_is_ignored_for_non_custom_providers() {
+    fn custom_headers_apply_to_every_provider_type() {
         assert_eq!(
-            Ok(Vec::<(String, String)>::new()),
-            parse_headers_for_provider(ProviderType::OpenAI, "not a valid header")
+            Ok(vec![("X-Tenant-ID".to_string(), "tenant-a".to_string())]),
+            parse_headers_for_provider(ProviderType::Anthropic, "X-Tenant-ID: tenant-a")
         );
     }
 

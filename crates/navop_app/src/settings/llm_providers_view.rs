@@ -3,7 +3,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px,
 };
 use gpui_component::{
@@ -12,6 +12,7 @@ use gpui_component::{
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},
+    scroll::{Scrollbar, ScrollbarMode},
     v_flex,
 };
 use one_assets::IconName;
@@ -101,6 +102,8 @@ pub struct LlmProvidersView {
     selected_id: Option<i64>,
     detail: Option<Entity<ProviderDetail>>,
     detail_subscription: Option<Subscription>,
+    /// 左栏列表的滚动句柄（给列表挂可见滚动条）。
+    list_scroll: ScrollHandle,
 }
 
 impl LlmProvidersView {
@@ -141,6 +144,7 @@ impl LlmProvidersView {
             selected_id: None,
             detail: None,
             detail_subscription: Some(search_subscription),
+            list_scroll: ScrollHandle::new(),
         };
         cx.spawn(async move |entity: WeakEntity<Self>, cx: &mut AsyncApp| {
             let _ = entity.update(cx, |this, cx| {
@@ -497,11 +501,28 @@ impl LlmProvidersView {
             .child(Input::new(&self.search_input).prefix(IconName::Search))
             .child(
                 div()
-                    .id("provider-list")
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .child(list),
+                    .child(
+                        div()
+                            .id("provider-list")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.list_scroll)
+                            .child(list),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .bottom_0()
+                            .w(px(12.))
+                            .child(
+                                Scrollbar::vertical(&self.list_scroll).mode(ScrollbarMode::Always),
+                            ),
+                    ),
             )
             .child(
                 Button::new("add-provider")

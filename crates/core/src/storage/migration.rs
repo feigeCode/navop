@@ -142,6 +142,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20261118000001",
         include_str!("../../migrations/20261118000001_llm_provider_reasoning_effort.sql"),
     ),
+    (
+        "20261118000002",
+        include_str!("../../migrations/20261118000002_llm_provider_proxy.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

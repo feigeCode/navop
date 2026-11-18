@@ -5674,6 +5674,18 @@ LlmProviders:
     en: "Invalid custom request headers: %{error}"
     zh-CN: "自定义请求头格式错误：%{error}"
     zh-HK: "自訂請求標頭格式錯誤：%{error}"
+  proxy_label:
+    en: Proxy URL (optional)
+    zh-CN: 代理地址（可选）
+    zh-HK: 代理位址（可選）
+  proxy_placeholder:
+    en: socks5://127.0.0.1:7890
+    zh-CN: socks5://127.0.0.1:7890
+    zh-HK: socks5://127.0.0.1:7890
+  proxy_help:
+    en: Used only for this provider. Leave empty to follow the global proxy setting.
+    zh-CN: 仅对当前提供商生效；留空则跟随「设置 → 通用 → 全局代理」。
+    zh-HK: 僅對目前提供商生效；留空則跟隨「設定 → 一般 → 全域代理」。
   opencode_go_help:
     en: "OpenCode Go automatically sends a stable x-opencode-session header. DeepSeek V4.1 Flash and V4 Pro require the Global region in OpenCode Console."
     zh-CN: "OpenCode Go 会自动发送稳定的 x-opencode-session 请求头。DeepSeek V4.1 Flash / V4 Pro 需要在 OpenCode Console 中选择 Global 区域。"
@@ -5707,9 +5719,9 @@ LlmProviders:
     zh-CN: 加载中...
     zh-HK: 載入中...
   model_load_success:
-    en: "Loaded %{count} models. They are now available in the dropdown above."
-    zh-CN: "已加载 %{count} 个模型，已更新到上方下拉列表。"
-    zh-HK: "已載入 %{count} 個模型，已更新到上方下拉列表。"
+    en: "Loaded %{count} models. All of them are now checked below."
+    zh-CN: "已加载 %{count} 个模型，已全部加入下方列表并勾选。"
+    zh-HK: "已載入 %{count} 個模型，已全部加入下方列表並勾選。"
   set_default:
     en: Set as default provider
     zh-CN: 设为默认提供商
@@ -5842,6 +5854,10 @@ LlmProviders:
     en: Clear
     zh-CN: 清空
     zh-HK: 清空
+  model_invert:
+    en: Invert
+    zh-CN: 反选
+    zh-HK: 反選
   set_as_default:
     en: Set as default model
     zh-CN: 设为默认模型
@@ -5858,6 +5874,10 @@ LlmProviders:
     en: "%{selected} of %{total} models selected"
     zh-CN: "已选 %{selected} / %{total} 个模型"
     zh-HK: "已選 %{selected} / %{total} 個模型"
+  model_filter_summary:
+    en: "%{count} matched by the filter"
+    zh-CN: "过滤命中 %{count}"
+    zh-HK: "過濾命中 %{count}"
 
 
 Serial:
