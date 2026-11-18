@@ -64,6 +64,7 @@ mod persistence;
 mod plan_tools;
 mod provider;
 mod reasoning;
+mod reasoning_effort;
 mod resource_builder;
 #[cfg(test)]
 mod resource_builder_tests;

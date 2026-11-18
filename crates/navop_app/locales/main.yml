@@ -5626,6 +5626,38 @@ LlmProviders:
     en: API version (optional)
     zh-CN: API 版本（可选）
     zh-HK: API 版本（可選）
+  reasoning_effort_label:
+    en: Reasoning effort
+    zh-CN: 思考级别
+    zh-HK: 思考級別
+  reasoning_effort_help:
+    en: Sent as the default for chats using this provider. Providers without native support ignore it; you can switch it per chat.
+    zh-CN: 作为该提供商聊天时的默认值。不支持该参数的提供商会自动忽略；聊天里仍可随时切换。
+    zh-HK: 作為該提供商聊天時的預設值。不支援該參數的提供商會自動忽略；對話中仍可隨時切換。
+  reasoning_effort_auto:
+    en: Auto (follow the provider default)
+    zh-CN: 自动（跟随上游默认）
+    zh-HK: 自動（跟隨上游預設）
+  reasoning_effort_none:
+    en: Off
+    zh-CN: 关闭
+    zh-HK: 關閉
+  reasoning_effort_low:
+    en: Low
+    zh-CN: 低
+    zh-HK: 低
+  reasoning_effort_medium:
+    en: Medium
+    zh-CN: 中
+    zh-HK: 中
+  reasoning_effort_high:
+    en: High
+    zh-CN: 高
+    zh-HK: 高
+  model_search_placeholder:
+    en: Search models
+    zh-CN: 搜索模型
+    zh-HK: 搜尋模型
   extra_headers_label:
     en: Custom request headers (optional)
     zh-CN: 自定义请求头（可选）

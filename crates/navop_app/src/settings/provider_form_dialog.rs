@@ -10,6 +10,7 @@ use gpui_component::{
     button::{Button, ButtonVariant, ButtonVariants},
     h_flex,
     input::{Input, InputState, Textarea, TextareaState},
+    searchable_list::SearchableVec,
     select::{Select, SelectEvent, SelectItem, SelectState},
     switch::Switch,
     v_flex,
@@ -17,7 +18,7 @@ use gpui_component::{
 use one_core::gpui_tokio::Tokio;
 use one_core::llm::default_api_base;
 use one_core::llm::manager::GlobalProviderState;
-use one_core::llm::types::{ProviderConfig, ProviderType};
+use one_core::llm::types::{ProviderConfig, ProviderType, ReasoningEffort};
 use rust_i18n::t;
 
 const CUSTOM_MODEL_ID: &str = "__custom__";
@@ -219,9 +220,60 @@ impl SelectItem for ModelItem {
     }
 }
 
+/// 思考级别选择项。`None` 表示「自动」：请求里不写 `reasoning_effort`。
+#[derive(Clone, Debug)]
+pub struct EffortItem {
+    effort: Option<ReasoningEffort>,
+}
+
+impl EffortItem {
+    pub fn new(effort: Option<ReasoningEffort>) -> Self {
+        Self { effort }
+    }
+}
+
+impl SelectItem for EffortItem {
+    type Value = Option<ReasoningEffort>;
+
+    fn title(&self) -> SharedString {
+        reasoning_effort_label(self.effort)
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.effort
+    }
+}
+
+/// 思考级别文案；「自动」与具体档位分开取文案，便于各语言分别措辞。
+fn reasoning_effort_label(effort: Option<ReasoningEffort>) -> SharedString {
+    match effort {
+        None => t!("LlmProviders.reasoning_effort_auto").to_string().into(),
+        Some(ReasoningEffort::None) => t!("LlmProviders.reasoning_effort_none").to_string().into(),
+        Some(ReasoningEffort::Low) => t!("LlmProviders.reasoning_effort_low").to_string().into(),
+        Some(ReasoningEffort::Medium) => t!("LlmProviders.reasoning_effort_medium")
+            .to_string()
+            .into(),
+        Some(ReasoningEffort::High) => t!("LlmProviders.reasoning_effort_high").to_string().into(),
+    }
+}
+
+/// 思考级别下拉的全部档位：自动 / 关闭 / 低 / 中 / 高。
+fn reasoning_effort_items() -> Vec<EffortItem> {
+    [
+        None,
+        Some(ReasoningEffort::None),
+        Some(ReasoningEffort::Low),
+        Some(ReasoningEffort::Medium),
+        Some(ReasoningEffort::High),
+    ]
+    .into_iter()
+    .map(EffortItem::new)
+    .collect()
+}
+
 #[derive(Clone)]
 struct ModelRow {
-    select: Entity<SelectState<Vec<ModelItem>>>,
+    select: Entity<SelectState<SearchableVec<ModelItem>>>,
     custom_input: Entity<InputState>,
 }
 
@@ -270,6 +322,8 @@ pub struct ProviderForm {
     api_key_input: Entity<InputState>,
     api_base_input: Entity<InputState>,
     api_version_input: Entity<InputState>,
+    /// 思考级别选择器：请求里要不要带 `reasoning_effort` 以及带哪一档。
+    effort_select: Entity<SelectState<Vec<EffortItem>>>,
     extra_headers_input: Entity<TextareaState>,
     model_items: Vec<ModelItem>,
     model_rows: Vec<ModelRow>,
@@ -357,6 +411,20 @@ impl ProviderForm {
             }
             state
         });
+
+        let effort_items = reasoning_effort_items();
+        let effort_index = config
+            .as_ref()
+            .and_then(|cfg| cfg.reasoning_effort)
+            .and_then(|effort| {
+                effort_items
+                    .iter()
+                    .position(|item| item.effort == Some(effort))
+            })
+            .map(IndexPath::new)
+            // 没配置过（或配置值不可识别）时落在「自动」，与上游默认语义一致。
+            .or(Some(IndexPath::new(0)));
+        let effort_select = cx.new(|cx| SelectState::new(effort_items, effort_index, window, cx));
 
         let extra_headers_input = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx)
@@ -446,6 +514,7 @@ impl ProviderForm {
             api_key_input,
             api_base_input,
             api_version_input,
+            effort_select,
             extra_headers_input,
             model_items,
             model_rows,
@@ -491,7 +560,15 @@ impl ProviderForm {
             Some(IndexPath::new(0))
         };
 
-        let select = cx.new(|cx| SelectState::new(items.to_vec(), selected_index, window, cx));
+        let select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(items.to_vec()),
+                selected_index,
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
         let custom_input = cx.new(|cx| {
             let mut state =
                 InputState::new(window, cx).placeholder(t!("LlmProviders.model_placeholder"));
@@ -586,7 +663,7 @@ impl ProviderForm {
         for row in &self.model_rows {
             let selected = row.select.read(cx).selected_value().cloned();
             row.select.update(cx, |state, cx| {
-                state.set_items(items.clone(), window, cx);
+                state.set_items(SearchableVec::new(items.clone()), window, cx);
                 let index = match selected.as_ref() {
                     Some(value) => items
                         .iter()
@@ -674,6 +751,12 @@ impl ProviderForm {
                 Some(api_version)
             },
             extra_headers,
+            reasoning_effort: self
+                .effort_select
+                .read(cx)
+                .selected_value()
+                .copied()
+                .flatten(),
             model: fallback_model,
             models,
             max_tokens: Some(4096),
@@ -817,6 +900,12 @@ impl ProviderForm {
                 Some(api_version)
             },
             extra_headers,
+            reasoning_effort: self
+                .effort_select
+                .read(cx)
+                .selected_value()
+                .copied()
+                .flatten(),
             model,
             models,
             max_tokens: Some(4096),
@@ -841,10 +930,12 @@ impl Render for ProviderForm {
             let selected = row.select.read(cx).selected_value().cloned();
             let is_custom = matches!(selected.as_deref(), Some(CUSTOM_MODEL_ID));
 
-            let mut row_view = h_flex()
-                .gap_2()
-                .items_center()
-                .child(div().flex_1().child(Select::new(&row.select)));
+            let mut row_view = h_flex().gap_2().items_center().child(
+                div().flex_1().child(
+                    Select::new(&row.select)
+                        .search_placeholder(t!("LlmProviders.model_search_placeholder")),
+                ),
+            );
 
             if is_custom {
                 row_view = row_view.child(div().flex_1().child(Input::new(&row.custom_input)));
@@ -937,6 +1028,22 @@ impl Render for ProviderForm {
                     )
                     .child(Input::new(&self.api_version_input)),
             )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(t!("LlmProviders.reasoning_effort_label").to_string()),
+                    )
+                    .child(Select::new(&self.effort_select))
+                    .child(
+                        div()
+                            .text_xs()
+                            .child(t!("LlmProviders.reasoning_effort_help").to_string()),
+                    ),
+            )
             .when(supports_extra_headers, |this| {
                 this.child(
                     v_flex()
@@ -1022,10 +1129,48 @@ impl Render for ProviderForm {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiBaseAction, api_base_action_on_type_change, filter_loaded_models, format_header_lines,
-        parse_header_lines, parse_headers_for_provider,
+        ApiBaseAction, EffortItem, ModelItem, api_base_action_on_type_change, filter_loaded_models,
+        format_header_lines, parse_header_lines, parse_headers_for_provider,
+        reasoning_effort_items,
     };
-    use one_core::llm::types::ProviderType;
+    use gpui_component::select::SelectItem;
+    use one_core::llm::types::{ProviderType, ReasoningEffort};
+
+    #[test]
+    fn reasoning_effort_items_cover_all_levels_in_order() {
+        let values: Vec<Option<ReasoningEffort>> = reasoning_effort_items()
+            .into_iter()
+            .map(|item| item.effort)
+            .collect();
+        assert_eq!(
+            values,
+            [
+                None,
+                Some(ReasoningEffort::None),
+                Some(ReasoningEffort::Low),
+                Some(ReasoningEffort::Medium),
+                Some(ReasoningEffort::High),
+            ],
+            "下拉顺序：自动 / 关闭 / 低 / 中 / 高"
+        );
+    }
+
+    #[test]
+    fn model_items_are_searchable_case_insensitively() {
+        // 模型下拉已切到 SearchableVec：能搜到的前提是 ModelItem 的 matches 认标题。
+        let item = ModelItem::new("gpt-5.5", "gpt-5.5");
+        assert!(item.matches("GPT-5"));
+        assert!(item.matches("5.5"));
+        assert!(!item.matches("claude"));
+    }
+
+    #[test]
+    fn effort_items_expose_their_level_as_value() {
+        let item = EffortItem::new(Some(ReasoningEffort::High));
+        assert_eq!(item.value(), &Some(ReasoningEffort::High));
+        let auto = EffortItem::new(None);
+        assert_eq!(auto.value(), &None);
+    }
 
     #[test]
     fn custom_headers_parse_one_name_value_pair_per_line() {

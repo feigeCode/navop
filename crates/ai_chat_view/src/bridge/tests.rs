@@ -152,8 +152,11 @@ fn gpt6_tool_requests_turn_reasoning_off() {
     // #487：gpt-6 系列在 /v1/chat/completions 上不接受「推理 + 函数工具」，
     // 必须在带工具的请求里显式传 reasoning_effort: "none"，否则上游直接 400。
     let client = LlmModelClient::new(sample_provider_named("openai"), "gpt-6.1-sol");
-    let request = ModelRequest::new(vec![Message::user("hi")])
-        .with_tools(vec![Tool::function("echo", None, serde_json::json!({}))]);
+    let request = ModelRequest::new(vec![Message::user("hi")]).with_tools(vec![Tool::function(
+        "echo",
+        None,
+        serde_json::json!({}),
+    )]);
 
     let chat_request = client.to_chat_request(request);
 
@@ -201,6 +204,94 @@ fn non_gpt6_tool_requests_keep_upstream_default_reasoning() {
             "{model} 不应被注入 reasoning_effort"
         );
     }
+}
+
+/// 只声明「是否支持 reasoning_effort」的 provider，用来验证参数下发策略。
+fn effort_provider(supports_reasoning_effort: bool) -> Arc<dyn LlmProvider> {
+    struct EffortProvider {
+        supports_reasoning_effort: bool,
+    }
+    #[async_trait]
+    impl LlmProvider for EffortProvider {
+        async fn chat(&self, _request: &ChatRequest) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+        async fn chat_stream(
+            &self,
+            _request: &ChatRequest,
+        ) -> anyhow::Result<one_core::llm::ChatStream> {
+            Ok(Box::pin(stream::empty()))
+        }
+        async fn models(&self) -> anyhow::Result<Vec<String>> {
+            Ok(vec![])
+        }
+        fn provider_name(&self) -> &str {
+            "effort"
+        }
+        fn supports_reasoning_effort(&self) -> bool {
+            self.supports_reasoning_effort
+        }
+    }
+    Arc::new(EffortProvider {
+        supports_reasoning_effort,
+    })
+}
+
+#[test]
+fn user_reasoning_effort_is_forwarded_for_supporting_providers() {
+    let client = LlmModelClient::new(effort_provider(true), "gpt-5.5")
+        .with_reasoning_effort(ReasoningEffort::High);
+    let request = ModelRequest::new(vec![Message::user("hi")]);
+
+    let chat_request = client.to_chat_request(request);
+
+    assert_eq!(
+        Some(ReasoningEffort::High),
+        chat_request.reasoning_effort,
+        "支持 reasoning_effort 的协议应带上用户选的档位"
+    );
+}
+
+#[test]
+fn user_reasoning_effort_is_dropped_for_unsupporting_protocols() {
+    // 智谱 / Anthropic 之类走 enable_thinking / thinking_budget；硬塞
+    // reasoning_effort 会被 llm-connector 的能力校验直接拒绝。
+    let client = LlmModelClient::new(effort_provider(false), "claude-sonnet")
+        .with_reasoning_effort(ReasoningEffort::High);
+    let request = ModelRequest::new(vec![Message::user("hi")]);
+
+    let chat_request = client.to_chat_request(request);
+
+    assert!(
+        chat_request.reasoning_effort.is_none(),
+        "协议不支持时不下发，交给上游默认"
+    );
+}
+
+#[test]
+fn auto_effort_sends_no_parameter_even_when_supported() {
+    let client = LlmModelClient::new(effort_provider(true), "gpt-5.5");
+    let request = ModelRequest::new(vec![Message::user("hi")]);
+
+    let chat_request = client.to_chat_request(request);
+
+    assert!(
+        chat_request.reasoning_effort.is_none(),
+        "「自动」等于不传该参数"
+    );
+}
+
+#[test]
+fn gpt6_tool_override_beats_user_reasoning_effort() {
+    // #487 的规避优先于用户设置：带工具的 gpt-6 只能 none。
+    let client = LlmModelClient::new(effort_provider(true), "gpt-6.1-sol")
+        .with_reasoning_effort(ReasoningEffort::High);
+    let request = ModelRequest::new(vec![Message::user("hi")])
+        .with_tools(vec![Tool::function("echo", None, serde_json::json!({}))]);
+
+    let chat_request = client.to_chat_request(request);
+
+    assert_eq!(Some(ReasoningEffort::None), chat_request.reasoning_effort);
 }
 
 #[test]
@@ -362,10 +453,16 @@ fn duplicate_default_tool_names_fail_runtime_build_without_panicking() {
 fn duplicate_default_tool_names_propagate_through_provider_builder() {
     let registry = ToolRegistry::new().with_tool(Arc::new(LoadSkillTool));
 
-    let error =
-        build_runtime_from_llm_provider(sample_provider(), "test-model", registry, None, None)
-            .err()
-            .expect("provider runtime builder should propagate duplicate tool errors");
+    let error = build_runtime_from_llm_provider(
+        sample_provider(),
+        "test-model",
+        registry,
+        None,
+        None,
+        None,
+    )
+    .err()
+    .expect("provider runtime builder should propagate duplicate tool errors");
 
     assert!(
         error.to_string().contains("load_skill"),

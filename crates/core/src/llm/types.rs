@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub use llm_connector::types::ReasoningEffort;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ProviderType {
     OpenAI,
@@ -140,6 +142,9 @@ pub struct ProviderConfig {
     /// Extra HTTP headers for OpenAI-compatible gateways, stored in display order.
     #[serde(default)]
     pub extra_headers: Vec<(String, String)>,
+    /// 默认思考级别；`None` 表示不传该参数，跟随上游默认。
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub model: String,
     pub models: Vec<String>,
     pub max_tokens: Option<i32>,
@@ -160,6 +165,7 @@ impl Default for ProviderConfig {
             api_base: None,
             api_version: None,
             extra_headers: Vec::new(),
+            reasoning_effort: None,
             model: String::new(),
             models: Vec::new(),
             max_tokens: None,

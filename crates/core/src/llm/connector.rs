@@ -57,6 +57,14 @@ pub trait LlmProvider: Send + Sync {
 
     async fn models(&self) -> Result<Vec<String>>;
     fn provider_name(&self) -> &str;
+
+    /// 当前协议是否通过 `reasoning_effort` 参数表达思考级别。
+    ///
+    /// 默认 `false`：只有明确实现这个参数的协议才下发，否则会被 llm-connector 的
+    /// 能力校验直接拒绝（`... does not support reasoning_effort`）。
+    fn supports_reasoning_effort(&self) -> bool {
+        false
+    }
 }
 
 pub struct LlmConnector {
@@ -442,6 +450,11 @@ impl LlmProvider for LlmConnector {
 
     fn provider_name(&self) -> &str {
         self.provider_type.as_str()
+    }
+
+    fn supports_reasoning_effort(&self) -> bool {
+        self.client.capabilities().reasoning_request_strategy
+            == llm_connector::protocols::common::capabilities::ReasoningRequestStrategy::ReasoningEffort
     }
 }
 

@@ -38,6 +38,29 @@ pub enum ReasoningEffort {
     High,
 }
 
+impl ReasoningEffort {
+    /// 协议里的字面量（与 serde 的小写序列化保持一致）。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+
+    /// 从持久化 / UI 里的字面量还原；未知值返回 `None`。
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "low" => Some(Self::Low),
+            "medium" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            _ => None,
+        }
+    }
+}
+
 /// Chat completion request
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChatRequest {

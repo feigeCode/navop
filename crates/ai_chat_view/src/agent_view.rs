@@ -42,7 +42,9 @@ use gpui_component::{
 use one_assets::IconName;
 #[cfg(not(test))]
 use one_core::gpui_tokio::Tokio;
-use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig};
+use one_core::llm::{
+    GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig, ReasoningEffort,
+};
 use one_core::settings::{AiChatBackendSelection, AiChatToolExecutionMode, AppSettings};
 use one_core::sidebar_contribution::SidebarPlacement;
 use one_ui::{IconButton, IconButtonRole, PanelHeader, PanelHeaderVariant};
@@ -101,6 +103,7 @@ use crate::message_turn_view::{
 use crate::message_view::{MessageListLayout, render_running_activity};
 use crate::pending_submission::{PendingSubmission, PendingSubmissions};
 use crate::persistence;
+use crate::reasoning_effort::{effort_label, parse_effort_id};
 use crate::resource_display::first_visible_alias;
 use crate::session_shortcut::{NavigateSessionBack, NavigateSessionForward, ToggleSessionSwitcher};
 use crate::session_sidebar::{self, SessionRowStyle, SessionSummary};
@@ -194,9 +197,13 @@ pub enum AgentChatViewEvent {
     },
 }
 
-/// 根据模型选项构建对应运行时。
-pub type AgentRuntimeFactory =
-    Arc<dyn Fn(&ComposerModelOption) -> anyhow::Result<Arc<Runtime>> + Send + Sync + 'static>;
+/// 根据模型选项与思考级别构建对应运行时。
+pub type AgentRuntimeFactory = Arc<
+    dyn Fn(&ComposerModelOption, Option<ReasoningEffort>) -> anyhow::Result<Arc<Runtime>>
+        + Send
+        + Sync
+        + 'static,
+>;
 
 /// 每轮发送前重建资源上下文的回调。
 ///
@@ -978,6 +985,7 @@ impl RuntimeBinding {
     fn switch_model(
         &mut self,
         option: &ComposerModelOption,
+        reasoning_effort: Option<ReasoningEffort>,
         resources: &ResourceContext,
     ) -> anyhow::Result<bool> {
         let Some(factory) = &self.runtime_factory else {
@@ -988,7 +996,7 @@ impl RuntimeBinding {
             .runtime
             .session(&self.session_id)
             .map(|session| session.snapshot());
-        let runtime = factory(option)?;
+        let runtime = factory(option, reasoning_effort)?;
         let session = match snapshot {
             Some(snapshot) => runtime.restore_session(snapshot),
             None => runtime.create_session(resources.clone()),
@@ -1237,7 +1245,8 @@ impl AgentChatViewConfig {
             config.runtime_factory = None;
             return Ok(config);
         };
-        let runtime = initial.build()?;
+        let initial_effort = initial.option.reasoning_effort_default;
+        let runtime = initial.build(initial_effort)?;
         let selected_model_id = selected_provider_model_id(&specs);
         let model_options = specs.iter().map(|spec| spec.option.clone()).collect();
         let spec_map: Arc<HashMap<String, RuntimeBuildSpec>> = Arc::new(
@@ -1246,11 +1255,11 @@ impl AgentChatViewConfig {
                 .map(|spec| (spec.option.id.to_string(), spec))
                 .collect(),
         );
-        let runtime_factory: AgentRuntimeFactory = Arc::new(move |option| {
+        let runtime_factory: AgentRuntimeFactory = Arc::new(move |option, reasoning_effort| {
             let spec = spec_map
                 .get(option.id.as_ref())
                 .ok_or_else(|| anyhow::anyhow!("unknown agent model option: {}", option.id))?;
-            spec.build()
+            spec.build(reasoning_effort)
         });
 
         Ok(Self::new(runtime, resources, mentions).with_models(
@@ -1273,13 +1282,14 @@ struct RuntimeBuildSpec {
 }
 
 impl RuntimeBuildSpec {
-    fn build(&self) -> anyhow::Result<Arc<Runtime>> {
+    fn build(&self, reasoning_effort: Option<ReasoningEffort>) -> anyhow::Result<Arc<Runtime>> {
         build_runtime_from_llm_provider(
             self.provider.clone(),
             self.model.clone(),
             self.registry.clone(),
             self.temperature,
             self.max_tokens,
+            reasoning_effort,
         )
     }
 }
@@ -1581,6 +1591,8 @@ pub struct AgentChatView {
     model_options: Vec<ComposerModelOption>,
     tool_options: Vec<ComposerMenuOption>,
     runtime_factory: Option<AgentRuntimeFactory>,
+    /// 聊天里手动切换过的思考级别：`None` 跟随模型默认，`Some(None)` 表示强制「自动」。
+    reasoning_effort_override: Option<Option<ReasoningEffort>>,
     is_running: bool,
     /// 当前系统提示词追加指令。
     ///
@@ -1949,6 +1961,7 @@ impl AgentChatView {
             model_options,
             tool_options,
             runtime_factory,
+            reasoning_effort_override: None,
             is_running: false,
             session_roots: initial_session_roots,
             system_instruction: seed_system_instruction,
@@ -2914,6 +2927,11 @@ impl AgentChatView {
                     } else {
                         self.select_model(&id, &provider_id, &model, cx);
                     }
+                }
+            }
+            AgentInputEvent::SelectReasoningEffort { id } => {
+                if self.backend == Backend::Local {
+                    self.select_reasoning_effort(&id, cx);
                 }
             }
             AgentInputEvent::SelectExecutionMode { id } => self.select_execution_mode(&id, cx),
@@ -4967,6 +4985,13 @@ impl AgentChatView {
             self.skills.items(),
             self.local_context_tokens(),
         );
+        ctx.reasoning_effort_label = match (self.backend, self.selected_model.as_ref()) {
+            // 思考级别是内置 agent 的请求参数；ACP agent 自报推理能力，不摆这颗 chip。
+            (Backend::Local, Some(model)) if self.runtime_factory.is_some() => {
+                Some(effort_label(self.effective_reasoning_effort(model)))
+            }
+            _ => None,
+        };
         apply_composer_snapshot(&mut ctx, self.composer_snapshot(cx));
         // `/` 命令只有 ACP agent 声明得出来：与提问面板一样，只喂 ACP 那份。
         let commands = self.composer_slash_commands();
@@ -5393,51 +5418,17 @@ impl AgentChatView {
         };
         let opt = opt.clone();
         let previous_session = self.session_id.clone();
+        let reasoning_effort = self.effective_reasoning_effort(&opt);
         let mut binding = RuntimeBinding {
             runtime: self.runtime.clone(),
             session_id: self.session_id.clone(),
             selected_model: self.selected_model.clone(),
             runtime_factory: self.runtime_factory.clone(),
         };
-        match binding.switch_model(&opt, &self.resources) {
+        match binding.switch_model(&opt, reasoning_effort, &self.resources) {
             Ok(true) => {
-                // session id 与切换前一致 ⇒ 历史已随会话搬进新 Runtime：这仍是
-                // 同一个会话，转录、侧栏摘要、会话缓存都不能重置，只换了模型。
-                let carried_session = binding.session_id == previous_session;
-                // Runtime 与新会话已成功构造；提交切换前先保存旧会话。
-                self.persist_current(cx);
-                self.runtime = binding.runtime;
-                self.session_id = binding.session_id;
-                if self.system_instruction_from_settings {
-                    self.system_instruction = AppSettings::current(cx)
-                        .ai_chat
-                        .effective_custom_system_prompt();
-                }
-                self.apply_system_instruction_to_current_session();
-                self.sync_session_skills();
-                self.sync_session_resources();
-                self.selected_model = binding.selected_model;
-                self.current_session = self.session_id.to_string();
-                self.pending_submissions = PendingSubmissions::default();
-                self.acp_turn_owners.clear();
-                if !carried_session {
-                    // 没有可延续的会话（当前会话已不在 Runtime 中），只能按新会话
-                    // 处理：清转录与缓存，并在侧栏用「provider / model」占位。
-                    self.clear_cached_session_transcripts();
-                    self.live_sessions.clear();
-                    self.ignored_local_turns.clear();
-                    self.closed_sessions.clear();
-                    self.upsert_live_summary(
-                        self.current_session.clone(),
-                        format!("{} / {}", opt.provider_label, opt.model),
-                        now_secs(),
-                    );
-                    self.transcript.clear();
-                    self.transcript.set_resource_context(&self.resources);
-                }
-                self._event_task = Self::spawn_event_pump(self.runtime.subscribe(), None, cx);
-                self.reload_sessions(cx);
-                self.sync_pending_preview(cx);
+                let placeholder = format!("{} / {}", opt.provider_label, opt.model);
+                self.adopt_runtime_binding(binding, &previous_session, placeholder, cx);
             }
             Ok(false)
                 if self
@@ -5460,6 +5451,115 @@ impl AgentChatView {
         }
         self.sync_composer(cx);
         cx.notify();
+    }
+
+    /// 当前生效的思考级别：聊天里手动切换过的优先，否则跟随模型的 provider 默认。
+    fn effective_reasoning_effort(&self, option: &ComposerModelOption) -> Option<ReasoningEffort> {
+        self.reasoning_effort_override
+            .unwrap_or(option.reasoning_effort_default)
+    }
+
+    /// 切换思考级别：与切模型一样换 Runtime，但保留当前会话的历史。
+    fn select_reasoning_effort(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.running_sessions.is_empty() || !self.pending_submissions.is_empty() {
+            return;
+        }
+        let Some(choice) = parse_effort_id(id) else {
+            return;
+        };
+        let Some(option) = self.selected_model.clone() else {
+            return;
+        };
+        let previous_override = self.reasoning_effort_override;
+        let current = self.effective_reasoning_effort(&option);
+        if current == choice {
+            // 已经是这个档位：只把选择记下来，不必重建 Runtime。
+            self.reasoning_effort_override = Some(choice);
+            self.sync_composer(cx);
+            cx.notify();
+            return;
+        }
+        self.reasoning_effort_override = Some(choice);
+        let reasoning_effort = self.effective_reasoning_effort(&option);
+        let previous_session = self.session_id.clone();
+        let mut binding = RuntimeBinding {
+            runtime: self.runtime.clone(),
+            session_id: self.session_id.clone(),
+            selected_model: self.selected_model.clone(),
+            runtime_factory: self.runtime_factory.clone(),
+        };
+        match binding.switch_model(&option, reasoning_effort, &self.resources) {
+            Ok(true) => {
+                let placeholder = format!("{} / {}", option.provider_label, option.model);
+                self.adopt_runtime_binding(binding, &previous_session, placeholder, cx);
+            }
+            Ok(false) => {
+                // 没有可用的 Runtime 工厂：档位切换无从生效，撤回到原选择。
+                self.reasoning_effort_override = previous_override;
+            }
+            Err(error) => {
+                self.reasoning_effort_override = previous_override;
+                self.transcript.push_system(
+                    t!(
+                        "AgentUi.reasoning_effort_switch_failed",
+                        error = error.to_string()
+                    )
+                    .to_string(),
+                );
+                self.request_scroll_to_bottom();
+            }
+        }
+        self.sync_composer(cx);
+        cx.notify();
+    }
+
+    /// 采纳一次成功的 Runtime 切换：保留（或重置）会话状态，并把新 Runtime 的事件泵接上。
+    fn adopt_runtime_binding(
+        &mut self,
+        binding: RuntimeBinding,
+        previous_session: &SessionId,
+        placeholder_label: String,
+        cx: &mut Context<Self>,
+    ) {
+        // session id 与切换前一致 ⇒ 历史已随会话搬进新 Runtime：这仍是
+        // 同一个会话，转录、侧栏摘要、会话缓存都不能重置，只换了模型。
+        let carried_session = binding.session_id == *previous_session;
+        let RuntimeBinding {
+            runtime,
+            session_id,
+            selected_model,
+            ..
+        } = binding;
+        // Runtime 与新会话已成功构造；提交切换前先保存旧会话。
+        self.persist_current(cx);
+        self.runtime = runtime;
+        self.session_id = session_id;
+        if self.system_instruction_from_settings {
+            self.system_instruction = AppSettings::current(cx)
+                .ai_chat
+                .effective_custom_system_prompt();
+        }
+        self.apply_system_instruction_to_current_session();
+        self.sync_session_skills();
+        self.sync_session_resources();
+        self.selected_model = selected_model;
+        self.current_session = self.session_id.to_string();
+        self.pending_submissions = PendingSubmissions::default();
+        self.acp_turn_owners.clear();
+        if !carried_session {
+            // 没有可延续的会话（当前会话已不在 Runtime 中），只能按新会话
+            // 处理：清转录与缓存，并在侧栏用「provider / model」占位。
+            self.clear_cached_session_transcripts();
+            self.live_sessions.clear();
+            self.ignored_local_turns.clear();
+            self.closed_sessions.clear();
+            self.upsert_live_summary(self.current_session.clone(), placeholder_label, now_secs());
+            self.transcript.clear();
+            self.transcript.set_resource_context(&self.resources);
+        }
+        self._event_task = Self::spawn_event_pump(self.runtime.subscribe(), None, cx);
+        self.reload_sessions(cx);
+        self.sync_pending_preview(cx);
     }
 
     fn select_acp_model(
@@ -8464,6 +8564,7 @@ fn build_context(
         agent_options: Vec::new(),
         model: model.map(ComposerModelOption::to_composer_model),
         execution_mode_label: SharedString::from(selection.label()),
+        reasoning_effort_label: None,
         workspace: Default::default(),
         workspace_options: Vec::new(),
         branch_options: Vec::new(),
@@ -9153,6 +9254,7 @@ fn runtime_specs_for_provider_config(
                 provider_label(config),
                 model.clone(),
             )
+            .with_reasoning_effort_default(config.reasoning_effort)
             .with_hint(format!(
                 "{} · {}",
                 config.provider_type.display_name(),
@@ -9284,6 +9386,7 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reasoning_effort::effort_id;
     use one_core::llm::usage_history::AgentUsageSample;
 
     use crate::agent_cards::{
@@ -16562,7 +16665,7 @@ mod tests {
         let second = ComposerModelOption::new("ollama:qwen", "ollama", "Ollama", "qwen3:14b");
         let runtimes = Arc::new(std::sync::Mutex::new(Vec::<Arc<Runtime>>::new()));
         let factory_runtimes = runtimes.clone();
-        let factory: AgentRuntimeFactory = Arc::new(move |option| {
+        let factory: AgentRuntimeFactory = Arc::new(move |option, _reasoning_effort| {
             let runtime = test_runtime(option.model.as_ref());
             factory_runtimes.lock().unwrap().push(runtime.clone());
             Ok(runtime)
@@ -16591,6 +16694,111 @@ mod tests {
         );
     }
 
+    /// 切换思考级别和切模型一样换 Runtime：新档位传到工厂，会话历史跟着走。
+    #[gpui::test]
+    fn gpui_reasoning_effort_switch_rebuilds_runtime_and_keeps_session(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let model = ComposerModelOption::new("openai:gpt-a", "openai", "OpenAI", "gpt-a")
+            .with_reasoning_effort_default(Some(ReasoningEffort::Low));
+        let efforts = Arc::new(std::sync::Mutex::new(Vec::<Option<ReasoningEffort>>::new()));
+        let captured = efforts.clone();
+        let factory: AgentRuntimeFactory = Arc::new(move |option, reasoning_effort| {
+            captured.lock().unwrap().push(reasoning_effort);
+            Ok(test_runtime(option.model.as_ref()))
+        });
+        let config =
+            AgentChatViewConfig::new(test_runtime("gpt-a"), ResourceContext::new(), vec![])
+                .with_models(vec![model.clone()], Some(model.id.clone()), factory);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let original_session = view.read_with(cx, |view, _| view.session_id.clone());
+        view.update(cx, |view, cx| {
+            assert_eq!(
+                view.effective_reasoning_effort(&model),
+                Some(ReasoningEffort::Low),
+                "没手动切换时跟随 provider 默认"
+            );
+            view.runtime
+                .session(&view.session_id)
+                .expect("current session should exist")
+                .record_user_input("列出所有表");
+            view.transcript.push_system("已在屏幕上的内容");
+            view.select_reasoning_effort("high", cx);
+        });
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.session_id, original_session);
+            assert_eq!(
+                view.effective_reasoning_effort(&model),
+                Some(ReasoningEffort::High)
+            );
+            assert!(
+                view.transcript
+                    .messages
+                    .iter()
+                    .any(|message| message.content == "已在屏幕上的内容"),
+                "切思考级别不该清掉屏幕上的对话"
+            );
+        });
+        assert_eq!(
+            efforts.lock().unwrap().as_slice(),
+            &[Some(ReasoningEffort::High)],
+            "新档位必须传给 Runtime 工厂"
+        );
+    }
+
+    /// 选中的正是当前生效的档位时不重建 Runtime，只把选择记下来。
+    #[gpui::test]
+    fn gpui_reasoning_effort_same_level_skips_the_rebuild(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let model = ComposerModelOption::new("openai:gpt-a", "openai", "OpenAI", "gpt-a")
+            .with_reasoning_effort_default(Some(ReasoningEffort::Low));
+        let efforts = Arc::new(std::sync::Mutex::new(Vec::<Option<ReasoningEffort>>::new()));
+        let captured = efforts.clone();
+        let factory: AgentRuntimeFactory = Arc::new(move |option, reasoning_effort| {
+            captured.lock().unwrap().push(reasoning_effort);
+            Ok(test_runtime(option.model.as_ref()))
+        });
+        let config =
+            AgentChatViewConfig::new(test_runtime("gpt-a"), ResourceContext::new(), vec![])
+                .with_models(vec![model.clone()], Some(model.id.clone()), factory);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| view.select_reasoning_effort("low", cx));
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.reasoning_effort_override,
+                Some(Some(ReasoningEffort::Low))
+            );
+        });
+        assert!(
+            efforts.lock().unwrap().is_empty(),
+            "档位没变化就不该重建 Runtime"
+        );
+    }
+
+    #[test]
+    fn auto_reasoning_effort_clears_the_override() {
+        let model = ComposerModelOption::new("openai:gpt-a", "openai", "OpenAI", "gpt-a")
+            .with_reasoning_effort_default(Some(ReasoningEffort::Medium));
+        assert_eq!(effort_id(parse_effort_id("auto").unwrap()), "auto");
+        assert_eq!(
+            crate::reasoning_effort::parse_effort_id("auto"),
+            Some(None),
+            "「自动」应解析成不传该参数"
+        );
+        assert_eq!(effort_id(None), "auto");
+        assert_eq!(effort_id(Some(ReasoningEffort::Medium)), "medium");
+        // 默认值本身仍挂在模型选项上，override 清空后回到它。
+        assert_eq!(
+            model.reasoning_effort_default,
+            Some(ReasoningEffort::Medium)
+        );
+    }
+
     /// 切换模型只换模型，不换会话：同一个 session id、同一段转录，历史跟着走。
     #[gpui::test]
     fn gpui_model_switch_keeps_the_same_conversation(cx: &mut TestAppContext) {
@@ -16599,7 +16807,7 @@ mod tests {
         let second = ComposerModelOption::new("ollama:qwen", "ollama", "Ollama", "qwen3:14b");
         let runtimes = Arc::new(std::sync::Mutex::new(Vec::<Arc<Runtime>>::new()));
         let factory_runtimes = runtimes.clone();
-        let factory: AgentRuntimeFactory = Arc::new(move |option| {
+        let factory: AgentRuntimeFactory = Arc::new(move |option, _reasoning_effort| {
             let runtime = test_runtime(option.model.as_ref());
             factory_runtimes.lock().unwrap().push(runtime.clone());
             Ok(runtime)
@@ -16658,7 +16866,7 @@ mod tests {
         let initial_runtime = test_runtime("gpt-a");
         let expected_runtime = initial_runtime.clone();
         let factory: AgentRuntimeFactory =
-            Arc::new(|_| Err(anyhow::anyhow!("duplicate agent tool names: load_skill")));
+            Arc::new(|_, _| Err(anyhow::anyhow!("duplicate agent tool names: load_skill")));
         let config = AgentChatViewConfig::new(initial_runtime, ResourceContext::new(), vec![])
             .with_models(vec![first.clone(), second], Some(first.id.clone()), factory);
 
@@ -18073,7 +18281,7 @@ mod tests {
         let second = ComposerModelOption::new("ollama:qwen", "ollama", "Ollama", "qwen3:14b");
         let calls = Arc::new(AtomicUsize::new(0));
         let factory_calls = calls.clone();
-        let factory: AgentRuntimeFactory = Arc::new(move |option| {
+        let factory: AgentRuntimeFactory = Arc::new(move |option, _reasoning_effort| {
             factory_calls.fetch_add(1, Ordering::SeqCst);
             Ok(test_runtime(option.model.as_ref()))
         });
@@ -18090,7 +18298,7 @@ mod tests {
 
         assert!(
             binding
-                .switch_model(&second, &resources)
+                .switch_model(&second, None, &resources)
                 .expect("runtime switch should succeed")
         );
         // 空会话也一起搬过去：切模型不该凭空多出一个 session id。
@@ -18116,7 +18324,7 @@ mod tests {
         let first = ComposerModelOption::new("openai:gpt-a", "openai", "OpenAI", "gpt-a");
         let second = ComposerModelOption::new("ollama:qwen", "ollama", "Ollama", "qwen3:14b");
         let factory: AgentRuntimeFactory =
-            Arc::new(|option| Ok(test_runtime(option.model.as_ref())));
+            Arc::new(|option, _reasoning_effort| Ok(test_runtime(option.model.as_ref())));
         let resources = ResourceContext::new();
         let mut binding = RuntimeBinding::new(
             test_runtime(first.model.as_ref()),
@@ -18133,7 +18341,7 @@ mod tests {
 
         assert!(
             binding
-                .switch_model(&second, &resources)
+                .switch_model(&second, None, &resources)
                 .expect("runtime switch should succeed")
         );
 
@@ -18156,7 +18364,7 @@ mod tests {
         let first = ComposerModelOption::new("openai:gpt-a", "openai", "OpenAI", "gpt-a");
         let second = ComposerModelOption::new("ollama:qwen", "ollama", "Ollama", "qwen3:14b");
         let factory: AgentRuntimeFactory =
-            Arc::new(|_| Err(anyhow::anyhow!("duplicate agent tool names: load_skill")));
+            Arc::new(|_, _| Err(anyhow::anyhow!("duplicate agent tool names: load_skill")));
         let resources = ResourceContext::new();
         let initial_runtime = test_runtime(first.model.as_ref());
         let expected_runtime = initial_runtime.clone();
@@ -18169,7 +18377,7 @@ mod tests {
         let old_session = binding.session_id.clone();
 
         let error = binding
-            .switch_model(&second, &resources)
+            .switch_model(&second, None, &resources)
             .expect_err("runtime factory failure should be propagated");
 
         assert_eq!(error.to_string(), "duplicate agent tool names: load_skill");
@@ -18264,7 +18472,7 @@ mod tests {
         let unknown =
             ComposerModelOption::new("unknown:model", "unknown", "Unknown", "unknown-model");
 
-        let error = factory(&unknown)
+        let error = factory(&unknown, None)
             .err()
             .expect("unknown model option must fail closed");
 

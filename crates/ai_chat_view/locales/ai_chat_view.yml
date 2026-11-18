@@ -891,6 +891,34 @@ AgentUi:
     en: Read Only
     zh-CN: 只读
     zh-HK: 唯讀
+  reasoning_effort:
+    en: Reasoning Effort
+    zh-CN: 思考级别
+    zh-HK: 思考級別
+  reasoning_effort_auto:
+    en: Auto
+    zh-CN: 自动
+    zh-HK: 自動
+  reasoning_effort_high:
+    en: High
+    zh-CN: 高
+    zh-HK: 高
+  reasoning_effort_low:
+    en: Low
+    zh-CN: 低
+    zh-HK: 低
+  reasoning_effort_medium:
+    en: Medium
+    zh-CN: 中
+    zh-HK: 中
+  reasoning_effort_none:
+    en: Off
+    zh-CN: 关闭
+    zh-HK: 關閉
+  reasoning_effort_switch_failed:
+    en: "Could not switch reasoning effort: %{error}"
+    zh-CN: "思考级别切换失败：%{error}"
+    zh-HK: "思考級別切換失敗：%{error}"
   reasoning_process:
     en: Reasoning
     zh-CN: 思考过程

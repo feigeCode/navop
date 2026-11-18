@@ -53,6 +53,7 @@ use crate::input::context::{
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
 use crate::input::model_picker::{ModelChoice, model_groups, selected_model_index};
 use crate::input::skill::{render_skill_mode_content, skill_trigger_label};
+use crate::reasoning_effort::effort_menu_options;
 use crate::theme::{AgentChatTheme, active_agent_chat_theme, sp};
 
 /// AgentInput 对外事件。
@@ -89,6 +90,8 @@ pub enum AgentInputEvent {
         provider_id: SharedString,
         model: SharedString,
     },
+    /// 在内置下拉中选择了思考级别（`auto` / `none` / `low` / `medium` / `high`）。
+    SelectReasoningEffort { id: SharedString },
     /// 在内置下拉中选择了工具执行模式。
     SelectExecutionMode { id: SharedString },
     /// 在底部上下文栏的工作区下拉中选择了工作区。
@@ -131,6 +134,7 @@ enum ComposerMenuKind {
     Skill,
     Plan,
     SubAgent,
+    ReasoningEffort,
     Mode,
 }
 
@@ -1042,6 +1046,59 @@ impl AgentInput {
             })
     }
 
+    /// 思考级别下拉：与权限档位同一颗 ghost chip，展开后列出 自动 / 关闭 / 低 / 中 / 高。
+    ///
+    /// 只有内置 agent 才有这个参数（ACP agent 自己声明推理能力），所以上下文里
+    /// 没有 `reasoning_effort_label` 时整颗 chip 都不画。
+    fn render_reasoning_effort_menu(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(label) = self.context.reasoning_effort_label.clone() else {
+            return div().into_any_element();
+        };
+        let view = cx.entity();
+        let is_open = self.open_menu == Some(ComposerMenuKind::ReasoningEffort);
+        let data = EffortContentData {
+            current_label: label.clone(),
+            options: effort_menu_options(),
+        };
+        let theme = self.local_theme(cx);
+        let trigger = capability_chip(
+            "agent-input-reasoning-effort",
+            label,
+            IconName::AI,
+            theme.foreground,
+            &theme,
+            cx,
+        )
+        .disabled(self.is_running);
+
+        Popover::new("agent-reasoning-effort-popover")
+            .p_0()
+            .open(is_open)
+            .on_open_change({
+                let view = view.clone();
+                move |open, _window, cx| {
+                    let open = *open;
+                    view.update(cx, |this, cx| {
+                        this.open_menu = if open && !this.is_running {
+                            Some(ComposerMenuKind::ReasoningEffort)
+                        } else {
+                            None
+                        };
+                        cx.notify();
+                    });
+                }
+            })
+            .trigger(trigger)
+            .content({
+                let view = view.clone();
+                let theme = theme.clone();
+                move |_state, _window, cx| {
+                    render_effort_content(view.clone(), data.clone(), &theme, cx)
+                }
+            })
+            .into_any_element()
+    }
+
     /// 把当前选项与选中项灌进组件库的 `Select`。
     ///
     /// 只在 `model_select_dirty` 时调用:`set_items` 会触发重渲染,必须靠脏标记保证
@@ -1296,6 +1353,7 @@ impl AgentInput {
         let mut toolbar = composer_toolbar(&theme)
             .child(div().flex_1().min_w_0())
             .child(self.render_model_menu(cx))
+            .child(self.render_reasoning_effort_menu(cx))
             .child(composer_permission_slot().child(self.render_permission_menu(cx)))
             .child(ghost_chip(
                 Button::new("agent-attach")
@@ -1559,6 +1617,89 @@ fn mode_option_row(
                 }
                 this.open_menu = None;
                 cx.emit(AgentInputEvent::SelectExecutionMode { id });
+                cx.notify();
+            });
+        })
+        .into_any_element()
+}
+
+#[derive(Clone)]
+struct EffortContentData {
+    current_label: SharedString,
+    options: Vec<ComposerMenuOption>,
+}
+
+fn render_effort_content(
+    view: Entity<AgentInput>,
+    data: EffortContentData,
+    theme: &AgentChatTheme,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let mut col = composer_popover_surface(theme).min_w(sp(240.0));
+
+    col = col.child(context_group_label(
+        t!("AgentUi.reasoning_effort").to_string(),
+        theme,
+    ));
+    for option in data.options {
+        let selected = option.label == data.current_label;
+        col = col.child(effort_option_row(
+            view.clone(),
+            ModeOptionRow { option, selected },
+            theme,
+            cx,
+        ));
+    }
+
+    col.into_any_element()
+}
+
+fn effort_option_row(
+    view: Entity<AgentInput>,
+    row: ModeOptionRow,
+    theme: &AgentChatTheme,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let muted = theme.muted_foreground;
+    let hover_bg = theme.hover_background();
+    let selected_bg = theme.selection_background();
+    let selected_fg = theme.accent;
+    let id = row.option.id.clone();
+    let row_id = SharedString::from(format!("agent-reasoning-effort-opt-{id}"));
+    let mut inner = v_flex()
+        .flex_1()
+        .min_w_0()
+        .gap(px(1.0))
+        .child(div().text_sm().truncate().child(row.option.label.clone()));
+    if let Some(hint) = row.option.hint.clone() {
+        inner = inner.child(div().text_xs().text_color(muted).child(hint));
+    }
+
+    h_flex()
+        .id(row_id)
+        .w_full()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_1p5()
+        .rounded(cx.theme().radius)
+        .cursor_pointer()
+        .when(row.selected, |this| {
+            this.bg(selected_bg).text_color(theme.foreground)
+        })
+        .hover(move |this| this.bg(hover_bg))
+        .child(inner)
+        .when(row.selected, |this| {
+            this.child(Icon::new(IconName::Check).xsmall().text_color(selected_fg))
+        })
+        .on_click(move |_, _window, cx| {
+            let id = id.clone();
+            view.update(cx, |this, cx| {
+                if this.is_running {
+                    return;
+                }
+                this.open_menu = None;
+                cx.emit(AgentInputEvent::SelectReasoningEffort { id });
                 cx.notify();
             });
         })
