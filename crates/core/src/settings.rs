@@ -1503,6 +1503,9 @@ pub struct AppSettings {
     /// 首页是否显示「最近连接」分组
     #[serde(default = "default_true")]
     pub home_show_recent_connections: bool,
+    /// 首页连接卡片是否在后台采集并显示远端 CPU/内存/磁盘占用（#279）。
+    #[serde(default = "default_true")]
+    pub home_show_host_metrics: bool,
     /// 连接列表排序方式
     #[serde(default)]
     pub connection_sort_order: ConnectionSortOrder,
@@ -1898,6 +1901,7 @@ impl Default for AppSettings {
             master_key_storage: MasterKeyStorage::SystemCredentialStore,
             home_connection_layout: HomeConnectionLayout::default(),
             home_show_recent_connections: true,
+            home_show_host_metrics: true,
             connection_sort_order: ConnectionSortOrder::default(),
             connection_sidebar_expanded: true,
             connection_sidebar_tree_state: ConnectionSidebarTreeState::default(),
@@ -2583,6 +2587,26 @@ mod tests {
         assert!((settings.font_size - 13.0).abs() < f64::EPSILON);
         assert_eq!(settings.sql_format.keyword_case, SqlKeywordCase::Upper);
         assert_eq!(settings.sql_format.indent, SqlIndentStyle::Tabs);
+    }
+
+    #[test]
+    fn home_show_host_metrics_defaults_on_and_survives_legacy_configs() {
+        // 默认开启：用户升级后无需手动打开就能在卡片上看到资源占用。
+        assert!(AppSettings::default().home_show_host_metrics);
+
+        let settings = AppSettings {
+            home_show_host_metrics: false,
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize app settings");
+        assert!(json.contains(r#""home_show_host_metrics":false"#));
+        let restored: AppSettings = serde_json::from_str(&json).expect("roundtrip");
+        assert!(!restored.home_show_host_metrics);
+
+        // 旧配置缺省该字段时回退到默认开启（向后兼容）。
+        let legacy_settings: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("empty deserialize");
+        assert!(legacy_settings.home_show_host_metrics);
     }
 
     #[test]

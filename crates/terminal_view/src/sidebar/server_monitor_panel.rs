@@ -2275,6 +2275,51 @@ async fn collect_remote_stats(
     }
 }
 
+/// 首页等非终端场景看到的一份远端资源占用快照。
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostResourceUsage {
+    pub cpu_percent: Option<f64>,
+    pub memory_percent: Option<f64>,
+    pub disk_percent: Option<f64>,
+}
+
+impl HostResourceUsage {
+    /// 生成卡片上的一行摘要；三项都拿不到时返回 None。
+    pub fn summary(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if let Some(cpu) = self.cpu_percent {
+            parts.push(format!("CPU {cpu:.0}%"));
+        }
+        if let Some(memory) = self.memory_percent {
+            parts.push(format!("内存 {memory:.0}%"));
+        }
+        if let Some(disk) = self.disk_percent {
+            parts.push(format!("磁盘 {disk:.0}%"));
+        }
+        (!parts.is_empty()).then(|| parts.join(" · "))
+    }
+}
+
+/// 用一次性后台 SSH 会话采集远端资源占用（#279）。
+///
+/// 采集结束后立即断开，不占用终端页签；失败时把错误原样返回，
+/// 由调用方决定是重试还是静默降级。
+pub async fn probe_host_resource_usage(
+    ssh_config: ssh::SshConnectConfig,
+) -> Result<HostResourceUsage> {
+    let session_manager = Arc::new(SshSessionManager::new(ssh_config));
+    let session_id = format!("host-metrics-{}", Utc::now().timestamp_millis());
+    let payload = collect_remote_stats(session_manager.clone(), &session_id).await;
+    let parsed = payload.and_then(|payload| parse_server_stats(&payload));
+    session_manager.disconnect().await.ok();
+    let stats = parsed?;
+    Ok(HostResourceUsage {
+        cpu_percent: stats.cpu_usage.as_ref().map(|sample| sample.total_percent),
+        memory_percent: stats.memory.as_ref().map(|memory| memory.used_percent()),
+        disk_percent: stats.disks.iter().map(|disk| disk.percent).reduce(f64::max),
+    })
+}
+
 /// 执行简单远端命令（不推送脚本），用于 legacy 清理等 best-effort 场景。
 async fn exec_capture(session_manager: &Arc<SshSessionManager>, command: &str) -> Result<String> {
     let mut channel = session_manager.open_channel().await?;
@@ -2397,11 +2442,34 @@ fn format_bytes_per_sec(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AcceleratorVendor, CpuSnapshot, HistoryLimit, MemoryStats, NetworkTotals, ProcessEntry,
-        REMOTE_MONITOR_SCRIPT, build_collect_command, build_legacy_cleanup_command, history_points,
-        history_tick_margin, parse_server_stats, push_history_point, sample_cpu_usage,
-        sample_network_rates, split_sections,
+        AcceleratorVendor, CpuSnapshot, HistoryLimit, HostResourceUsage, MemoryStats,
+        NetworkTotals, ProcessEntry, REMOTE_MONITOR_SCRIPT, build_collect_command,
+        build_legacy_cleanup_command, history_points, history_tick_margin, parse_server_stats,
+        push_history_point, sample_cpu_usage, sample_network_rates, split_sections,
     };
+
+    #[test]
+    fn host_resource_usage_summary_skips_missing_metrics() {
+        assert_eq!(
+            HostResourceUsage {
+                cpu_percent: Some(12.4),
+                memory_percent: None,
+                disk_percent: Some(51.6),
+            }
+            .summary()
+            .as_deref(),
+            Some("CPU 12% · 磁盘 52%")
+        );
+        assert_eq!(
+            HostResourceUsage {
+                cpu_percent: None,
+                memory_percent: None,
+                disk_percent: None,
+            }
+            .summary(),
+            None
+        );
+    }
 
     #[test]
     fn split_sections_parses_nested_monitor_document() {

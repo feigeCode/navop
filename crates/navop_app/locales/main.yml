@@ -2866,6 +2866,14 @@ Settings:
         en: Show the recent connections group on Home. Turn off to keep only grouped connections.
         zh-CN: 在首页显示「最近连接」分组，关闭后仅显示各分组内的连接
         zh-HK: 在首頁顯示「最近連線」分組，關閉後僅顯示各分組內的連線
+      show_host_metrics:
+        en: Show Remote Resource Usage
+        zh-CN: 显示远端资源占用
+        zh-HK: 顯示遠端資源佔用
+      show_host_metrics_desc:
+        en: Collect CPU, memory and disk usage of SSH servers with a background session and show it on connection cards without opening a terminal.
+        zh-CN: 用后台 SSH 会话采集服务器的 CPU、内存与磁盘占用，无需打开终端即可在连接卡片上看到
+        zh-HK: 用後台 SSH 會話採集伺服器的 CPU、記憶體與磁碟佔用，無需開啟終端即可在連線卡片上看到
       home_layout:
         en: Home Connection Layout
         zh-CN: 主页连接布局

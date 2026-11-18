@@ -52,6 +52,8 @@ impl HomePage {
                     _ = this.update(cx, |this, cx| {
                         this.connections = connections;
                         this.prune_connection_selection();
+                        #[cfg(feature = "shell")]
+                        this.refresh_host_metrics(cx);
                         cx.notify();
                     });
                 }

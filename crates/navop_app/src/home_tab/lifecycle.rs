@@ -114,6 +114,8 @@ impl HomePage {
             connection_selection: Default::default(),
             drag_selection: Default::default(),
             suppress_next_click: false,
+            #[cfg(feature = "shell")]
+            host_metrics: Default::default(),
             filtered_workspace_ids: HashSet::new(),
             workspace_filter_open: false,
             account_menu_open: false,
