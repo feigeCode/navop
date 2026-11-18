@@ -16,6 +16,10 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - SFTP 左右两侧工具栏新增隐藏文件开关（眼睛图标），工作区侧栏的文件管理器也补上同一入口，与文件行右键菜单共用同一份状态。
 - 空白目录现在直接提供右键菜单，新建文件 / 文件夹不必再回到工具栏。
 - 自定义 AI 提供商的「API 基础地址」现在同时接受 API 根地址与完整的 `/chat/completions` 地址：填写完整地址（例如火山方舟的 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`）不再被二次拼接路径，设置页的帮助文案与占位提示也补充了豆包根地址示例。
+- 模型供应商设置重构为左侧提供商列表 + 右侧详情页：选个预设即可自动填好接口地址与默认值，支持搜索，热门 / 国内 / 本地分组展示。
+- 供应商详情页支持批量操作与更多配置：模型列表加载后可全选 / 反选，新增自定义请求头与按提供商独立的代理地址（留空跟随全局代理）。
+- AI 思考级别（reasoning effort）可配置：每个提供商可设默认思考级别（自动 / 关闭 / 低 / 中 / 高），不支持的提供商自动忽略，聊天中仍可随时切换；设置页模型下拉支持搜索。
+- 标签栏右上角新增 GitHub 仓库入口。
 
 #### 修复与优化
 
@@ -26,6 +30,10 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - 扩展市场自动镜像的回退顺序改为 R2 → CNB → GitHub，与更新侧保持一致，国内用户不再需要等 R2 与 GitHub 依次超时后才轮到 CNB。
 - 修复自定义 AI 请求头导致部分服务商拒绝请求的问题：此前配置的 `Content-Type` 会与 JSON 编码器自动添加的重复，现在统一去重合并，SSE 流式请求的 `Accept` / `Cache-Control` / `Connection` 头同样不再重复。
 - 非 macOS 平台「关闭当前标签页」补上 `Ctrl+F4` 默认快捷键（保留 `Alt+Shift+W`），与桌面应用惯例对齐。
+- 修复发消息后侧栏 AI 面板自动收起：数据库 / Redis / MongoDB 侧栏此前把所有面板事件都当成关闭处理，现在只认 Close 事件。
+- 未配置任何 AI 供应商时不再白屏：聊天壳与 ACP Agent 功能保留，并提示前往设置添加供应商。
+- 修复粘贴的主机地址夹带 NUL 等不可见控制字符导致「测试连接」报 `unexpected NUL byte`：保存与读取连接时自动清洗，已落库的脏记录无需重建。
+- AI 工作台审阅基线按会话隔离：新开会话不再把上一个会话（甚至几天前）的现场误报成「本轮改动」弹出审阅面板，重启后同一会话仍可续接 diff。
 
 #### What's New
 
@@ -35,6 +43,10 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Both SFTP toolbars (local and remote) gained a hidden-files toggle, and the workspace sidebar file manager exposes the same control, sharing state with the file row context menu.
 - Empty directories now offer a context menu, so creating files or folders no longer requires going back to the toolbar.
 - The "API base URL" of a custom AI provider now accepts both the API root and a complete `/chat/completions` URL: pasting the full endpoint (for example Volcano Ark's `https://ark.cn-beijing.volces.com/api/v3/chat/completions`) no longer appends the path a second time, and the settings help text and placeholder now include a Doubao root-URL example.
+- The model provider settings were rebuilt as a left provider list plus a right detail page: pick a preset and the endpoint and defaults are filled in, with search and Popular / China / Local groupings.
+- The provider detail page gains batch operations and more configuration: loaded model lists can be checked/inverted in bulk, plus custom request headers and a per-provider proxy URL (empty follows the global proxy).
+- AI reasoning effort is now configurable: each provider can set a default level (auto / off / low / medium / high); providers without native support ignore it, and it can still be switched per chat. The model dropdown in Settings is searchable.
+- The tab bar's top-right corner gained an entry pointing at the GitHub repository.
 
 #### Fixes and Improvements
 
@@ -45,6 +57,10 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Extension marketplace auto-mirror fallback is now R2 → CNB → GitHub, matching the update path, so users in China no longer wait for R2 and GitHub to time out before CNB is tried.
 - Fixed custom AI request headers being rejected by some providers: a configured `Content-Type` used to duplicate the one the JSON encoder adds automatically. Headers are now merged and deduplicated, and the `Accept` / `Cache-Control` / `Connection` headers of SSE streaming requests are no longer duplicated either.
 - "Close active tab" on non-macOS platforms now has `Ctrl+F4` as an additional default shortcut (`Alt+Shift+W` kept), aligning with desktop conventions.
+- Fixed the sidebar AI panel collapsing right after you sent a message: the database / Redis / MongoDB sidebars treated every panel event as a close; they now only react to Close.
+- No more blank chat when no AI provider is configured: the chat shell and ACP agents stay available, with a hint to open Settings and add one.
+- Fixed "Test connection" failing with `unexpected NUL byte` when a pasted host address carried NUL or other invisible control characters: hosts are sanitized on save and read, so existing dirty records need no re-creation.
+- AI workbench review baselines are now per session: a fresh session no longer reports the previous session's (even days-old) state as "changes this turn" and pops the review panel, while a restarted session still resumes its diff.
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.4) 下载桌面端安装包。
 
