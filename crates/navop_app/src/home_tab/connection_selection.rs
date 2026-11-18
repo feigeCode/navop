@@ -129,6 +129,61 @@ impl ConnectionSelection {
     }
 }
 
+/// 批量模式下的「按住左键划过」取反状态。
+///
+/// 用户按下左键后横向或纵向划过连接时，第一次离开起点才开始进入拖动：
+/// 起点与之后每个新经过的连接各取反一次，同一个连接在一次拖动里只处理一次，
+/// 避免鼠标在同一行抖动导致反复取反。
+#[derive(Default)]
+pub(crate) struct DragSelection {
+    origin_id: Option<i64>,
+    visited: HashSet<i64>,
+    started: bool,
+}
+
+impl DragSelection {
+    /// 记录左键按下的位置；此时还不取反，避免普通单击误触批量选择。
+    pub(crate) fn begin(&mut self, connection_id: i64) {
+        self.origin_id = Some(connection_id);
+        self.visited.clear();
+        self.started = false;
+    }
+
+    /// 鼠标移到某个连接上：返回本次需要取反的连接 id。
+    ///
+    /// 第一次离开起点时把起点一起取反，让「划过的范围」整体反向选择。
+    pub(crate) fn visit(&mut self, connection_id: i64) -> Vec<i64> {
+        let Some(origin_id) = self.origin_id else {
+            return Vec::new();
+        };
+        if !self.started && connection_id == origin_id {
+            return Vec::new();
+        }
+        let mut toggled = Vec::new();
+        if !self.started {
+            self.started = true;
+            if self.visited.insert(origin_id) {
+                toggled.push(origin_id);
+            }
+        }
+        if self.visited.insert(connection_id) {
+            toggled.push(connection_id);
+        }
+        toggled
+    }
+
+    pub(crate) fn is_dragging(&self) -> bool {
+        self.started
+    }
+
+    /// 结束一次拖动；返回 true 表示发生过拖动，调用方需要吞掉随后的 click。
+    pub(crate) fn finish(&mut self) -> bool {
+        let started = self.started;
+        *self = Self::default();
+        started
+    }
+}
+
 impl HomePage {
     pub(crate) fn batch_mode_active(&self) -> bool {
         self.connection_selection.is_active()
@@ -140,6 +195,38 @@ impl HomePage {
         }
         self.connection_selection.set_active(active);
         cx.notify();
+    }
+
+    /// 左键按在某个连接上：记录拖动起点（真正取反要等鼠标划到别的连接）。
+    pub(crate) fn begin_drag_selection(&mut self, connection_id: i64) {
+        self.drag_selection.begin(connection_id);
+    }
+
+    /// 拖动经过某个连接时取反它（以及第一次离开时补上起点）。
+    pub(crate) fn drag_toggle_connection(
+        &mut self,
+        connection_id: Option<i64>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(connection_id) = connection_id else {
+            return;
+        };
+        let toggled = self.drag_selection.visit(connection_id);
+        if toggled.is_empty() {
+            return;
+        }
+        let visible_ids =
+            self.visible_manageable_connection_ids(&self.search_query.read(cx).to_lowercase(), cx);
+        for id in toggled {
+            self.connection_selection
+                .select(id, ConnectionSelectionMode::Toggle, &visible_ids);
+        }
+        cx.notify();
+    }
+
+    /// 松开左键：若本次确实拖动过，吞掉紧随其后的 click，避免整段选择被替换成单个连接。
+    pub(crate) fn finish_drag_selection(&mut self) {
+        self.suppress_next_click = self.drag_selection.finish();
     }
 
     pub(crate) fn select_connection_in_batch(
@@ -217,7 +304,7 @@ pub(crate) fn connection_selection_checkbox(
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionSelection, ConnectionSelectionMode};
+    use super::{ConnectionSelection, ConnectionSelectionMode, DragSelection};
     use std::collections::HashSet;
 
     #[test]
@@ -267,6 +354,41 @@ mod tests {
 
         selection.select_visible(&[3, 6]);
         assert!(selection.is_empty());
+    }
+
+    #[test]
+    fn drag_selection_toggles_origin_and_each_newly_crossed_connection_once() {
+        let mut drag = DragSelection::default();
+        drag.begin(3);
+
+        // 还在起点上：不取反，避免单击被当成拖动。
+        assert!(drag.visit(3).is_empty());
+        assert!(!drag.is_dragging());
+
+        // 划到另一行：起点与新行一起取反，进入拖动状态。
+        assert_eq!(drag.visit(7), vec![3, 7]);
+        assert!(drag.is_dragging());
+
+        // 同一行来回抖动只处理一次。
+        assert!(drag.visit(7).is_empty());
+        assert!(drag.visit(7).is_empty());
+
+        // 继续划过新的连接。
+        assert_eq!(drag.visit(9), vec![9]);
+
+        assert!(drag.finish());
+        assert!(!drag.is_dragging());
+
+        // 结束后再移动不会再取反。
+        assert!(drag.visit(11).is_empty());
+    }
+
+    #[test]
+    fn drag_selection_that_never_moves_does_not_suppress_clicks() {
+        let mut drag = DragSelection::default();
+        drag.begin(5);
+
+        assert!(!drag.finish());
     }
 
     #[test]

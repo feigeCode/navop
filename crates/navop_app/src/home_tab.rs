@@ -195,6 +195,10 @@ pub struct HomePage {
     pub(crate) selected_connection_id: Option<i64>,
     /// 批量操作选择状态；卡片/列表/树三种布局共享（参考常驻侧栏连接树）。
     pub(crate) connection_selection: connection_selection::ConnectionSelection,
+    /// 批量模式下的按住左键拖动取反状态（#560：划过即切换选中）。
+    pub(crate) drag_selection: connection_selection::DragSelection,
+    /// 拖动结束后吞掉紧随其后的 click，避免整段选择被替换成单个连接。
+    pub(crate) suppress_next_click: bool,
     pub(crate) filtered_workspace_ids: HashSet<i64>,
     pub(crate) workspace_filter_open: bool,
     pub(crate) account_menu_open: bool,
