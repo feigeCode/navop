@@ -63,6 +63,7 @@ use one_core::tab_container::{TabContent, TabContentEvent};
 use one_ui::IconSize;
 use one_ui::file_conflict_prompt::{
     FileConflictChoice, FileConflictPrompt, FileConflictPromptLabels, FileConflictPromptSpec,
+    preferred_conflict_choice,
 };
 use one_ui::marquee_text::marquee_text;
 use one_ui::{IconButton, IconButtonRole};
@@ -1526,6 +1527,7 @@ fn upload_conflict_prompt_labels(position: (usize, usize)) -> FileConflictPrompt
         keep_both: t!("Conflict.keep_both").to_string().into(),
         merge: t!("Conflict.merge").to_string().into(),
         overwrite: t!("Conflict.overwrite").to_string().into(),
+        difference_hint: t!("Conflict.difference_hint").to_string().into(),
         overwrite_warning_title: t!("Conflict.overwrite_warning_title").to_string().into(),
         overwrite_warning: t!("Conflict.overwrite_warning").to_string().into(),
         overwrite_warning_apply_all: t!("Conflict.overwrite_warning_apply_all")
@@ -3965,11 +3967,20 @@ impl SftpView {
         };
         let view = cx.entity().clone();
         let apply_all = Arc::new(AtomicBool::new(false));
+        let preferred = {
+            let settings = AppSettings::global(cx);
+            preferred_conflict_choice(
+                current.transfer.is_dir,
+                settings.transfer_prefer_merge_for_directories,
+                settings.transfer_prefer_overwrite_for_files,
+            )
+        };
         let prompt = FileConflictPrompt::entity(
             cx,
             FileConflictPromptSpec {
                 name: current.transfer.name.clone().into(),
                 is_directory: current.transfer.is_dir,
+                preferred,
                 show_apply_all: position.1 > 1,
                 apply_all: apply_all.clone(),
                 labels: upload_conflict_prompt_labels(position),
@@ -8178,7 +8189,8 @@ mod tests {
     fn test_stored_connection() -> StoredConnection {
         StoredConnection::new_ssh(
             "SFTP entity test".to_string(),
-            SshParams { otp: None,
+            SshParams {
+                otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,

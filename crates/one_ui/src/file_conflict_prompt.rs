@@ -29,6 +29,22 @@ pub fn requires_overwrite_confirmation(choice: FileConflictChoice, is_directory:
     is_directory && choice == FileConflictChoice::Overwrite
 }
 
+/// 按用户设置决定冲突提示框里默认推荐哪个动作（issue #176）。
+///
+/// 文件夹冲突默认推荐「合并」：只替换同名文件，目标目录里其它内容保留；
+/// 同名文件冲突默认推荐「覆盖」。用户关闭对应设置时不额外推荐。
+pub fn preferred_conflict_choice(
+    is_directory: bool,
+    prefer_merge_for_directories: bool,
+    prefer_overwrite_for_files: bool,
+) -> Option<FileConflictChoice> {
+    if is_directory {
+        prefer_merge_for_directories.then_some(FileConflictChoice::Merge)
+    } else {
+        prefer_overwrite_for_files.then_some(FileConflictChoice::Overwrite)
+    }
+}
+
 #[derive(Clone)]
 pub struct FileConflictPromptLabels {
     pub exists: SharedString,
@@ -45,6 +61,8 @@ pub struct FileConflictPromptLabels {
     pub overwrite_warning: SharedString,
     /// 已勾选「应用到所有同类冲突」时的追加提醒。
     pub overwrite_warning_apply_all: SharedString,
+    /// 文件夹冲突时「合并」与「覆盖」区别的说明（issue #176）。
+    pub difference_hint: SharedString,
     /// 「仍然覆盖」确认按钮。
     pub overwrite_confirm: SharedString,
     /// 取消确认按钮。
@@ -56,6 +74,8 @@ type ChoiceHandler = Rc<dyn Fn(FileConflictChoice, bool, &mut Window, &mut App)>
 pub struct FileConflictPromptSpec {
     pub name: SharedString,
     pub is_directory: bool,
+    /// 默认推荐的动作；`None` 表示沿用旧行为（只把「覆盖」作为主按钮）。
+    pub preferred: Option<FileConflictChoice>,
     /// 是否展示「应用于全部」复选框。只有存在多个冲突项时才有意义。
     pub show_apply_all: bool,
     pub apply_all: Arc<AtomicBool>,
@@ -69,6 +89,7 @@ pub struct FileConflictPromptSpec {
 pub struct FileConflictPrompt {
     name: SharedString,
     is_directory: bool,
+    preferred: Option<FileConflictChoice>,
     show_apply_all: bool,
     apply_all: Arc<AtomicBool>,
     labels: FileConflictPromptLabels,
@@ -84,6 +105,7 @@ impl FileConflictPrompt {
         Self {
             name: spec.name,
             is_directory: spec.is_directory,
+            preferred: spec.preferred,
             show_apply_all: spec.show_apply_all,
             apply_all: spec.apply_all,
             labels: spec.labels,
@@ -138,7 +160,16 @@ impl Render for FileConflictPrompt {
         let content = if self.confirming_overwrite {
             content.child(self.overwrite_warning(cx))
         } else {
-            content.child(self.labels.choose_action.clone())
+            content
+                .child(self.labels.choose_action.clone())
+                .when(self.is_directory, |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(self.labels.difference_hint.clone()),
+                    )
+                })
         };
         let content = content.when(self.show_apply_all, |this| {
             this.child(self.apply_all_checkbox(cx))
@@ -241,18 +272,25 @@ impl FileConflictPrompt {
             .ghost(),
         ];
         if self.is_directory {
-            actions.push(
-                self.choose(FileConflictChoice::Merge, self.labels.merge.clone(), cx)
-                    .ghost(),
-            );
+            let merge = self.choose(FileConflictChoice::Merge, self.labels.merge.clone(), cx);
+            actions.push(if self.preferred == Some(FileConflictChoice::Merge) {
+                merge.primary()
+            } else {
+                merge.ghost()
+            });
         }
+        let overwrite = self.choose(
+            FileConflictChoice::Overwrite,
+            self.labels.overwrite.clone(),
+            cx,
+        );
+        // 只有文件夹冲突明确推荐「合并」时才把「覆盖」降级，其余情况保持「覆盖」为主按钮。
         actions.push(
-            self.choose(
-                FileConflictChoice::Overwrite,
-                self.labels.overwrite.clone(),
-                cx,
-            )
-            .primary(),
+            if self.is_directory && self.preferred == Some(FileConflictChoice::Merge) {
+                overwrite.ghost()
+            } else {
+                overwrite.primary()
+            },
         );
         actions
     }
@@ -284,5 +322,41 @@ impl FileConflictPrompt {
             });
 
         vec![cancel, confirm]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FileConflictChoice, preferred_conflict_choice, requires_overwrite_confirmation};
+
+    #[test]
+    fn directory_conflicts_prefer_merge_when_configured() {
+        assert_eq!(
+            Some(FileConflictChoice::Merge),
+            preferred_conflict_choice(true, true, true)
+        );
+        assert_eq!(None, preferred_conflict_choice(true, false, true));
+        // 文件冲突永远推荐覆盖，与目录设置无关。
+        assert_eq!(
+            Some(FileConflictChoice::Overwrite),
+            preferred_conflict_choice(false, true, true)
+        );
+        assert_eq!(None, preferred_conflict_choice(false, true, false));
+    }
+
+    #[test]
+    fn directory_overwrite_still_requires_confirmation() {
+        assert!(requires_overwrite_confirmation(
+            FileConflictChoice::Overwrite,
+            true
+        ));
+        assert!(!requires_overwrite_confirmation(
+            FileConflictChoice::Overwrite,
+            false
+        ));
+        assert!(!requires_overwrite_confirmation(
+            FileConflictChoice::Merge,
+            true
+        ));
     }
 }

@@ -1474,6 +1474,12 @@ pub struct AppSettings {
     pub remote_file_editor: RemoteFileEditorUserSettings,
     #[serde(default = "default_true")]
     pub direct_server_transfer_enabled: bool,
+    /// 文件传输发生文件夹冲突时，默认把「合并」作为推荐选项（issue #176）。
+    #[serde(default = "default_true")]
+    pub transfer_prefer_merge_for_directories: bool,
+    /// 文件传输发生同名文件冲突时，默认把「覆盖」作为推荐选项（issue #176）。
+    #[serde(default = "default_true")]
+    pub transfer_prefer_overwrite_for_files: bool,
     #[serde(default)]
     pub database_open_mode: DatabaseOpenMode,
     #[serde(default)]
@@ -1878,6 +1884,8 @@ impl Default for AppSettings {
             personal_sync: PersonalSyncSettings::default(),
             remote_file_editor: RemoteFileEditorUserSettings::default(),
             direct_server_transfer_enabled: true,
+            transfer_prefer_merge_for_directories: true,
+            transfer_prefer_overwrite_for_files: true,
             database_open_mode: DatabaseOpenMode::default(),
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             startup_default_page: StartupDefaultPage::default(),
@@ -2718,6 +2726,27 @@ mod tests {
     #[test]
     fn app_settings_enables_direct_server_transfer_by_default() {
         assert!(AppSettings::default().direct_server_transfer_enabled);
+    }
+
+    #[test]
+    fn transfer_conflicts_default_to_merge_for_directories_and_overwrite_for_files() {
+        let settings = AppSettings::default();
+
+        assert!(settings.transfer_prefer_merge_for_directories);
+        assert!(settings.transfer_prefer_overwrite_for_files);
+    }
+
+    #[test]
+    fn legacy_app_settings_keep_transfer_conflict_defaults() {
+        let mut value = serde_json::to_value(AppSettings::default()).expect("serialize settings");
+        let object = value.as_object_mut().expect("settings object");
+        object.remove("transfer_prefer_merge_for_directories");
+        object.remove("transfer_prefer_overwrite_for_files");
+
+        let settings: AppSettings = serde_json::from_value(value).expect("deserialize settings");
+
+        assert!(settings.transfer_prefer_merge_for_directories);
+        assert!(settings.transfer_prefer_overwrite_for_files);
     }
 
     #[test]

@@ -2913,6 +2913,22 @@ Settings:
         en: When available, offer direct transfer between servers. Turn this off to always relay server-to-server copies through Navop.
         zh-CN: 可用时提供服务器间直接传输；关闭后，服务器间复制将始终通过 Navop 中转。
         zh-HK: 可用時提供伺服器間直接傳輸；關閉後，伺服器間複製將始終透過 Navop 中轉。
+      prefer_merge_for_directories:
+        en: Prefer Merge for Folder Conflicts
+        zh-CN: 文件夹冲突默认合并
+        zh-HK: 文件夾衝突預設合併
+      prefer_merge_for_directories_desc:
+        en: Highlight Merge in the transfer conflict dialog. Merge keeps the files already in the destination folder and only replaces files with the same name.
+        zh-CN: 传输冲突提示框里默认推荐「合并」。合并会保留目标文件夹里已有的文件，只替换同名文件。
+        zh-HK: 傳輸衝突提示框裡預設推薦「合併」。合併會保留目標文件夾裡已有的檔案，只替換同名檔案。
+      prefer_overwrite_for_files:
+        en: Prefer Overwrite for File Conflicts
+        zh-CN: 文件冲突默认覆盖
+        zh-HK: 檔案衝突預設覆蓋
+      prefer_overwrite_for_files_desc:
+        en: Highlight Overwrite in the transfer conflict dialog. Overwrite replaces the existing file with the same name. Folder conflicts still use the Merge preference.
+        zh-CN: 传输冲突提示框里默认推荐「覆盖」。覆盖会用同名文件替换目标位置的文件；文件夹冲突仍按「合并」偏好处理。
+        zh-HK: 傳輸衝突提示框裡預設推薦「覆蓋」。覆蓋會用同名檔案替換目標位置的檔案；文件夾衝突仍按「合併」偏好處理。
 
     # 关闭主窗口行为
     CloseBehavior:
