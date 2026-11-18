@@ -15,6 +15,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - 全量产品的 `one-hub.db` 支持用源环境主密钥解密直读，迁移前不必手动导出成 JSON。
 - SFTP 左右两侧工具栏新增隐藏文件开关（眼睛图标），工作区侧栏的文件管理器也补上同一入口，与文件行右键菜单共用同一份状态。
 - 空白目录现在直接提供右键菜单，新建文件 / 文件夹不必再回到工具栏。
+- 自定义 AI 提供商的「API 基础地址」现在同时接受 API 根地址与完整的 `/chat/completions` 地址：填写完整地址（例如火山方舟的 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`）不再被二次拼接路径，设置页的帮助文案与占位提示也补充了豆包根地址示例。
 
 #### 修复与优化
 
@@ -23,6 +24,8 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - 修复 GPUI Fast 圆角裁剪导致页签和卡片内容丢失：撤销 v0.23.2 引入的临时 workaround，改为把 gpui-fast 0.1.14 快照刷新到上游修复版本，页签与卡片恢复完整显示。
 - 修复构建失败：quickjs-jit-sys 自带的 C 源码需要 C99 声明，`.cargo/config.toml` 现在默认带上 `-std=gnu99`。
 - 扩展市场自动镜像的回退顺序改为 R2 → CNB → GitHub，与更新侧保持一致，国内用户不再需要等 R2 与 GitHub 依次超时后才轮到 CNB。
+- 修复自定义 AI 请求头导致部分服务商拒绝请求的问题：此前配置的 `Content-Type` 会与 JSON 编码器自动添加的重复，现在统一去重合并，SSE 流式请求的 `Accept` / `Cache-Control` / `Connection` 头同样不再重复。
+- 非 macOS 平台「关闭当前标签页」补上 `Ctrl+F4` 默认快捷键（保留 `Alt+Shift+W`），与桌面应用惯例对齐。
 
 #### What's New
 
@@ -31,6 +34,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - The full product can read `one-hub.db` directly with the source master key, so migrating no longer needs a manual JSON export first.
 - Both SFTP toolbars (local and remote) gained a hidden-files toggle, and the workspace sidebar file manager exposes the same control, sharing state with the file row context menu.
 - Empty directories now offer a context menu, so creating files or folders no longer requires going back to the toolbar.
+- The "API base URL" of a custom AI provider now accepts both the API root and a complete `/chat/completions` URL: pasting the full endpoint (for example Volcano Ark's `https://ark.cn-beijing.volces.com/api/v3/chat/completions`) no longer appends the path a second time, and the settings help text and placeholder now include a Doubao root-URL example.
 
 #### Fixes and Improvements
 
@@ -39,6 +43,8 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Fixed GPUI Fast rounded clipping losing tab and card content: the temporary workaround from v0.23.2 is reverted and the gpui-fast 0.1.14 snapshot is refreshed to the upstream fix, so tabs and cards render fully again.
 - Fixed build failures caused by quickjs-jit-sys bundling C sources that need C99 declarations: `.cargo/config.toml` now defaults `CFLAGS` to `-std=gnu99`.
 - Extension marketplace auto-mirror fallback is now R2 → CNB → GitHub, matching the update path, so users in China no longer wait for R2 and GitHub to time out before CNB is tried.
+- Fixed custom AI request headers being rejected by some providers: a configured `Content-Type` used to duplicate the one the JSON encoder adds automatically. Headers are now merged and deduplicated, and the `Accept` / `Cache-Control` / `Connection` headers of SSE streaming requests are no longer duplicated either.
+- "Close active tab" on non-macOS platforms now has `Ctrl+F4` as an additional default shortcut (`Alt+Shift+W` kept), aligning with desktop conventions.
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.4) 下载桌面端安装包。
 
