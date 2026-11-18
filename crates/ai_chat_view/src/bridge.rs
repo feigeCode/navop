@@ -26,10 +26,12 @@ use agent_runtime::{Runtime, RuntimeError, RuntimeServices, ToolRegistry, ToolRo
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream;
+use llm_connector::types::ReasoningEffort;
 use one_core::llm::{
     ChatRequest, GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig,
     extract_stream_text_parts,
 };
+use rust_i18n::t;
 
 mod model_policy;
 mod stream_tools;
@@ -37,6 +39,29 @@ mod stream_tools;
 mod tests;
 
 const DEBUG_PREVIEW_CHARS: usize = 1200;
+
+/// 没有任何已启用 provider 时仍需要一个可创建会话的 Runtime。
+///
+/// 聊天壳、会话历史和 ACP 都不依赖本地模型真正可用；只有本地后端发起一轮
+/// 采样时才需要。这里把失败推迟到采样点，避免空配置直接把整个 AI 页面挡住。
+struct UnconfiguredModelClient;
+
+#[async_trait]
+impl ModelClient for UnconfiguredModelClient {
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, RuntimeError> {
+        Err(RuntimeError::model(
+            t!("AgentUi.configure_model_before_send").to_string(),
+        ))
+    }
+
+    fn model_name(&self) -> &str {
+        "unconfigured"
+    }
+}
+
+pub(crate) fn build_unconfigured_runtime(registry: ToolRegistry) -> anyhow::Result<Arc<Runtime>> {
+    build_runtime(Arc::new(UnconfiguredModelClient), registry)
+}
 
 /// 把 [`LlmProvider`] 适配为 agent_runtime 的 [`ModelClient`]。
 ///
@@ -47,6 +72,8 @@ pub struct LlmModelClient {
     model: String,
     temperature: Option<f32>,
     max_tokens: Option<u32>,
+    /// 用户为该模型设置的默认思考级别；`None` 表示跟随上游默认。
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl LlmModelClient {
@@ -56,7 +83,13 @@ impl LlmModelClient {
             model: model.into(),
             temperature: None,
             max_tokens: None,
+            reasoning_effort: None,
         }
+    }
+
+    pub fn with_reasoning_effort(mut self, reasoning_effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(reasoning_effort);
+        self
     }
 
     pub fn with_temperature(mut self, temperature: f32) -> Self {
@@ -82,9 +115,21 @@ impl LlmModelClient {
             (!request.tools.is_empty()).then_some(request.tools)
         };
         // #487: GPT-6 系列推理模型在 chat/completions 上不接受「推理 + 函数工具」，
-        // 必须在带工具的请求里显式关闭推理，否则上游直接 400。
+        // 必须在带工具的请求里显式关闭推理，否则上游直接 400。这条规避优先于用户设置。
         let reasoning_effort =
-            reasoning_effort_for_request(&self.model, tools.as_ref().is_some());
+            match reasoning_effort_for_request(&self.model, tools.as_ref().is_some()) {
+                Some(forced) => Some(forced),
+                // 只有协议原生支持 `reasoning_effort` 才下发；Anthropic / 智谱这类走
+                // 自己的 thinking 字段，硬塞这个参数会被 llm-connector 校验拒绝。
+                None => {
+                    let supported = self.provider.supports_reasoning_effort();
+                    if supported {
+                        self.reasoning_effort
+                    } else {
+                        None
+                    }
+                }
+            };
 
         ChatRequest {
             model: self.model.clone(),
@@ -422,6 +467,7 @@ pub fn build_runtime_from_llm_provider(
     registry: ToolRegistry,
     temperature: Option<f32>,
     max_tokens: Option<u32>,
+    reasoning_effort: Option<ReasoningEffort>,
 ) -> anyhow::Result<Arc<Runtime>> {
     let mut client = LlmModelClient::new(provider, model);
     if let Some(temperature) = temperature {
@@ -429,6 +475,9 @@ pub fn build_runtime_from_llm_provider(
     }
     if let Some(max_tokens) = max_tokens {
         client = client.with_max_tokens(max_tokens);
+    }
+    if let Some(reasoning_effort) = reasoning_effort {
+        client = client.with_reasoning_effort(reasoning_effort);
     }
     build_runtime(Arc::new(client), registry)
 }
@@ -446,6 +495,7 @@ pub fn build_runtime_from_provider_config(
         registry,
         config.temperature,
         config.max_tokens.and_then(|v| u32::try_from(v).ok()),
+        config.reasoning_effort,
     )
 }
 
@@ -463,5 +513,6 @@ pub async fn build_runtime_from_provider_state(
         registry,
         config.temperature,
         config.max_tokens.and_then(|v| u32::try_from(v).ok()),
+        config.reasoning_effort,
     )
 }

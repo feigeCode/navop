@@ -17,6 +17,10 @@ Common:
     en: "Settings"
     zh-CN: "设置"
     zh-HK: "設定"
+  github:
+    en: "Open GitHub repository"
+    zh-CN: "打开 GitHub 仓库"
+    zh-HK: "開啟 GitHub 儲存庫"
 
 TabSwitcher:
   title:

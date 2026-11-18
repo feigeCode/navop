@@ -513,6 +513,18 @@ fn both_settings_entries_use_the_existing_tab_opener() {
 }
 
 #[test]
+fn ai_provider_entry_opens_the_llm_providers_settings_page() {
+    let home_tabs = include_str!("../../home/home_tabs.rs");
+    assert!(home_tabs.contains("fn add_llm_providers_settings_tab"));
+    assert!(home_tabs.contains("SettingsPanel::new_llm_providers(win, cx)"));
+    assert!(home_tabs.contains("TabItem::new(\"settings-llm-providers\", \"home\", settings)"));
+
+    let app = include_str!("../../navop_app.rs");
+    assert!(app.contains("ai_chat_view::OpenLlmProviderSettings"));
+    assert!(app.contains("hp.add_llm_providers_settings_tab(window, cx)"));
+}
+
+#[test]
 fn team_tab_has_feature_guard() {
     let source = include_str!("../../home/home_tabs.rs");
     let entry = source

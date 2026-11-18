@@ -1,5 +1,6 @@
 use super::*;
 use crate::explorer::load::load_workspace;
+use gpui::TestAppContext;
 
 #[test]
 fn non_repository_workspace_snapshot_keeps_the_requested_root() {
@@ -17,6 +18,20 @@ fn non_repository_workspace_snapshot_keeps_the_requested_root() {
     assert!(snapshot.repository.is_none());
     assert_eq!(1, snapshot.entries.len());
     let _ = std::fs::remove_dir_all(temp);
+}
+
+#[test]
+fn a_new_session_has_no_diff_baseline_even_when_another_session_has_one() {
+    let mut baselines = HashMap::new();
+    baselines.insert("session-a".to_string(), "commit-a".to_string());
+
+    assert_eq!(
+        Some("commit-a".to_string()),
+        turn_baseline(&baselines, "session-a")
+    );
+    // 新会话没有上一轮：拿 session-a 的现场当基线，会把它的改动算成「本轮改动」，
+    // 于是什么都没改也会弹出审阅。
+    assert_eq!(None, turn_baseline(&baselines, "session-b"));
 }
 
 #[test]
@@ -311,5 +326,197 @@ fn truncating_an_unknown_session_or_turn_is_a_no_op() {
         vec!["turn-1".to_string()],
         session_turns(&checkpoints, "session-a"),
         "误报式的截断不该吃掉任何记录"
+    );
+}
+
+#[gpui::test]
+fn a_new_session_reviews_nothing_after_a_restart(cx: &mut TestAppContext) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    cx.update(gpui_component::init);
+    let root = initialized_git_repository();
+    // 仓库里本来就有未提交改动（用户自己的 WIP 或上一个会话留下的）。
+    // 复现的正是这个现场：重启后新开一个会话，只发一句「你好」。
+    std::fs::write(root.join("main.rs"), "fn main() { /* earlier */ }\n").unwrap();
+
+    // 上一个会话在重启前结束过一轮，并把自己的基线锚进了仓库。
+    let earlier = open_explorer(cx, &root);
+    capture_turn(cx, &earlier, "session-earlier", "turn_1");
+    assert!(
+        earlier.read_with(cx, |explorer, _| explorer.repository().is_some()),
+        "测试仓库应被发现"
+    );
+    drop(earlier);
+
+    // 上一个会话结束之后仓库又变了：期间有人提交、用户自己也改了文件。
+    // 这正是「啥都没改」的现场要靠基线判断的地方——那份旧现场不能算成新会话的本轮改动。
+    std::fs::write(
+        root.join("main.rs"),
+        "fn main() { /* changed while nobody was looking */ }\n",
+    )
+    .unwrap();
+
+    // 重启：同一仓库上重新加载，内存里的基线全丢，只剩仓库里的 ref。
+    let explorer = open_explorer(cx, &root);
+    let (events, subscription) = cx.update(|cx| {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let collected = events.clone();
+        let subscription = cx.subscribe(
+            &explorer,
+            move |_, event: &WorkspaceExplorerEvent, _| {
+                if let WorkspaceExplorerEvent::TurnReviewCaptured { session_id, .. } = event {
+                    collected.borrow_mut().push(session_id.clone());
+                }
+            },
+        );
+        (events, subscription)
+    });
+
+    capture_turn(cx, &explorer, "session-new", "turn_1");
+    capture_turn(cx, &explorer, "session-new", "turn_2");
+
+    explorer.read_with(cx, |explorer, _| {
+        assert!(
+            explorer.reviewed_turn_ids("session-new").is_empty(),
+            "新会话没有上一轮，不该算出本轮改动: {:?}",
+            explorer
+                .turn_reviews
+                .iter()
+                .map(|review| (review.session_id.clone(), review.diff.len()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            2,
+            explorer
+                .turn_reviews
+                .iter()
+                .filter(|review| review.session_id == "session-new")
+                .filter(|review| review.diff.trim().is_empty())
+                .count(),
+            "快照照拍，只是没有内容可审阅"
+        );
+    });
+    assert!(
+        events.borrow().is_empty(),
+        "没有改动就不该通知宿主弹出审阅: {:?}",
+        events.borrow()
+    );
+
+    // 重启恢复仍然有效：同一个会话接着跑，期间发生的改动要算进它的本轮。
+    drop(subscription);
+    capture_turn(cx, &explorer, "session-earlier", "turn_2");
+    explorer.read_with(cx, |explorer, _| {
+        assert!(
+            explorer.reviewed_turn_ids("session-new").is_empty(),
+            "新会话不该被旧基线带出改动"
+        );
+        let diff = explorer
+            .turn_reviews
+            .iter()
+            .find(|review| review.session_id == "session-earlier" && review.turn_id == "turn_2")
+            .map(|review| review.diff.clone())
+            .expect("重启后的同一会话要能接着算 diff");
+        assert!(diff.contains("changed while nobody was looking"), "{diff}");
+    });
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn open_explorer(
+    cx: &mut TestAppContext,
+    root: &std::path::Path,
+) -> Entity<WorkspaceExplorer> {
+    let root = root.to_path_buf();
+    let explorer = cx.update(|cx| {
+        let theme = test_theme();
+        let editor = cx.new(|_| crate::WorkspaceEditor::new(theme));
+        cx.new(|cx| {
+            WorkspaceExplorer::new(
+                WorkspaceExplorerConfig {
+                    root,
+                    editor,
+                    theme,
+                    show_frame_controls: false,
+                    backend: None,
+                },
+                cx,
+            )
+        })
+    });
+    // 仓库发现与变更加载都是异步的，等它落定再捕获，否则 `repository` 还是 None。
+    cx.run_until_parked();
+    explorer
+}
+
+fn capture_turn(
+    cx: &mut TestAppContext,
+    explorer: &Entity<WorkspaceExplorer>,
+    session_id: &str,
+    turn_id: &str,
+) {
+    cx.update(|cx| {
+        explorer.update(cx, |explorer, cx| {
+            explorer.capture_turn_finished(session_id.to_string(), turn_id.to_string(), true, cx)
+        })
+    });
+    cx.run_until_parked();
+}
+
+fn test_theme() -> WorkspaceTheme {
+    WorkspaceTheme {
+        background: gpui::rgb(0x111111).into(),
+        foreground: gpui::rgb(0xffffff).into(),
+        muted: gpui::rgb(0x222222).into(),
+        muted_foreground: gpui::rgb(0x999999).into(),
+        border: gpui::rgb(0x333333).into(),
+        accent: gpui::rgb(0x444444).into(),
+        accent_foreground: gpui::rgb(0xffffff).into(),
+        selection: gpui::rgb(0x55a0fc).into(),
+        caret: gpui::rgb(0xffffff).into(),
+        danger: gpui::rgb(0xff0000).into(),
+        warning: gpui::rgb(0xffaa00).into(),
+        success: gpui::rgb(0x00aa00).into(),
+    }
+}
+
+fn initialized_git_repository() -> PathBuf {
+    let root = std::env::temp_dir().join(format!(
+        "workspace-explorer-review-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    run_test_git(&root, &["init", "-q"]);
+    // 固定初始分支名：本机 `init.defaultBranch` 是 main，CI 上未必。
+    run_test_git(&root, &["symbolic-ref", "HEAD", "refs/heads/master"]);
+    run_test_git(&root, &["config", "core.autocrlf", "false"]);
+    run_test_git(&root, &["config", "user.name", "Workspace Explorer Test"]);
+    run_test_git(
+        &root,
+        &["config", "user.email", "workspace-explorer@example.invalid"],
+    );
+    std::fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();
+    run_test_git(&root, &["add", "main.rs"]);
+    run_test_git(&root, &["commit", "-q", "-m", "initial"]);
+    root
+}
+
+fn run_test_git(root: &std::path::Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("git should be installed");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

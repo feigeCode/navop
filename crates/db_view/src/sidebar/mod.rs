@@ -110,12 +110,24 @@ impl DatabaseSidebar {
         };
 
         let mut subs = Vec::new();
+        // 面板除了「关闭」还会发 TurnStarted / TurnFinished / 子代理详情等事件，那些由
+        // 工作台外壳处理。这里以前对任何事件都收起侧栏，用户一发消息（TurnStarted）AI
+        // 面板就自己消失了。
         subs.push(cx.subscribe(
             &chat_panel,
-            |this, _, _event: &DefaultAgentChatPanelEvent, cx| {
-                this.active_panel = None;
-                cx.emit(DatabaseSidebarEvent::PanelChanged);
-                cx.notify();
+            |this, _, event: &DefaultAgentChatPanelEvent, cx| match event {
+                DefaultAgentChatPanelEvent::Close => {
+                    this.set_active_panel(None, cx);
+                }
+                // 数据库侧栏固定在页签内，没有「移动到另一侧」的去处。
+                DefaultAgentChatPanelEvent::MoveTo(_)
+                | DefaultAgentChatPanelEvent::TurnStarted { .. }
+                | DefaultAgentChatPanelEvent::TurnFinished { .. }
+                | DefaultAgentChatPanelEvent::RestoreTurn { .. }
+                | DefaultAgentChatPanelEvent::OpenFileInReview { .. }
+                | DefaultAgentChatPanelEvent::OpenTurnReview { .. }
+                | DefaultAgentChatPanelEvent::SubagentDetailRequested { .. }
+                | DefaultAgentChatPanelEvent::SubagentDetailUpdated { .. } => {}
             },
         ));
 
@@ -593,5 +605,35 @@ mod tests {
 
         let tab = include_str!("../database_tab.rs");
         assert!(tab.contains("sync_extension_panels(cx)"), "构造时没有同步规格");
+    }
+
+    /// 回归：发消息会先发 `TurnStarted`，侧栏不能把它当成「关闭」。
+    ///
+    /// 旧实现订阅了整个 `DefaultAgentChatPanelEvent` 却不看变体，一律 `active_panel = None`，
+    /// 于是用户一按发送，侧栏里的 AI 面板就自己消失。这里钉住「只有 Close 收起侧栏」。
+    #[test]
+    fn ai_panel_stays_open_on_turn_events() {
+        // 只看生产代码：`include_str!` 会把本测试也读进来，needle 必须只在正文里找。
+        let source = include_str!("mod.rs");
+        let body = source.split("#[cfg(test)]").next().unwrap_or(source);
+
+        // 旧写法的特征串拼出来，否则会命中测试自身里的字面量。
+        let unconditional = format!("|this, _, {}: &DefaultAgentChatPanelEvent, cx|", "_event");
+        assert!(
+            !body.contains(&unconditional),
+            "订阅又变回不看变体、任何事件都收起侧栏的写法"
+        );
+        assert!(
+            body.contains("DefaultAgentChatPanelEvent::TurnStarted { .. }"),
+            "TurnStarted 没有被显式忽略"
+        );
+        assert!(
+            body.contains("DefaultAgentChatPanelEvent::Close =>"),
+            "缺 Close 分支，AI 面板关不掉"
+        );
+        assert!(
+            body.contains("this.set_active_panel(None, cx);"),
+            "Close 没有走统一的收起入口"
+        );
     }
 }

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -57,11 +58,21 @@ pub trait LlmProvider: Send + Sync {
 
     async fn models(&self) -> Result<Vec<String>>;
     fn provider_name(&self) -> &str;
+
+    /// 当前协议是否通过 `reasoning_effort` 参数表达思考级别。
+    ///
+    /// 默认 `false`：只有明确实现这个参数的协议才下发，否则会被 llm-connector 的
+    /// 能力校验直接拒绝（`... does not support reasoning_effort`）。
+    fn supports_reasoning_effort(&self) -> bool {
+        false
+    }
 }
 
 pub struct LlmConnector {
     client: LlmClient,
     provider_type: ProviderType,
+    /// 用户在该供应商上配置的额外请求头，聊天请求会随每次调用下发。
+    extra_headers: Vec<(String, String)>,
 }
 
 impl LlmConnector {
@@ -93,6 +104,7 @@ impl LlmConnector {
         Ok(Self {
             client,
             provider_type: config.provider_type,
+            extra_headers: config.extra_headers.clone(),
         })
     }
 
@@ -416,19 +428,42 @@ fn aliyun_prefers_compatible_mode(config: &ProviderConfig) -> bool {
             .unwrap_or(false)
 }
 
+impl LlmConnector {
+    /// 把供应商级请求头并入本次请求；请求自带同名头优先。
+    fn request_with_config_headers(&self, request: &ChatRequest) -> ChatRequest {
+        if self.extra_headers.is_empty() {
+            return request.clone();
+        }
+        let mut headers: HashMap<String, String> = self
+            .extra_headers
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        if let Some(extra) = request.extra_headers.as_ref() {
+            headers.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        let mut request = request.clone();
+        request.extra_headers = Some(headers);
+        request
+    }
+}
+
 #[async_trait]
 impl LlmProvider for LlmConnector {
     async fn chat(&self, request: &ChatRequest) -> Result<String> {
-        let response = self.client.chat(request).await?;
+        let request = self.request_with_config_headers(request);
+        let response = self.client.chat(&request).await?;
         Ok(response.content)
     }
 
     async fn chat_completion(&self, request: &ChatRequest) -> Result<ChatResponse> {
-        Ok(self.client.chat(request).await?)
+        let request = self.request_with_config_headers(request);
+        Ok(self.client.chat(&request).await?)
     }
 
     async fn chat_stream(&self, request: &ChatRequest) -> Result<ChatStream> {
-        let stream = self.client.chat_stream(request).await?;
+        let request = self.request_with_config_headers(request);
+        let stream = self.client.chat_stream(&request).await?;
         Ok(Box::pin(futures::stream::StreamExt::map(
             stream,
             |result| result.map_err(|e| anyhow::anyhow!("{}", e)),
@@ -442,6 +477,11 @@ impl LlmProvider for LlmConnector {
 
     fn provider_name(&self) -> &str {
         self.provider_type.as_str()
+    }
+
+    fn supports_reasoning_effort(&self) -> bool {
+        self.client.capabilities().reasoning_request_strategy
+            == llm_connector::protocols::common::capabilities::ReasoningRequestStrategy::ReasoningEffort
     }
 }
 

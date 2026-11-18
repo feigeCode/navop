@@ -8,7 +8,7 @@ use crate::storage::row_mapping::FromSqliteRow;
 use crate::storage::traits::{Entity, Repository};
 use crate::storage::{GlobalStorageState, now};
 
-use super::types::{ProviderConfig, ProviderType};
+use super::types::{ProviderConfig, ProviderType, ReasoningEffort};
 
 struct ProviderConfigRow {
     id: i64,
@@ -18,6 +18,8 @@ struct ProviderConfigRow {
     api_base: Option<String>,
     api_version: Option<String>,
     extra_headers: Option<String>,
+    proxy: Option<String>,
+    reasoning_effort: Option<String>,
     model: String,
     models: Option<String>,
     max_tokens: Option<i32>,
@@ -38,6 +40,8 @@ impl FromSqliteRow for ProviderConfigRow {
             api_base: row.get("api_base")?,
             api_version: row.get("api_version")?,
             extra_headers: row.get("extra_headers")?,
+            proxy: row.get("proxy")?,
+            reasoning_effort: row.get("reasoning_effort")?,
             model: row.get("model")?,
             models: row.get("models")?,
             max_tokens: row.get("max_tokens")?,
@@ -65,6 +69,14 @@ impl TryFrom<ProviderConfigRow> for ProviderConfig {
             Some(json) => serde_json::from_str::<Vec<(String, String)>>(json).unwrap_or_default(),
             None => Vec::new(),
         };
+        let reasoning_effort = row
+            .reasoning_effort
+            .as_deref()
+            .and_then(ReasoningEffort::parse);
+        let proxy = row
+            .proxy
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         let mut models = models;
         if !row.model.is_empty() {
             if models.is_empty() {
@@ -82,6 +94,8 @@ impl TryFrom<ProviderConfigRow> for ProviderConfig {
             api_base: row.api_base,
             api_version: row.api_version,
             extra_headers,
+            proxy,
+            reasoning_effort,
             model: row.model,
             models,
             max_tokens: row.max_tokens,
@@ -135,6 +149,15 @@ impl Repository for ProviderRepository {
         let api_version = item.api_version.clone();
         let extra_headers =
             serde_json::to_string(&item.extra_headers).unwrap_or_else(|_| "[]".to_string());
+        let proxy = item
+            .proxy
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let reasoning_effort = item
+            .reasoning_effort
+            .map(|effort| effort.as_str().to_string());
         let model = item.model.clone();
         let models = if item.models.is_empty() && !item.model.is_empty() {
             vec![item.model.clone()]
@@ -151,9 +174,9 @@ impl Repository for ProviderRepository {
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO llm_providers (id, name, provider_type, api_key, api_base, api_version, extra_headers, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-                params![id, name, provider_type, api_key, api_base, api_version, extra_headers, model, models_json, max_tokens, temperature, enabled, is_default, created_at, updated_at],
+                "INSERT INTO llm_providers (id, name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                params![id, name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, model, models_json, max_tokens, temperature, enabled, is_default, created_at, updated_at],
             )?;
             Ok(())
         })?;
@@ -170,6 +193,15 @@ impl Repository for ProviderRepository {
         let api_version = item.api_version.clone();
         let extra_headers =
             serde_json::to_string(&item.extra_headers).unwrap_or_else(|_| "[]".to_string());
+        let proxy = item
+            .proxy
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let reasoning_effort = item
+            .reasoning_effort
+            .map(|effort| effort.as_str().to_string());
         let model = item.model.clone();
         let models = if item.models.is_empty() && !item.model.is_empty() {
             vec![item.model.clone()]
@@ -185,8 +217,8 @@ impl Repository for ProviderRepository {
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "UPDATE llm_providers SET name = ?1, provider_type = ?2, api_key = ?3, api_base = ?4, api_version = ?5, extra_headers = ?6, model = ?7, models = ?8, max_tokens = ?9, temperature = ?10, enabled = ?11, is_default = ?12, updated_at = ?13 WHERE id = ?14",
-                params![name, provider_type, api_key, api_base, api_version, extra_headers, model, models_json, max_tokens, temperature, enabled, is_default, updated_at, id],
+                "UPDATE llm_providers SET name = ?1, provider_type = ?2, api_key = ?3, api_base = ?4, api_version = ?5, extra_headers = ?6, proxy = ?7, reasoning_effort = ?8, model = ?9, models = ?10, max_tokens = ?11, temperature = ?12, enabled = ?13, is_default = ?14, updated_at = ?15 WHERE id = ?16",
+                params![name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, model, models_json, max_tokens, temperature, enabled, is_default, updated_at, id],
             )?;
             Ok(())
         })
@@ -202,7 +234,7 @@ impl Repository for ProviderRepository {
     fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, provider_type, api_key, api_base, api_version, extra_headers, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at FROM llm_providers WHERE id = ?1",
+                "SELECT id, name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at FROM llm_providers WHERE id = ?1",
             )?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
@@ -217,7 +249,7 @@ impl Repository for ProviderRepository {
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, provider_type, api_key, api_base, api_version, extra_headers, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at FROM llm_providers ORDER BY created_at DESC",
+                "SELECT id, name, provider_type, api_key, api_base, api_version, extra_headers, proxy, reasoning_effort, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at FROM llm_providers ORDER BY created_at DESC",
             )?;
             let rows = stmt.query_map([], |row| ProviderConfigRow::from_row(row))?;
             let mut results = Vec::new();
@@ -284,6 +316,8 @@ mod tests {
             api_base: None,
             api_version: None,
             extra_headers: None,
+            proxy: None,
+            reasoning_effort: None,
             model: String::new(),
             models: Some(serde_json::to_string(&["qwen-max", "deepseek-v3"]).unwrap()),
             max_tokens: None,
@@ -308,6 +342,8 @@ mod tests {
             api_base: None,
             api_version: None,
             extra_headers: None,
+            proxy: None,
+            reasoning_effort: None,
             model: String::new(),
             models: None,
             max_tokens: None,
@@ -336,6 +372,8 @@ mod tests {
             api_base: Some("https://opencode.ai/inference/go/openai/v1".into()),
             api_version: None,
             extra_headers: Some(serde_json::to_string(&headers).unwrap()),
+            proxy: None,
+            reasoning_effort: None,
             model: "deepseek-v4.1-flash".into(),
             models: None,
             max_tokens: None,
@@ -360,6 +398,8 @@ mod tests {
             api_base: Some("https://llm.example.com/v1".into()),
             api_version: None,
             extra_headers: Some("not-json".into()),
+            proxy: None,
+            reasoning_effort: None,
             model: "custom-model".into(),
             models: None,
             max_tokens: None,
@@ -409,5 +449,95 @@ mod tests {
             .expect("provider exists");
 
         assert_eq!(headers, stored.extra_headers);
+    }
+
+    #[test]
+    fn provider_repository_round_trips_reasoning_effort_after_migration() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let connection = SqliteConnection::open_with_pool_size(temp.path().join("providers.db"), 1)
+            .expect("open sqlite");
+        connection
+            .with_connection(run_migrations)
+            .expect("run migrations");
+        let repository = ProviderRepository::new(connection);
+        let mut config = ProviderConfig {
+            id: 43,
+            name: "reasoning".to_string(),
+            provider_type: ProviderType::OpenAICompatible,
+            api_key: Some("sk-test".to_string()),
+            model: "gpt-5.5".to_string(),
+            models: vec!["gpt-5.5".to_string()],
+            reasoning_effort: Some(ReasoningEffort::High),
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            ..Default::default()
+        };
+
+        repository.insert(&mut config).expect("insert provider");
+        let stored = repository
+            .get(config.id)
+            .expect("load provider")
+            .expect("provider exists");
+        assert_eq!(Some(ReasoningEffort::High), stored.reasoning_effort);
+
+        config.reasoning_effort = None;
+        repository.update(&config).expect("update provider");
+        let stored = repository
+            .get(config.id)
+            .expect("load provider")
+            .expect("provider exists");
+        assert_eq!(None, stored.reasoning_effort, "「自动」应存成 NULL");
+    }
+
+    #[test]
+    fn provider_repository_round_trips_provider_level_proxy() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let connection = SqliteConnection::open_with_pool_size(temp.path().join("providers.db"), 1)
+            .expect("open sqlite");
+        connection
+            .with_connection(run_migrations)
+            .expect("run migrations");
+        let repository = ProviderRepository::new(connection);
+        let mut config = ProviderConfig {
+            id: 44,
+            name: "proxied".to_string(),
+            provider_type: ProviderType::Anthropic,
+            api_key: Some("sk-ant".to_string()),
+            extra_headers: vec![("X-Tenant-ID".to_string(), "tenant-a".to_string())],
+            model: "claude-sonnet-4-5".to_string(),
+            models: vec!["claude-sonnet-4-5".to_string()],
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            ..Default::default()
+        };
+
+        repository.insert(&mut config).expect("insert provider");
+        let stored = repository
+            .get(config.id)
+            .expect("load provider")
+            .expect("provider exists");
+        assert_eq!(None, stored.proxy, "未配置代理时存成 NULL");
+        assert_eq!(
+            vec![("X-Tenant-ID".to_string(), "tenant-a".to_string())],
+            stored.extra_headers
+        );
+
+        config.proxy = Some("socks5://127.0.0.1:7890".to_string());
+        repository.update(&config).expect("update provider");
+        let stored = repository
+            .get(config.id)
+            .expect("load provider")
+            .expect("provider exists");
+        assert_eq!(Some("socks5://127.0.0.1:7890".to_string()), stored.proxy);
+
+        config.proxy = Some("   ".to_string());
+        repository.update(&config).expect("update provider");
+        let stored = repository
+            .get(config.id)
+            .expect("load provider")
+            .expect("provider exists");
+        assert_eq!(None, stored.proxy, "空白代理地址按「跟随全局」处理");
     }
 }

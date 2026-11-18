@@ -59,7 +59,16 @@ impl ProviderManager {
 
     pub async fn get_provider(&self, config: &ProviderConfig) -> Result<Arc<dyn LlmProvider>> {
         let id = config.id;
-        let proxy_url = self.proxy_url();
+        // 供应商级代理解析：显式配置优先，留空则跟随全局代理。
+        let provider_proxy = config
+            .proxy
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let global_proxy = self.proxy_url();
+        let proxy_url = provider_proxy
+            .map(str::to_string)
+            .or_else(|| global_proxy.clone());
         let signature = provider_cache_signature(config, proxy_url.as_deref());
 
         if let Some(entry) = self.providers.get(&id)
@@ -109,7 +118,7 @@ impl Default for ProviderManager {
 fn provider_cache_signature(config: &ProviderConfig, proxy_url: Option<&str>) -> String {
     let extra_headers = serde_json::to_string(&config.extra_headers).unwrap_or_default();
     format!(
-        "{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
         config.provider_type.as_str(),
         config.model,
         config.api_base.as_deref().unwrap_or_default(),
@@ -119,6 +128,7 @@ fn provider_cache_signature(config: &ProviderConfig, proxy_url: Option<&str>) ->
         config.name,
         proxy_url.unwrap_or_default(),
         extra_headers,
+        config.proxy.as_deref().unwrap_or_default(),
     )
 }
 

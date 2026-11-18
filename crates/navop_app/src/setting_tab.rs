@@ -63,10 +63,16 @@ pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
 /// 领域页数量不固定，同步页的绝对下标只能在拼接时现算，所以这里只记录它在固定尾巴
 /// 里的偏移：Agent、ACP、MCP 三页之后。
 const SYNC_PAGE_OFFSET_IN_REST: usize = 3;
+/// 「LLM 提供商」页在固定尾巴里的偏移（Agent、ACP、MCP、同步、快捷键之后）。
+const LLM_PROVIDERS_PAGE_OFFSET_IN_REST: usize = 5;
 
 /// 「通用 + 领域页」这些前置页之后，「同步」页在整份页面列表里的下标。
 fn sync_page_index(pages_before_rest: usize) -> usize {
     pages_before_rest + SYNC_PAGE_OFFSET_IN_REST
+}
+
+fn llm_providers_page_index(pages_before_rest: usize) -> usize {
+    pages_before_rest + LLM_PROVIDERS_PAGE_OFFSET_IN_REST
 }
 
 use gpui_component::input::InputEvent;
@@ -599,6 +605,8 @@ enum InitialPage {
     First,
     /// 同步页：同步冲突等场景直接跳过去。
     Sync,
+    /// LLM 提供商页：AI 聊天没有可用供应商时直接跳过去创建。
+    LlmProviders,
 }
 
 pub struct SettingsPanel {
@@ -627,16 +635,24 @@ struct FontOptionsCache {
 }
 
 impl SettingsPanel {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_with_initial_page(InitialPage::First, cx)
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_initial_page(InitialPage::First, window, cx)
     }
 
-    pub fn new_sync(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_with_initial_page(InitialPage::Sync, cx)
+    pub fn new_sync(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_initial_page(InitialPage::Sync, window, cx)
     }
 
-    fn new_with_initial_page(initial_page: InitialPage, cx: &mut Context<Self>) -> Self {
-        let llm_providers_view = cx.new(|cx| LlmProvidersView::new(cx));
+    pub fn new_llm_providers(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_initial_page(InitialPage::LlmProviders, window, cx)
+    }
+
+    fn new_with_initial_page(
+        initial_page: InitialPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let llm_providers_view = cx.new(|cx| LlmProvidersView::new(window, cx));
         let acp_agents_view = cx.new(|cx| AcpAgentsView::new(cx));
         // 检查更新状态由 app 持有（启动时的自动检查可能早于设置页打开），这里只观察它，
         // 让「检查中」和「上次检查结果」能驱动设置页重绘。
@@ -695,7 +711,7 @@ impl SettingsPanel {
         &mut self,
         _window: &mut Window,
         cx: &mut App,
-    ) -> (Vec<SettingPage>, usize) {
+    ) -> (Vec<SettingPage>, usize, usize) {
         let llm_view = self.llm_providers_view.clone();
         let acp_view = self.acp_agents_view.clone();
         let default_settings = AppSettings::default();
@@ -1274,7 +1290,9 @@ impl SettingsPanel {
         // shell_domain；哪个领域参与编译，就只会出现哪一页。它们紧跟「通用」，
         // 因为数据库和终端是使用频率最高的两块设置。
         let domain_pages = app_kit::registry().settings_pages(cx);
-        let sync_page_ix = sync_page_index(pages.len() + domain_pages.len());
+        let pages_before_rest = pages.len() + domain_pages.len();
+        let sync_page_ix = sync_page_index(pages_before_rest);
+        let llm_providers_page_ix = llm_providers_page_index(pages_before_rest);
         pages.extend(domain_pages);
         pages.extend(vec![
             // Agent 设置页
@@ -1321,14 +1339,16 @@ impl SettingsPanel {
                     .keywords(shortcut_search_texts()),
                 ),
             ),
-            SettingPage::new(t!("LlmProviders.title")).group(
-                SettingGroup::new().item(
-                    SettingItem::render(move |_options, _window, _cx| {
-                        llm_view.clone().into_any_element()
-                    })
-                    .keywords([t!("LlmProviders.title").to_string()]),
+            SettingPage::new(t!("LlmProviders.title"))
+                .description(t!("LlmProviders.description"))
+                .group(
+                    SettingGroup::new().item(
+                        SettingItem::render(move |_options, _window, _cx| {
+                            llm_view.clone().into_any_element()
+                        })
+                        .keywords([t!("LlmProviders.title").to_string()]),
+                    ),
                 ),
-            ),
             // 账户设置页：账户信息与主密钥是两件独立的事——没有账户也可以有主密钥，
             // 所以拆成两个并列分组，关系与「关于 / 更新」一致。
             SettingPage::new(t!("Settings.Account.title"))
@@ -1382,7 +1402,7 @@ impl SettingsPanel {
                     self.update_check_state.clone(),
                 )),
         ]);
-        (pages, sync_page_ix)
+        (pages, sync_page_ix, llm_providers_page_ix)
     }
 }
 
@@ -2112,15 +2132,12 @@ impl Render for SettingsPanel {
             init_settings(cx);
         }
 
-        let (pages, sync_page_ix) = self.setting_pages(window, cx);
+        let (pages, sync_page_ix, llm_providers_page_ix) = self.setting_pages(window, cx);
         let initial_page = self.initial_page;
-        let settings_id = match initial_page {
-            InitialPage::Sync => "main-app-settings-sync",
-            InitialPage::First => "main-app-settings",
-        };
-        let page_ix = match initial_page {
-            InitialPage::Sync => sync_page_ix,
-            InitialPage::First => 0,
+        let (settings_id, page_ix) = match initial_page {
+            InitialPage::Sync => ("main-app-settings-sync", sync_page_ix),
+            InitialPage::LlmProviders => ("main-app-settings-llm-providers", llm_providers_page_ix),
+            InitialPage::First => ("main-app-settings", 0),
         };
 
         div().track_focus(&self.focus_handle).size_full().child(
@@ -4475,6 +4492,13 @@ mod tests {
     }
 
     #[test]
+    fn llm_providers_page_index_follows_the_domain_pages() {
+        // Agent、ACP、MCP、同步、快捷键之后：4 + 5 = 9。
+        assert_eq!(super::llm_providers_page_index(4), 9);
+        assert_eq!(super::llm_providers_page_index(1), 6);
+    }
+
+    #[test]
     fn setting_pages_uses_cached_font_options() {
         let source = include_str!("setting_tab.rs");
         let setting_pages = source
@@ -4731,7 +4755,7 @@ mod tests {
 }
 
 /// GitHub 开源地址
-const GITHUB_URL: &str = "https://github.com/feigeCode/navop";
+pub(crate) const GITHUB_URL: &str = "https://github.com/feigeCode/navop";
 
 /// 渲染关于页面
 fn render_about_section(cx: &App) -> gpui::AnyElement {

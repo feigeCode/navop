@@ -747,6 +747,18 @@ AgentUi:
     en: No model configuration is available
     zh-CN: 没有可用模型配置
     zh-HK: 沒有可用的模型設定
+  no_model_provider:
+    en: No providers
+    zh-CN: 暂无供应商
+    zh-HK: 暫無供應商
+  open_provider_settings:
+    en: Open Settings to add an AI provider
+    zh-CN: 前往设置添加 AI 供应商
+    zh-HK: 前往設定新增 AI 供應商
+  configure_model_before_send:
+    en: Add an AI provider in Settings before sending a local model message, or switch to an ACP agent
+    zh-CN: 请先在设置中添加 AI 供应商再发送本地模型消息，或切换到 ACP Agent
+    zh-HK: 請先在設定中新增 AI 供應商再傳送本地模型訊息，或切換到 ACP Agent
   model_switch_failed:
     en: "Could not switch model: %{error}"
     zh-CN: "模型切换失败：%{error}"
@@ -879,6 +891,34 @@ AgentUi:
     en: Read Only
     zh-CN: 只读
     zh-HK: 唯讀
+  reasoning_effort:
+    en: Reasoning Effort
+    zh-CN: 思考级别
+    zh-HK: 思考級別
+  reasoning_effort_auto:
+    en: Auto
+    zh-CN: 自动
+    zh-HK: 自動
+  reasoning_effort_high:
+    en: High
+    zh-CN: 高
+    zh-HK: 高
+  reasoning_effort_low:
+    en: Low
+    zh-CN: 低
+    zh-HK: 低
+  reasoning_effort_medium:
+    en: Medium
+    zh-CN: 中
+    zh-HK: 中
+  reasoning_effort_none:
+    en: Off
+    zh-CN: 关闭
+    zh-HK: 關閉
+  reasoning_effort_switch_failed:
+    en: "Could not switch reasoning effort: %{error}"
+    zh-CN: "思考级别切换失败：%{error}"
+    zh-HK: "思考級別切換失敗：%{error}"
   reasoning_process:
     en: Reasoning
     zh-CN: 思考过程

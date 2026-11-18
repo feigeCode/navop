@@ -37,6 +37,43 @@ fn enabled_provider_configs_filters_disabled_entries() {
 }
 
 #[test]
+fn empty_provider_configs_still_create_chat_config() {
+    let config = AgentChatViewConfig::from_provider_configs(
+        ResourceContext::new(),
+        Vec::new(),
+        Vec::new(),
+        ToolRegistry::new(),
+    )
+    .expect("an empty provider list must still render the chat shell for ACP");
+
+    assert!(config.model_options.is_empty());
+    assert_eq!(None, config.selected_model_id);
+    assert!(config.runtime_factory.is_none());
+}
+
+#[test]
+fn empty_provider_chat_config_keeps_acp_agents_available() {
+    let config = AgentChatViewConfig::from_provider_configs(
+        ResourceContext::new(),
+        Vec::new(),
+        Vec::new(),
+        ToolRegistry::new(),
+    )
+    .expect("empty providers must not block ACP");
+    let agents = vec![AcpAgentEntry::ready(AcpAgentConfig::new(
+        "codex",
+        "Codex ACP",
+        "codex",
+    ))];
+
+    let config = build_sidebar_config(config, agents);
+
+    assert!(config.model_options.is_empty());
+    assert_eq!(1, config.acp_agents.len());
+    assert_eq!(config.acp_agents[0].id.as_ref(), "codex");
+}
+
+#[test]
 fn provider_change_rebuilds_panel_when_initial_provider_load_failed() {
     assert_eq!(
         ProviderRefreshAction::RebuildView,

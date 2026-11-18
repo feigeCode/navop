@@ -4,6 +4,44 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.23.4] - 2026-11-18
+
+本版本把连接迁移包升级为密码保护格式，并补齐文件面板的隐藏文件入口与一批 SSH、构建侧修复。
+
+#### 更新内容
+
+- 导出连接迁移包改为密码保护：导出时设置并确认密码，连接密码、私钥、私钥口令以及被连接引用的钥匙串条目会用 AES-256-GCM + Argon2id 加密后写进包内独立的 `encrypted_credentials`；包里的主机、端口等配置仍保持可读，便于查看与排重。
+- 迁移包格式升级到 v3，导入时必须输入导出时设置的同一密码。解密在任何写库之前完成，密码错误或包损坏会让整包导入失败，不会留下「连接建好了但没密码」的半成品；导入端还会按密文里的钥匙串条目重建本地条目并重映射 `credential_reference`，跨设备迁移后密码、私钥、su/sudo 期望可以直接使用。
+- 全量产品的 `one-hub.db` 支持用源环境主密钥解密直读，迁移前不必手动导出成 JSON。
+- SFTP 左右两侧工具栏新增隐藏文件开关（眼睛图标），工作区侧栏的文件管理器也补上同一入口，与文件行右键菜单共用同一份状态。
+- 空白目录现在直接提供右键菜单，新建文件 / 文件夹不必再回到工具栏。
+
+#### 修复与优化
+
+- su / sudo 提权密码自动填入改为默认关闭：只有用户在 SSH 表单里手动勾选才会自动应答，降低密码被远端伪造提示套走的风险；已保存的连接升级后需要重新勾选一次，密码被拒后本次会话停止自动填写。
+- SSH 私钥加载失败不再只显示 russh 的 `SshKey: cryptographic error`，改为给出可操作提示：检查私钥内容是否完整、口令是否正确，以及格式是否在支持范围（OpenSSH、RSA、EC、PKCS#8、PPK）。
+- 修复 GPUI Fast 圆角裁剪导致页签和卡片内容丢失：撤销 v0.23.2 引入的临时 workaround，改为把 gpui-fast 0.1.14 快照刷新到上游修复版本，页签与卡片恢复完整显示。
+- 修复构建失败：quickjs-jit-sys 自带的 C 源码需要 C99 声明，`.cargo/config.toml` 现在默认带上 `-std=gnu99`。
+- 扩展市场自动镜像的回退顺序改为 R2 → CNB → GitHub，与更新侧保持一致，国内用户不再需要等 R2 与 GitHub 依次超时后才轮到 CNB。
+
+#### What's New
+
+- Exporting a connection bundle is now password-protected: you set and confirm a password on export, and connection passwords, private keys, key passphrases and referenced keychain entries are encrypted with AES-256-GCM + Argon2id into a separate `encrypted_credentials` block. Hosts, ports and other settings stay readable for inspection and de-duplication.
+- The bundle format is now v3 and importing requires the same password. Decryption happens before anything is written, so a wrong password or a damaged bundle fails the whole import instead of leaving connections without credentials; keychain entries carried in the bundle are recreated on the target machine and `credential_reference` is remapped, so passwords, keys and su/sudo expectations work right after a cross-device migration.
+- The full product can read `one-hub.db` directly with the source master key, so migrating no longer needs a manual JSON export first.
+- Both SFTP toolbars (local and remote) gained a hidden-files toggle, and the workspace sidebar file manager exposes the same control, sharing state with the file row context menu.
+- Empty directories now offer a context menu, so creating files or folders no longer requires going back to the toolbar.
+
+#### Fixes and Improvements
+
+- su/sudo password auto-fill now defaults to off: it only answers when you tick the option in the SSH form, reducing the risk of a spoofed remote prompt harvesting the password. Saved connections need the box ticked once after upgrading, and auto-fill stops for the session after a rejected password.
+- A failed SSH private key load no longer surfaces only russh's `SshKey: cryptographic error`; it now explains what to check — key content completeness, passphrase, and supported formats (OpenSSH, RSA, EC, PKCS#8, PPK).
+- Fixed GPUI Fast rounded clipping losing tab and card content: the temporary workaround from v0.23.2 is reverted and the gpui-fast 0.1.14 snapshot is refreshed to the upstream fix, so tabs and cards render fully again.
+- Fixed build failures caused by quickjs-jit-sys bundling C sources that need C99 declarations: `.cargo/config.toml` now defaults `CFLAGS` to `-std=gnu99`.
+- Extension marketplace auto-mirror fallback is now R2 → CNB → GitHub, matching the update path, so users in China no longer wait for R2 and GitHub to time out before CNB is tried.
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.4) 下载桌面端安装包。
+
 ## [v0.23.3] - 2026-11-16
 
 本版本把扩展机制升级为「多界面 + 宿主能力面」：扩展不再只是标签页，还能出现在终端侧边栏、数据库侧边栏和数据库右键菜单里，并通过 `nativeModule("navop")` 使用数据库、终端、UI 与导航能力。

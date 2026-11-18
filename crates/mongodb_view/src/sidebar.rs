@@ -62,12 +62,24 @@ impl MongoSidebar {
 
         let mut subs = Vec::new();
 
+        // 面板除了「关闭」还会发 TurnStarted / TurnFinished / 子代理详情等事件，那些由
+        // 工作台外壳处理。这里以前对任何事件都收起侧栏，用户一发消息（TurnStarted）AI
+        // 面板就自己消失了。
         subs.push(cx.subscribe(
             &ai_chat_panel,
-            |this, _, _event: &DefaultAgentChatPanelEvent, cx| {
-                this.active_panel = None;
-                cx.emit(MongoSidebarEvent::PanelChanged);
-                cx.notify();
+            |this, _, event: &DefaultAgentChatPanelEvent, cx| match event {
+                DefaultAgentChatPanelEvent::Close => {
+                    this.set_active_panel(None, cx);
+                }
+                // MongoDB 侧栏固定在页签内，没有「移动到另一侧」的去处。
+                DefaultAgentChatPanelEvent::MoveTo(_)
+                | DefaultAgentChatPanelEvent::TurnStarted { .. }
+                | DefaultAgentChatPanelEvent::TurnFinished { .. }
+                | DefaultAgentChatPanelEvent::RestoreTurn { .. }
+                | DefaultAgentChatPanelEvent::OpenFileInReview { .. }
+                | DefaultAgentChatPanelEvent::OpenTurnReview { .. }
+                | DefaultAgentChatPanelEvent::SubagentDetailRequested { .. }
+                | DefaultAgentChatPanelEvent::SubagentDetailUpdated { .. } => {}
             },
         ));
 

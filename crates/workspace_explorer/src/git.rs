@@ -335,9 +335,14 @@ pub fn capture_worktree_snapshot(repository: &GitRepository) -> Result<String> {
     result
 }
 
-/// checkpoint 锚定 ref 的命名空间。落在 refs/navop/ 下：
-/// 不占分支名、`git branch` 不显示、不会被普通 push 带走，且能防 gc。
-const CHECKPOINT_REF_PREFIX: &str = "refs/navop/checkpoints/";
+/// 逐会话基线 ref 的命名空间：`refs/navop/session-baselines/<repo-hash>/<session-id>`。
+///
+/// 基线必须**按会话**存：工作区只有一个，但每个会话「上一轮结束时」的现场各不相同。
+/// 共用一个仓库级基线时，新会话首轮会拿上一个会话（乃至上次启动前）的现场当基线，
+/// 把期间所有提交和改动都算成「本轮改动」——「啥都没改却弹出审阅」就是这么来的。
+///
+/// 落在 refs/navop/ 下：不占分支名、`git branch` 不显示、不会被普通 push 带走，且能防 gc。
+const SESSION_BASELINE_PREFIX: &str = "refs/navop/session-baselines/";
 
 /// 仓库根的 FNV-1a 哈希：同仓库跨重启同名，不同仓库互不冲突。
 fn repository_hash(repository: &GitRepository) -> String {
@@ -350,24 +355,47 @@ fn repository_hash(repository: &GitRepository) -> String {
     format!("{hash:016x}")
 }
 
-/// 为仓库生成稳定的基线 checkpoint ref 名。
-fn checkpoint_ref_name(repository: &GitRepository) -> String {
-    format!("{CHECKPOINT_REF_PREFIX}{}", repository_hash(repository))
+/// ref 路径里的一级是否安全：只收 `[A-Za-z0-9_-]`。
+///
+/// 会话 id 与 turn id 都来自运行时事件，非法字符会让 `update-ref` 直接报错；
+/// 早一点给出可读的诊断，比让 git 抛一句看不懂的 ref 语法错误划算。
+fn is_ref_safe_component(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-/// 把一次快照锚定为持久 ref，防止被 gc，并让重启后可恢复。
-pub fn anchor_checkpoint(repository: &GitRepository, commit: &str) -> Result<()> {
-    let reference = checkpoint_ref_name(repository);
+/// 为仓库 + 会话生成稳定的基线 ref 名。
+fn session_baseline_ref_name(repository: &GitRepository, session_id: &str) -> Result<String> {
+    if !is_ref_safe_component(session_id) {
+        return Err(anyhow!("`{session_id}` is not a usable baseline session id"));
+    }
+    Ok(format!(
+        "{SESSION_BASELINE_PREFIX}{}/{session_id}",
+        repository_hash(repository)
+    ))
+}
+
+/// 把某个会话的轮末快照锚成持久 ref：防 gc，重启后仍能接着这个会话算 diff。
+pub fn anchor_session_baseline(
+    repository: &GitRepository,
+    session_id: &str,
+    commit: &str,
+) -> Result<()> {
+    let reference = session_baseline_ref_name(repository, session_id)?;
     run_git_operation(
         repository,
-        "git update-ref checkpoint",
+        "git update-ref session baseline",
         vec!["update-ref".to_string(), reference, commit.to_string()],
     )
 }
 
-/// 读取该仓库上次锚定的 checkpoint；从未记录时返回 `None`。
-pub fn anchored_checkpoint(repository: &GitRepository) -> Result<Option<String>> {
-    let reference = checkpoint_ref_name(repository);
+/// 读取某个会话上次锚定的基线；从未记录时返回 `None`。
+///
+/// 只有同一个会话的基线才有意义：别的会话的基线拿到本轮来 diff，算出来的是它们的改动。
+pub fn session_baseline(repository: &GitRepository, session_id: &str) -> Result<Option<String>> {
+    let reference = session_baseline_ref_name(repository, session_id)?;
     let output = run_git(
         &repository.root,
         ["rev-parse", "--verify", "--quiet", &reference],
@@ -381,15 +409,15 @@ pub fn anchored_checkpoint(repository: &GitRepository) -> Result<Option<String>>
 
 /// 逐轮快照 ref 的命名空间：`refs/navop/turn-checkpoints/<repo-hash>/<turn-id>`。
 ///
-/// **必须与基线 ref 分处两个命名空间**：git 不允许同一路径既是 ref 又是目录，而基线 ref
-/// 恰好占用了 `refs/navop/checkpoints/<repo-hash>` 这一级。挂在它下面会报
-/// `cannot lock ref ... exists; cannot create ...`，逐轮链永远建不起来（踩过一次）。
+/// **必须与其它 ref 分处不同的一级命名空间**：git 不允许同一路径既是 ref 又是目录。
+/// 曾经把逐轮 ref 挂在基线 ref 之下，结果报 `cannot lock ref ... exists; cannot create ...`，
+/// 逐轮链永远建不起来（踩过一次）。
 const TURN_CHECKPOINT_PREFIX: &str = "refs/navop/turn-checkpoints/";
 
 /// 「撤销恢复」槽位：`refs/navop/restore-backups/<repo-hash>`。
 ///
 /// 只留最近一次，固定名覆盖式写入——避免每恢复一次就多留一个 ref。
-/// 单独占一个槽位而不是复用基线 ref：基线要参与下一轮 diff 的计算，不能被恢复动作带偏。
+/// 单独占一个槽位而不是复用会话基线 ref：基线要参与下一轮 diff 的计算，不能被恢复动作带偏。
 const RESTORE_BACKUP_PREFIX: &str = "refs/navop/restore-backups/";
 
 /// 一次工作区恢复的结果。
@@ -519,11 +547,7 @@ fn apply_worktree_snapshot(repository: &GitRepository, commit: &str) -> Result<(
 /// `turn_id` 来自运行时事件（形如 `turn_<uuid>`），进 ref 路径前先校验字符集：
 /// 非法字符会让 `update-ref` 直接报错，早一点给出可读的诊断更划算。
 fn turn_checkpoint_ref_name(repository: &GitRepository, turn_id: &str) -> Result<String> {
-    if turn_id.is_empty()
-        || !turn_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
+    if !is_ref_safe_component(turn_id) {
         return Err(anyhow!("`{turn_id}` is not a usable checkpoint turn id"));
     }
     Ok(format!("{}/{turn_id}", turn_checkpoint_prefix(repository)))

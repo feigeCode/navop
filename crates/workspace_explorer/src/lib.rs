@@ -24,10 +24,10 @@ pub use explorer::{
 };
 pub use git::{
     CreatedWorktree, GitBranch, GitBranchKind, GitChange, GitChangeKind, GitRepository,
-    WorktreeEntry, anchor_checkpoint, anchored_checkpoint, capture_worktree_snapshot, commit_all,
+    WorktreeEntry, anchor_session_baseline, capture_worktree_snapshot, commit_all,
     commit_context, create_worktree, create_worktree_in, diff_snapshots, discard_change,
     discover_repository, list_worktrees, load_branches, load_changes, load_diff,
-    push_current_branch, remove_worktree, stage_change, unstage_change,
+    push_current_branch, remove_worktree, session_baseline, stage_change, unstage_change,
 };
 pub use theme::WorkspaceTheme;
 

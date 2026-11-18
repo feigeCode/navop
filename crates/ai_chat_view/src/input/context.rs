@@ -281,6 +281,8 @@ pub struct ComposerModelOption {
     pub hint: Option<SharedString>,
     /// true 时标签只显示模型名，不拼 provider 前缀（ACP 模型用）。
     pub model_only: bool,
+    /// 该模型在 provider 配置里的默认思考级别；`None` 表示跟随上游默认。
+    pub reasoning_effort_default: Option<llm_connector::types::ReasoningEffort>,
 }
 
 impl ComposerModelOption {
@@ -298,7 +300,17 @@ impl ComposerModelOption {
             display_model: None,
             hint: None,
             model_only: false,
+            reasoning_effort_default: None,
         }
+    }
+
+    /// 记下该模型的默认思考级别（来自 provider 配置）。
+    pub fn with_reasoning_effort_default(
+        mut self,
+        reasoning_effort: Option<llm_connector::types::ReasoningEffort>,
+    ) -> Self {
+        self.reasoning_effort_default = reasoning_effort;
+        self
     }
 
     pub fn with_display_model(mut self, display_model: impl Into<SharedString>) -> Self {
@@ -651,6 +663,8 @@ pub struct AgentComposerContext {
     pub model: Option<ComposerModel>,
     /// 工具执行模式当前文案(如 `自动`)。
     pub execution_mode_label: SharedString,
+    /// 当前模型的思考级别文案；`None` 时输入框不显示该 chip（如 ACP 后端）。
+    pub reasoning_effort_label: Option<SharedString>,
     /// 底部上下文栏：当前工作区。
     pub workspace: ComposerWorkspaceInfo,
     /// 底部上下文栏：工作区下拉的候选(空表示宿主尚未注入)。

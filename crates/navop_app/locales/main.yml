@@ -5626,6 +5626,38 @@ LlmProviders:
     en: API version (optional)
     zh-CN: API 版本（可选）
     zh-HK: API 版本（可選）
+  reasoning_effort_label:
+    en: Reasoning effort
+    zh-CN: 思考级别
+    zh-HK: 思考級別
+  reasoning_effort_help:
+    en: Sent as the default for chats using this provider. Providers without native support ignore it; you can switch it per chat.
+    zh-CN: 作为该提供商聊天时的默认值。不支持该参数的提供商会自动忽略；聊天里仍可随时切换。
+    zh-HK: 作為該提供商聊天時的預設值。不支援該參數的提供商會自動忽略；對話中仍可隨時切換。
+  reasoning_effort_auto:
+    en: Auto (follow the provider default)
+    zh-CN: 自动（跟随上游默认）
+    zh-HK: 自動（跟隨上游預設）
+  reasoning_effort_none:
+    en: Off
+    zh-CN: 关闭
+    zh-HK: 關閉
+  reasoning_effort_low:
+    en: Low
+    zh-CN: 低
+    zh-HK: 低
+  reasoning_effort_medium:
+    en: Medium
+    zh-CN: 中
+    zh-HK: 中
+  reasoning_effort_high:
+    en: High
+    zh-CN: 高
+    zh-HK: 高
+  model_search_placeholder:
+    en: Search models
+    zh-CN: 搜索模型
+    zh-HK: 搜尋模型
   extra_headers_label:
     en: Custom request headers (optional)
     zh-CN: 自定义请求头（可选）
@@ -5642,6 +5674,18 @@ LlmProviders:
     en: "Invalid custom request headers: %{error}"
     zh-CN: "自定义请求头格式错误：%{error}"
     zh-HK: "自訂請求標頭格式錯誤：%{error}"
+  proxy_label:
+    en: Proxy URL (optional)
+    zh-CN: 代理地址（可选）
+    zh-HK: 代理位址（可選）
+  proxy_placeholder:
+    en: socks5://127.0.0.1:7890
+    zh-CN: socks5://127.0.0.1:7890
+    zh-HK: socks5://127.0.0.1:7890
+  proxy_help:
+    en: Used only for this provider. Leave empty to follow the global proxy setting.
+    zh-CN: 仅对当前提供商生效；留空则跟随「设置 → 通用 → 全局代理」。
+    zh-HK: 僅對目前提供商生效；留空則跟隨「設定 → 一般 → 全域代理」。
   opencode_go_help:
     en: "OpenCode Go automatically sends a stable x-opencode-session header. DeepSeek V4.1 Flash and V4 Pro require the Global region in OpenCode Console."
     zh-CN: "OpenCode Go 会自动发送稳定的 x-opencode-session 请求头。DeepSeek V4.1 Flash / V4 Pro 需要在 OpenCode Console 中选择 Global 区域。"
@@ -5675,9 +5719,9 @@ LlmProviders:
     zh-CN: 加载中...
     zh-HK: 載入中...
   model_load_success:
-    en: "Loaded %{count} models. They are now available in the dropdown above."
-    zh-CN: "已加载 %{count} 个模型，已更新到上方下拉列表。"
-    zh-HK: "已載入 %{count} 個模型，已更新到上方下拉列表。"
+    en: "Loaded %{count} models. All of them are now checked below."
+    zh-CN: "已加载 %{count} 个模型，已全部加入下方列表并勾选。"
+    zh-HK: "已載入 %{count} 個模型，已全部加入下方列表並勾選。"
   set_default:
     en: Set as default provider
     zh-CN: 设为默认提供商
@@ -5710,6 +5754,130 @@ LlmProviders:
     en: At least one model is required
     zh-CN: 至少需要选择一个模型
     zh-HK: 至少需要選擇一個模型
+  search_placeholder:
+    en: Search providers
+    zh-CN: 搜索提供商
+    zh-HK: 搜尋提供商
+  search_no_result:
+    en: No matching providers
+    zh-CN: 没有匹配的提供商
+    zh-HK: 沒有符合的提供商
+  gallery_title:
+    en: Choose a provider to get started
+    zh-CN: 选择一个提供商开始配置
+    zh-HK: 選擇一個提供商開始設定
+  gallery_description:
+    en: Pick a preset — endpoint and defaults are filled in for you
+    zh-CN: 选个预设，接口地址和默认值会自动填好
+    zh-HK: 揀個預設，位址同預設值會自動填好
+  gallery_group_global:
+    en: Popular
+    zh-CN: 热门
+    zh-HK: 熱門
+  gallery_group_cn:
+    en: China
+    zh-CN: 国内
+    zh-HK: 國內
+  gallery_group_local:
+    en: Local & self-hosted
+    zh-CN: 本地与自托管
+    zh-HK: 本地與自託管
+  gallery_group_custom:
+    en: Custom
+    zh-CN: 自定义
+    zh-HK: 自訂
+  detail_new_title:
+    en: New Provider
+    zh-CN: 新建提供商
+    zh-HK: 新增提供商
+  section_basic:
+    en: Basic
+    zh-CN: 基础信息
+    zh-HK: 基本資料
+  section_connection:
+    en: Connection
+    zh-CN: 连接
+    zh-HK: 連線
+  section_models:
+    en: Models
+    zh-CN: 模型
+    zh-HK: 模型
+  section_advanced:
+    en: Advanced
+    zh-CN: 高级
+    zh-HK: 進階
+  section_collapse:
+    en: Collapse
+    zh-CN: 收起
+    zh-HK: 收起
+  section_expand:
+    en: Expand
+    zh-CN: 展开
+    zh-HK: 展開
+  advanced_empty:
+    en: No extra options for this provider type
+    zh-CN: 该类型没有额外选项
+    zh-HK: 此類型沒有額外選項
+  test_connection:
+    en: Test connection
+    zh-CN: 测试连接
+    zh-HK: 測試連線
+  testing_connection:
+    en: Testing...
+    zh-CN: 测试中…
+    zh-HK: 測試中…
+  test_connection_success:
+    en: "Connected — %{count} models available"
+    zh-CN: "连接成功 — 获取到 %{count} 个模型"
+    zh-HK: "連線成功 — 取得 %{count} 個模型"
+  test_connection_failed:
+    en: "Connection failed: %{error}"
+    zh-CN: "连接失败: %{error}"
+    zh-HK: "連線失敗: %{error}"
+  set_default_help:
+    en: The default provider is used for new chat sessions
+    zh-CN: 默认提供商会用于新的聊天会话
+    zh-HK: 預設提供者會用於新的聊天工作階段
+  default_badge:
+    en: Default
+    zh-CN: 默认
+    zh-HK: 預設
+  model_empty_hint:
+    en: No models yet — load the list or add one below
+    zh-CN: 还没有模型 — 先拉取列表或手动添加
+    zh-HK: 仲未有模型 — 先拉取列表或手動新增
+  model_select_all:
+    en: Select all
+    zh-CN: 全选
+    zh-HK: 全選
+  model_clear:
+    en: Clear
+    zh-CN: 清空
+    zh-HK: 清空
+  model_invert:
+    en: Invert
+    zh-CN: 反选
+    zh-HK: 反選
+  set_as_default:
+    en: Set as default model
+    zh-CN: 设为默认模型
+    zh-HK: 設為預設模型
+  api_base_help:
+    en: Leave empty to use the provider's default endpoint
+    zh-CN: 留空则使用该提供商的默认地址
+    zh-HK: 留空則使用該提供者嘅預設位址
+  select_provider_hint:
+    en: Select a provider on the left, or add a new one
+    zh-CN: 选择左侧的提供商，或新增一个
+    zh-HK: 選擇左邊的提供者，或新增一個
+  model_selected_summary:
+    en: "%{selected} of %{total} models selected"
+    zh-CN: "已选 %{selected} / %{total} 个模型"
+    zh-HK: "已選 %{selected} / %{total} 個模型"
+  model_filter_summary:
+    en: "%{count} matched by the filter"
+    zh-CN: "过滤命中 %{count}"
+    zh-HK: "過濾命中 %{count}"
 
 
 Serial:

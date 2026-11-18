@@ -1150,6 +1150,8 @@ pub struct TabContainer {
     tab_quick_open: Option<crate::tab_switcher::QuickOpenResolver>,
     /// 全局设置按钮回调，由上层注入；为 None 时不渲染右上角设置入口。
     on_settings: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
+    /// 右上角 GitHub 开源仓库入口回调，由上层注入；为 None 时不渲染该入口。
+    on_github: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
     tab_bar_scroll_handle: ScrollHandle,
     closing_tabs: HashSet<SharedString>,
     activity_tabs: HashSet<String>,
@@ -1217,6 +1219,7 @@ impl TabContainer {
             on_add_tab: None,
             tab_quick_open: None,
             on_settings: None,
+            on_github: None,
             tab_bar_scroll_handle: ScrollHandle::new(),
             closing_tabs: HashSet::new(),
             activity_tabs: HashSet::new(),
@@ -1380,6 +1383,16 @@ impl TabContainer {
         on_settings: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>,
     ) -> Self {
         self.on_settings = Some(on_settings);
+        self
+    }
+
+    /// 在标签栏最右侧（设置入口之后、窗口控件之前）渲染 GitHub 开源仓库入口。
+    /// 点击回调由上层注入；未注入时不渲染该按钮。
+    pub fn with_github_button(
+        mut self,
+        on_github: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>,
+    ) -> Self {
+        self.on_github = Some(on_github);
         self
     }
 
@@ -4826,6 +4839,22 @@ impl TabContainer {
                                 .compact()
                                 .tooltip(t!("Common.settings").to_string())
                                 .on_click(move |_, window, cx| (on_settings)(window, cx)),
+                        ),
+                )
+            })
+            .when_some(self.on_github.clone(), |this, on_github| {
+                this.child(
+                    div()
+                        .id("tab-bar-github-entry")
+                        .debug_selector(|| "tab-bar-github-entry".to_owned())
+                        .flex_shrink_0()
+                        .child(
+                            Button::new("tab-bar-github")
+                                .icon(IconName::GitHub)
+                                .ghost()
+                                .compact()
+                                .tooltip(t!("Common.github").to_string())
+                                .on_click(move |_, window, cx| (on_github)(window, cx)),
                         ),
                 )
             })

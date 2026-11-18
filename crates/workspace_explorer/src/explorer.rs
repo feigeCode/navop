@@ -11,9 +11,9 @@ use crate::WorkspaceEditor;
 use crate::backend::{WorkspaceBackend, local_backend};
 use crate::editor::{GitDiffRequest, WorkspaceEditorEvent};
 use crate::git::{
-    GitChange, GitRepository, WorktreeEntry, anchor_checkpoint, anchor_turn_checkpoint,
+    GitChange, GitRepository, WorktreeEntry, anchor_session_baseline, anchor_turn_checkpoint,
     capture_worktree_snapshot, create_worktree, delete_turn_checkpoints, diff_snapshots,
-    load_changes, restore_checkpoint,
+    load_changes, restore_checkpoint, session_baseline,
 };
 use crate::model::ExplorerEntry;
 use crate::theme::WorkspaceTheme;
@@ -54,7 +54,12 @@ pub struct WorkspaceExplorer {
     changes: Vec<GitChange>,
     /// 仓库已注册的 worktree，来自 `git worktree list`。
     worktrees: Vec<WorktreeEntry>,
-    last_checkpoint: Option<String>,
+    /// 每个会话的 diff 基线：该会话上一轮结束时的快照（key = session id）。
+    ///
+    /// **按会话**存，不能全仓库共用一份。工作区虽然只有一个，但「本轮之前」是相对
+    /// 会话而言的：新会话没有上一轮，拿别的会话（乃至上次启动前）的现场当基线，
+    /// 只会把它们的改动算成「本轮改动」，于是什么都没改也会弹出审阅。
+    last_checkpoints: HashMap<String, String>,
     /// 逐轮审阅快照，按捕获先后排列（跨会话）。
     ///
     /// 与 `turn_checkpoints` **分开存**：那份是「能回到这一轮」的依据，锚定失败
@@ -149,7 +154,7 @@ impl WorkspaceExplorer {
             branch_manager: None,
             changes: Vec::new(),
             worktrees: Vec::new(),
-            last_checkpoint: None,
+            last_checkpoints: HashMap::new(),
             turn_reviews: Vec::new(),
             turn_checkpoints: HashMap::new(),
             commit_message_generating: false,
@@ -216,10 +221,10 @@ impl WorkspaceExplorer {
         &self.recent_roots
     }
 
-    /// 在 turn 结束时捕获工作区快照，并与上一轮结束快照比较。
+    /// 在 turn 结束时捕获工作区快照，并与**同一会话**上一轮结束快照比较。
     ///
-    /// 捕获使用临时 index，不会修改用户暂存区。首轮没有基线时只保存快照，
-    /// 后续轮次即可得到上一轮到当前轮的 diff。
+    /// 捕获使用临时 index，不会修改用户暂存区。会话首轮没有基线时只保存快照，
+    /// 后续轮次即可得到该会话上一轮到当前轮的 diff；别的会话的改动不进来。
     pub fn capture_turn_finished(
         &mut self,
         session_id: String,
@@ -230,12 +235,22 @@ impl WorkspaceExplorer {
         let Some(repository) = self.repository.clone() else {
             return;
         };
-        let before = self.last_checkpoint.clone();
+        let before = turn_baseline(&self.last_checkpoints, &session_id);
         let turn_to_anchor = turn_id.clone();
+        let baseline_session = session_id.clone();
         let task = cx.background_spawn(async move {
+            // 内存里没有这个会话的基线（刚重启、或本轮是它的第一轮）时，读同会话上次
+            // 锚下的那份；读不到就是真正的首轮，只拍快照，不拿任何东西当基线。
+            let before = match before {
+                Some(baseline) => Some(baseline),
+                None => baseline_from_ref(&repository, &baseline_session),
+            };
             let after = capture_worktree_snapshot(&repository)?;
-            // 锚定成持久 ref：防 gc，重启后 Explorer 能恢复基线。
-            anchor_checkpoint(&repository, &after)?;
+            // 锚定成持久 ref：防 gc，重启后同会话的首轮仍能接着算 diff。锚定失败只影响
+            // 重启恢复，不该拖垮这一轮的审阅，所以吞掉错误。
+            if let Err(error) = anchor_session_baseline(&repository, &baseline_session, &after) {
+                tracing::warn!(session_id = %baseline_session, "锚定会话基线失败: {error}");
+            }
             // 同一份快照另挂到该轮的 ref 下，供「回到这一轮」取用。锚定失败（例如 turn id
             // 不合规）不该拖垮基线记录，所以单独吞掉错误，只让这一轮不进可回滚列表。
             let anchored_turn =
@@ -252,7 +267,8 @@ impl WorkspaceExplorer {
             let result = task.await;
             let _ = entity.update(cx, |this, cx| {
                 if let Ok((after, diff, anchored_turn)) = result {
-                    this.last_checkpoint = Some(after.clone());
+                    this.last_checkpoints
+                        .insert(session_id.clone(), after.clone());
                     if anchored_turn {
                         this.turn_checkpoints
                             .entry(session_id.clone())
@@ -385,8 +401,10 @@ impl WorkspaceExplorer {
             let _ = entity.update(cx, |this, cx| {
                 match result {
                     Ok(restore) => {
-                        // 恢复后的现场就是目标快照，基线随之对齐。
-                        this.last_checkpoint = Some(restore.target);
+                        // 恢复后的现场就是目标快照，**这个会话**的基线随之对齐；
+                        // 别的会话的基线不动，它们下一轮会把这次恢复当成外部改动。
+                        this.last_checkpoints
+                            .insert(session_id.clone(), restore.target);
                         this.drop_reviews_after(&session_id, &turn_id);
                         this.emit_reviews_changed(&session_id, cx);
                         this.git_error = None;
@@ -752,7 +770,7 @@ impl WorkspaceExplorer {
         self.branch_manager = None;
         self.changes.clear();
         self.worktrees.clear();
-        self.last_checkpoint = None;
+        self.last_checkpoints.clear();
         self.turn_reviews.clear();
         self.turn_checkpoints.clear();
         self.ignore_matcher = None;
@@ -846,10 +864,8 @@ impl WorkspaceExplorer {
         self.repository = snapshot.repository;
         self.changes = snapshot.changes;
         self.worktrees = snapshot.worktrees;
-        // 重启恢复：内存没有更新的基线时，采用仓库锚定的 checkpoint。
-        if self.last_checkpoint.is_none() {
-            self.last_checkpoint = snapshot.anchored_checkpoint;
-        }
+        // 基线不在这里恢复：它只属于某个会话，而快照加载时没有会话上下文。
+        // 各会话的基线在 [`Self::capture_turn_finished`] 里按需从 ref 取回。
         if self
             .selected_change_path
             .as_ref()
@@ -1117,6 +1133,26 @@ fn review_for_turn<'a>(
         .iter()
         .rev()
         .find(|review| review.session_id == session_id && review.turn_id == turn_id)
+}
+
+/// 本轮 diff 的基线：只认**同一个会话**自己的上一轮。
+///
+/// 别的会话的基线不是「本轮之前」。抽成自由函数是为了能不开窗口就测掉这条约束。
+fn turn_baseline(checkpoints: &HashMap<String, String>, session_id: &str) -> Option<String> {
+    checkpoints.get(session_id).cloned()
+}
+
+/// 从持久 ref 读回某个会话的基线；读不到或读失败都当作「没有基线」。
+///
+/// 读不出来只会让这一轮算不出 diff（相当于首轮），比让整次捕获失败强。
+fn baseline_from_ref(repository: &GitRepository, session_id: &str) -> Option<String> {
+    match session_baseline(repository, session_id) {
+        Ok(baseline) => baseline,
+        Err(error) => {
+            tracing::warn!(session_id = %session_id, "读取会话基线失败: {error}");
+            None
+        }
+    }
 }
 
 /// 某一轮能不能摆出「查看改动」：既要真的属于这一轮，也要有非空 diff。
