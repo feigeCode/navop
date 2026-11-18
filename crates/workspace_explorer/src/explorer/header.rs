@@ -8,7 +8,7 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    Icon, Sizable as _, Size, StyledExt as _,
+    Icon, Selectable as _, Sizable as _, Size, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
@@ -96,6 +96,23 @@ impl WorkspaceExplorer {
                 IconButton::new("workspace-refresh", IconName::Refresh)
                     .tooltip(t!("WorkspaceExplorer.tooltip.refresh"))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+            )
+            .child(
+                IconButton::new(
+                    "workspace-toggle-hidden",
+                    if self.show_hidden {
+                        IconName::Eye
+                    } else {
+                        IconName::EyeOff
+                    },
+                )
+                .selected(self.show_hidden)
+                .tooltip(if self.show_hidden {
+                    t!("WorkspaceExplorer.tooltip.hide_hidden_files")
+                } else {
+                    t!("WorkspaceExplorer.tooltip.show_hidden_files")
+                })
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_show_hidden(cx))),
             )
             .child(
                 IconButton::new("workspace-collapse-all", IconName::ChevronsUpDown)

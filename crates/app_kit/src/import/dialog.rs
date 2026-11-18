@@ -27,7 +27,7 @@ use super::{
 };
 
 const DIALOG_WIDTH: f32 = 760.0;
-const DIALOG_HEIGHT: f32 = 560.0;
+const DIALOG_HEIGHT: f32 = 600.0;
 const DIALOG_REUSE_KEY: &str = "app-kit-import";
 const DB_PICKER_PROMPT: &str = "选择全量产品的 one-hub.db";
 const BUNDLE_PICKER_PROMPT: &str = "选择迁移包文件（.json 或 one-hub.db）";
@@ -56,11 +56,15 @@ pub struct ImportDialog {
     detected: Option<PathBuf>,
     /// 全量产品数据库路径：探测成功时预填，也可以由用户选择或手写。
     db_input: Entity<InputState>,
+    /// 源环境主密钥：源库的密码/密钥不是用本机主密钥加密时需要（换机迁移）。
+    source_key_input: Entity<InputState>,
     /// 用户点过「换一个文件…」（便携版/多套数据目录）后展开手动路径输入框。
     manual_db: bool,
     /// 迁移包文件路径（也接受直接选 `one-hub.db`，按文件头判定）。
     path_input: Entity<InputState>,
     json_input: Entity<TextareaState>,
+    /// 迁移包导出时设置的密码；v3 包用它解开加密凭据。
+    password_input: Entity<InputState>,
     status: Option<SharedString>,
     status_ok: bool,
 }
@@ -76,6 +80,11 @@ impl ImportDialog {
             }
             state
         });
+        let source_key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("源环境主密钥（源库密码已加密时填写；留空则尝试当前主密钥）")
+                .masked(true)
+        });
         let path_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder("迁移包 JSON 路径，也可以直接选 one-hub.db")
         });
@@ -83,6 +92,11 @@ impl ImportDialog {
             TextareaState::new(window, cx)
                 .placeholder("在这里粘贴迁移包 JSON 内容")
                 .rows(10)
+        });
+        let password_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("导出迁移包时设置的密码")
+                .masked(true)
         });
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
@@ -92,9 +106,11 @@ impl ImportDialog {
             tab: ImportTab::FullProduct,
             detected,
             db_input,
+            source_key_input,
             manual_db: false,
             path_input,
             json_input,
+            password_input,
             status: None,
             status_ok: true,
         }
@@ -113,7 +129,8 @@ impl ImportDialog {
         let typed = self.db_input.read(cx).value().trim().to_string();
         if typed.is_empty() {
             // 输入框被清空 = 想重新探测一次（探测结果是打开弹窗时抓的快照）。
-            return match import_from_full_product(cx) {
+            let source_key = self.source_master_key(cx);
+            return match import_from_full_product(cx, source_key.as_deref()) {
                 Ok(report) => self.finish("已从全量产品导入", &report, window, cx),
                 Err(error) => self.fail(error.to_string(), window, cx),
             };
@@ -130,10 +147,23 @@ impl ImportDialog {
             );
             return;
         }
-        match import_from_database(&path, cx) {
+        let source_key = self.source_master_key(cx);
+        match import_from_database(&path, source_key.as_deref(), cx) {
             Ok(report) => self.finish("已从全量产品导入", &report, window, cx),
             Err(error) => self.fail(error.to_string(), window, cx),
         }
+    }
+
+    /// 读取源环境主密钥；空输入视为「未提供」，由读取端决定是否退回当前主密钥。
+    fn source_master_key(&self, cx: &App) -> Option<String> {
+        let key = self.source_key_input.read(cx).value().trim().to_string();
+        (!key.is_empty()).then_some(key)
+    }
+
+    /// 读取用户输入的迁移包密码；空输入视为「没有密码」。
+    fn bundle_password(&self, cx: &App) -> Option<String> {
+        let password = self.password_input.read(cx).value().trim().to_string();
+        (!password.is_empty()).then_some(password)
     }
 
     /// 从文件导入：SQLite 库走全量产品迁移，其它按迁移包 JSON 解析。
@@ -145,7 +175,9 @@ impl ImportDialog {
         }
         let path = expand_source_path(&typed);
         let sqlite_source = is_sqlite_database(&path);
-        match import_from_source_file(&path, cx) {
+        let password = self.bundle_password(cx);
+        let source_key = self.source_master_key(cx);
+        match import_from_source_file(&path, password.as_deref(), source_key.as_deref(), cx) {
             Ok(report) => {
                 let prefix = if sqlite_source {
                     "已从全量产品数据库导入"
@@ -164,7 +196,8 @@ impl ImportDialog {
             self.fail("请先粘贴迁移包 JSON 内容".to_string(), window, cx);
             return;
         }
-        match import_bundle(&text, cx) {
+        let password = self.bundle_password(cx);
+        match import_bundle(&text, password.as_deref(), cx) {
             Ok(report) => self.finish("已从迁移包导入", &report, window, cx),
             Err(error) => self.fail(error.to_string(), window, cx),
         }
@@ -323,6 +356,14 @@ impl ImportDialog {
                             ),
                     )
             })
+            .child(div().mt_2().text_sm().child("源环境主密钥（可选）"))
+            .child(Input::new(&self.source_key_input).mask_toggle())
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("源库的密码/密钥若已用另一套主密钥加密，必须填写那把主密钥；留空时先尝试当前已解锁的主密钥。"),
+            )
             .child(
                 Button::new("import-full-product")
                     .primary()
@@ -381,8 +422,18 @@ impl ImportDialog {
                     .text_color(cx.theme().muted_foreground)
                     .child("支持迁移包 .json，也支持直接选择全量产品的 one-hub.db（按文件头自动识别）。"),
             )
+            .child(div().mt_2().text_sm().child("源环境主密钥（仅直接导入 one-hub.db 时需要）"))
+            .child(Input::new(&self.source_key_input).mask_toggle())
+            .child(div().mt_2().text_sm().child("迁移包密码（导出时设置）"))
+            .child(Input::new(&self.password_input).mask_toggle())
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("导出包内包含加密的连接密码/密钥，以及被连接引用的钥匙串条目；必须输入导出时设置的密码才能导入；不含加密凭据的旧包可以留空。"),
+            )
             .child(div().mt_2().text_sm().child("或粘贴迁移包 JSON"))
-            .child(Textarea::new(&self.json_input).h(px(180.0)))
+            .child(Textarea::new(&self.json_input).h(px(150.0)))
             .child(
                 Button::new("import-from-json")
                     .label("从 JSON 导入")

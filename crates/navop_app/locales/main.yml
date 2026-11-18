@@ -249,9 +249,9 @@ Home:
     zh-CN: "清除筛选"
     zh-HK: "清除篩選"
   export_connections:
-    en: "Export connection list (no credentials)…"
-    zh-CN: "导出连接列表（不含凭据）…"
-    zh-HK: "匯出連線清單（不含憑證）…"
+    en: "Export connections (password-protected)…"
+    zh-CN: "导出连接（密码保护）…"
+    zh-HK: "匯出連線（密碼保護）…"
   export_connections_select_directory:
     en: "Choose a directory for the connection bundle"
     zh-CN: "选择连接迁移包的保存目录"
@@ -264,6 +264,30 @@ Home:
     en: "Failed to export connection bundle: %{error}"
     zh-CN: "导出连接迁移包失败：%{error}"
     zh-HK: "匯出連線遷移包失敗：%{error}"
+  export_connections_password_title:
+    en: "Export connections"
+    zh-CN: "导出连接"
+    zh-HK: "匯出連線"
+  export_connections_password_hint:
+    en: "The bundle keeps hosts, ports and other settings readable, but encrypts connection passwords, keys and referenced keychain entries with this password. Importing requires the same password."
+    zh-CN: "迁移包中的主机、端口等配置保持可读，连接密码/密钥以及被引用的钥匙串条目会用这里的密码加密；导入时必须输入同一密码才能还原。"
+    zh-HK: "遷移包中的主機、連接埠等設定保持可讀，連線密碼/金鑰以及被引用的鑰匙圈條目會用這裡的密碼加密；匯入時必須輸入同一密碼才能還原。"
+  export_connections_password_label:
+    en: "Export password"
+    zh-CN: "导出密码"
+    zh-HK: "匯出密碼"
+  export_connections_password_confirm_label:
+    en: "Confirm password"
+    zh-CN: "确认密码"
+    zh-HK: "確認密碼"
+  export_connections_password_empty:
+    en: "The export password cannot be empty"
+    zh-CN: "导出密码不能为空"
+    zh-HK: "匯出密碼不能為空"
+  export_connections_password_mismatch:
+    en: "The two passwords do not match"
+    zh-CN: "两次输入的导出密码不一致"
+    zh-HK: "兩次輸入的匯出密碼不一致"
   title:
     en: Home
     zh-CN: 首页

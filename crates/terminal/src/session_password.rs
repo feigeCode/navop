@@ -288,7 +288,8 @@ mod tests {
     }
 
     fn responder(login_password: Option<&str>) -> SessionPasswordExpect {
-        SessionPasswordExpect::new(&elevation(None, ""), login_password, None)
+        // 自动填入默认关闭，测试里统一显式开启，只验证应答逻辑本身。
+        SessionPasswordExpect::new(&elevation(Some(true), ""), login_password, None)
     }
 
     fn fill_text(bytes: &[u8]) -> &str {
@@ -420,6 +421,22 @@ mod tests {
     }
 
     #[test]
+    fn does_not_answer_without_explicit_enable() {
+        // 默认关闭：没勾选开关时，即使登录密码可用也不应答。
+        let mut expect = SessionPasswordExpect::new(&elevation(None, ""), Some("secret"), None);
+        let now = Instant::now();
+        let _ = expect.observe("alice@host:~$ sudo -i\r\n", now);
+        assert!(
+            expect
+                .observe(
+                    "[sudo] password for alice: ",
+                    now + Duration::from_millis(100)
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
     fn does_not_answer_without_any_password() {
         let mut expect = responder(None);
         let now = Instant::now();
@@ -447,8 +464,11 @@ mod tests {
 
     #[test]
     fn dedicated_elevation_password_wins() {
-        let mut expect =
-            SessionPasswordExpect::new(&elevation(None, "root-pass"), Some("login-pass"), None);
+        let mut expect = SessionPasswordExpect::new(
+            &elevation(Some(true), "root-pass"),
+            Some("login-pass"),
+            None,
+        );
         let now = Instant::now();
         let _ = expect.observe("alice@host:~$ su root\r\n", now);
         let payload = expect
@@ -471,7 +491,7 @@ mod tests {
     #[test]
     fn init_commands_with_sudo_arm_the_window() {
         let mut expect =
-            SessionPasswordExpect::new(&elevation(None, ""), Some("secret"), Some("sudo -i"));
+            SessionPasswordExpect::new(&elevation(Some(true), ""), Some("secret"), Some("sudo -i"));
         let now = Instant::now();
         assert!(
             expect.observe("[sudo] password for alice: ", now).is_some(),

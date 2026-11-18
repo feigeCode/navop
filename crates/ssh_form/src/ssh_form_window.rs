@@ -264,7 +264,7 @@ pub struct SshFormWindow {
     otp_error: Option<SharedString>,
     /// 是否自动应答会话内 `su` / `sudo` 的密码提示。
     ///
-    /// `None` 表示按登录方式取默认值：密码认证默认开启，密钥 / Agent 认证默认关闭。
+    /// 默认关闭：`None` 与 `Some(false)` 都不应答，只有用户手动勾选（`Some(true)`）才开启。
     sudo_password_auto_fill: Option<bool>,
     /// 提权密码输入框；留空时终端后端使用本次连接的登录密码。
     sudo_password_input: Entity<InputState>,
@@ -1895,7 +1895,7 @@ impl SshFormWindow {
             icon_file_path: self.custom_icon_file_path.clone(),
             account_expect: SshAccountExpect {
                 elevation: SshElevationExpect {
-                    // 只有用户显式切换过开关时才落库；`None` 留给终端后端按登录方式取默认值。
+                    // 只有用户显式切换过开关时才落库；`None` 表示默认关闭。
                     auto_fill: self.sudo_password_auto_fill,
                     password: self
                         .sudo_password_input
@@ -2639,13 +2639,12 @@ impl SshFormWindow {
             .children(hints)
     }
 
-    /// 提权密码自动应答的生效值：用户没显式设置时跟随登录方式。
+    /// 提权密码自动应答的生效值：默认关闭，只有用户手动勾选才开启。
     ///
-    /// 密码登录时服务器本来就知道这个密码，默认自动填入不增加泄露面；密钥 /
-    /// Agent 登录时服务器不知道密码，默认关闭，避免把密码交给远端伪造的提示。
+    /// `None`（历史连接或用户没动过开关）与 `Some(false)` 都按关闭处理；
+    /// 提权密码只提供取值，不再隐式开启自动填入。
     fn sudo_password_auto_fill_enabled(&self) -> bool {
-        self.sudo_password_auto_fill
-            .unwrap_or_else(|| self.auth_method.requires_password())
+        self.sudo_password_auto_fill.unwrap_or(false)
     }
 
     fn render_sudo_password_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -4855,7 +4854,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn ssh_form_defaults_elevation_password_to_the_login_method(cx: &mut TestAppContext) {
+    fn ssh_form_elevation_auto_fill_is_off_until_enabled(cx: &mut TestAppContext) {
         cx.update(|cx| {
             cx.set_global(AppSettings::default());
             gpui_component::init(cx);
@@ -4883,19 +4882,19 @@ mod tests {
         let built = form
             .read_with(cx, |form, cx| form.build_ssh_params(cx))
             .expect("表单应能构建参数");
-        // 用户没动过开关时保持 None，交给终端后端按登录方式取默认值。
+        // 用户没动过开关时保持 None，终端后端按默认关闭处理。
         assert_eq!(None, built.account_expect.elevation.auto_fill);
         assert!(built.account_expect.elevation.password.is_empty());
-        // 密码登录默认自动填入提权密码；密钥 / Agent 登录则需要用户显式打开。
+        // 默认关闭：密码登录也要用户手动勾选才会自动填入。
         form.read_with(cx, |form, _| {
-            assert!(form.sudo_password_auto_fill_enabled());
+            assert!(!form.sudo_password_auto_fill_enabled());
         });
         form.update(cx, |form, cx| {
-            form.sudo_password_auto_fill = Some(false);
+            form.sudo_password_auto_fill = Some(true);
             cx.notify();
         });
         form.read_with(cx, |form, _| {
-            assert!(!form.sudo_password_auto_fill_enabled());
+            assert!(form.sudo_password_auto_fill_enabled());
         });
     }
 

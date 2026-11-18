@@ -4,8 +4,6 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer, Serialize, de::Error};
 use serde_json::Value;
 
-use one_core::settings::UpdateMirror;
-
 use crate::extension::ExtensionKind;
 use crate::extension::manifest::current_host_version;
 use crate::extension::manifest::versioning::host_version_satisfies;
@@ -258,16 +256,19 @@ impl MarketplaceEntry {
     }
 
     pub(crate) fn extension_manifest_urls(&self) -> Vec<String> {
+        // 与下载 URL 相同的三源统一排序：镜像偏好决定「先问谁」，
+        // 其余按内置顺序（R2 → CNB → GitHub）依次回退。
         let mut urls = self.resolved_manifest_urls.clone();
-        push_unique(&mut urls, self.extension_manifest_url());
         let github_url = self.github_extension_manifest_url();
         let cnb_url = github_url.as_deref().and_then(cnb_release_download_url);
-        if extension_mirror() == UpdateMirror::Cnb {
-            push_unique(&mut urls, cnb_url);
-            push_unique(&mut urls, github_url);
-        } else {
-            push_unique(&mut urls, github_url);
-            push_unique(&mut urls, cnb_url);
+        let ordered = ordered_mirror_candidates(
+            extension_mirror(),
+            [self.extension_manifest_url(), github_url, cnb_url],
+        );
+        for url in ordered {
+            if !urls.contains(&url) {
+                urls.push(url);
+            }
         }
         urls
     }

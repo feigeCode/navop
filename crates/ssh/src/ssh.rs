@@ -14,6 +14,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, oneshot};
 use x11_forwarding::{ForwardRequest, X11Proxy, X11ProxyHandle};
 
+use crate::connection_error::add_private_key_load_hint;
 use crate::remote_forwarding::RemoteForwardTarget;
 use crate::{
     HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyProxyType, HostKeyRoute,
@@ -743,11 +744,13 @@ async fn add_identities_to_local_agent(identities: &[AgentIdentity]) -> Result<(
             AgentIdentity::PrivateKeyPath {
                 key_path,
                 passphrase,
-            } => load_secret_key(expand_tilde(key_path), passphrase.as_deref())?,
+            } => load_secret_key(expand_tilde(key_path), passphrase.as_deref())
+                .map_err(|error| add_private_key_load_hint(error.into()))?,
             AgentIdentity::PrivateKeyContent {
                 private_key,
                 passphrase,
-            } => decode_secret_key(private_key, passphrase.as_deref())?,
+            } => decode_secret_key(private_key, passphrase.as_deref())
+                .map_err(|error| add_private_key_load_hint(error.into()))?,
         };
         agent
             .add_identity(&key, &[])
@@ -1022,15 +1025,14 @@ fn private_key_for_auth(auth: &SshAuth) -> Result<PrivateKey> {
             key_path,
             passphrase,
             ..
-        } => Ok(load_secret_key(
-            expand_tilde(key_path),
-            passphrase.as_deref(),
-        )?),
+        } => load_secret_key(expand_tilde(key_path), passphrase.as_deref())
+            .map_err(|error| add_private_key_load_hint(error.into())),
         SshAuth::PrivateKeyContent {
             private_key,
             passphrase,
             ..
-        } => Ok(decode_secret_key(private_key, passphrase.as_deref())?),
+        } => decode_secret_key(private_key, passphrase.as_deref())
+            .map_err(|error| add_private_key_load_hint(error.into())),
         _ => anyhow::bail!("authentication method does not contain a private key"),
     }
 }
@@ -2128,6 +2130,34 @@ mod tests {
         assert!(
             !message.contains("No such file") && !message.contains("os error 2"),
             "inline private key content should not be treated as a file path: {message}"
+        );
+    }
+
+    #[test]
+    fn encrypted_private_key_wrong_passphrase_has_actionable_error() {
+        let key = PrivateKey::random(&mut rand_010::rng(), Algorithm::Ed25519)
+            .expect("test private key should be generated");
+        let encrypted = key
+            .encrypt(&mut rand_010::rng(), "correct-passphrase")
+            .expect("test private key should encrypt")
+            .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+            .expect("encrypted private key should encode");
+
+        let error = private_key_for_auth(&SshAuth::PrivateKeyContent {
+            private_key: encrypted.to_string(),
+            passphrase: Some("wrong-passphrase".to_string()),
+            certificate_path: None,
+        })
+        .expect_err("a wrong private key passphrase should fail to decode");
+        let message = format!("{error:#}");
+
+        assert!(
+            message.contains("Unable to load the SSH private key"),
+            "错误信息应说明私钥加载失败，实际: {message}"
+        );
+        assert!(
+            message.contains("passphrase"),
+            "错误信息应提示检查密码短语，实际: {message}"
         );
     }
 

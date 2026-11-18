@@ -102,7 +102,9 @@ pub(crate) fn ordered_mirror_candidates(
     let order: [usize; 3] = match preference {
         UpdateMirror::Github => [1, 0, 2],
         UpdateMirror::Cnb => [2, 0, 1],
-        UpdateMirror::Auto | UpdateMirror::Cloudflare => [0, 1, 2],
+        // 自动模式与应用更新侧的 `AUTO_MIRROR_ORDER`（R2 → CNB → GitHub）对齐：
+        // CNB 在国内通常最快，排在 GitHub 之前作为第一回退源。
+        UpdateMirror::Auto | UpdateMirror::Cloudflare => [0, 2, 1],
     };
     let mut urls: Vec<String> = Vec::new();
     for index in order {
@@ -177,6 +179,8 @@ mod tests {
         let github = Some("https://github.com/o/r/releases/download/t/a.tar.gz".to_string());
         let cnb = Some("https://cnb.cool/o/r/-/releases/download/t/a.tar.gz".to_string());
 
+        // 自动模式与应用更新侧的 AUTO_MIRROR_ORDER 对齐：R2 → CNB → GitHub，
+        // CNB 在国内通常最快，作为第一回退源。
         assert_eq!(
             ordered_mirror_candidates(
                 UpdateMirror::Auto,
@@ -184,8 +188,8 @@ mod tests {
             ),
             vec![
                 r2.clone().unwrap(),
-                github.clone().unwrap(),
-                cnb.clone().unwrap()
+                cnb.clone().unwrap(),
+                github.clone().unwrap()
             ]
         );
         assert_eq!(
@@ -195,8 +199,8 @@ mod tests {
             ),
             vec![
                 r2.clone().unwrap(),
-                github.clone().unwrap(),
-                cnb.clone().unwrap()
+                cnb.clone().unwrap(),
+                github.clone().unwrap()
             ]
         );
         assert_eq!(

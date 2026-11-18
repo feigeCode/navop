@@ -137,6 +137,23 @@ fn file_context_menu_capabilities(source: DragSource) -> FileContextMenuCapabili
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DirectoryContextMenuCapabilities {
+    supports_entry_mutation: bool,
+    supports_favorite: bool,
+    supports_upload_picker: bool,
+}
+
+fn directory_context_menu_capabilities(source: DragSource) -> DirectoryContextMenuCapabilities {
+    let file_capabilities = file_context_menu_capabilities(source);
+    DirectoryContextMenuCapabilities {
+        supports_entry_mutation: file_capabilities.supports_entry_mutation,
+        supports_favorite: file_capabilities.supports_favorite,
+        supports_upload_picker: file_capabilities.is_remote
+            && file_capabilities.supports_upload_picker,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TransferMenuAction {
     Upload,
     Download,
@@ -550,6 +567,10 @@ impl FileListPanel {
         self.apply_filter();
         self.clear_selection();
         cx.notify();
+    }
+
+    pub fn show_hidden(&self) -> bool {
+        self.show_hidden
     }
 
     pub fn selected_items(&self, _cx: &App) -> Vec<FileItem> {
@@ -1057,6 +1078,163 @@ impl FileListPanel {
                     .into_any_element()
             }
         }
+    }
+
+    /// 构建空白文件区/空目录的右键菜单。
+    ///
+    /// 这里只暴露目录级动作；复制、剪切、重命名、下载、编辑、删除、属性等
+    /// 都依赖具体文件项，不能在空白区域伪造目标。
+    fn build_directory_context_menu(
+        menu: PopupMenu,
+        directory_path: &str,
+        source: DragSource,
+        view: &Entity<Self>,
+        window: &mut Window,
+        _cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let capabilities = directory_context_menu_capabilities(source);
+        let view_ref = view.clone();
+        let path = directory_path.to_string();
+        let path_for_terminal = directory_path.to_string();
+        let path_for_favorite = directory_path.to_string();
+        let path_for_copy = directory_path.to_string();
+        let path_for_upload_file = directory_path.to_string();
+        let path_for_upload_folder = directory_path.to_string();
+        let mut menu = menu;
+
+        let view_paste = view_ref.clone();
+        let target_dir = path.clone();
+        menu = menu.item(
+            PopupMenuItem::new(t!("File.paste").to_string())
+                .icon(IconName::Paste)
+                .on_click(window.listener_for(&view_paste, move |_this, _, _, cx| {
+                    cx.emit(FileListPanelEvent::PasteInto {
+                        target_dir: target_dir.clone(),
+                    });
+                })),
+        );
+
+        if capabilities.supports_entry_mutation {
+            let view_new_file = view_ref.clone();
+            let view_new_folder = view_ref.clone();
+            menu = menu
+                .separator()
+                .item(
+                    PopupMenuItem::new(t!("File.new_file").to_string())
+                        .icon(IconName::File)
+                        .on_click(window.listener_for(&view_new_file, move |_this, _, _, cx| {
+                            cx.emit(FileListPanelEvent::NewFile);
+                        })),
+                )
+                .item(
+                    PopupMenuItem::new(t!("File.new_folder").to_string())
+                        .icon(IconName::NewFolder)
+                        .on_click(
+                            window.listener_for(&view_new_folder, move |_this, _, _, cx| {
+                                cx.emit(FileListPanelEvent::NewFolder);
+                            }),
+                        ),
+                );
+        }
+
+        if capabilities.supports_upload_picker {
+            let view_upload_file = view_ref.clone();
+            let view_upload_folder = view_ref.clone();
+            menu = menu
+                .separator()
+                .item(
+                    PopupMenuItem::new(t!("File.upload_file").to_string())
+                        .icon(IconName::Upload)
+                        .on_click(window.listener_for(
+                            &view_upload_file,
+                            move |_this, _, _, cx| {
+                                cx.emit(FileListPanelEvent::UploadFileTo {
+                                    full_path: path_for_upload_file.clone(),
+                                });
+                            },
+                        )),
+                )
+                .item(
+                    PopupMenuItem::new(t!("File.upload_folder").to_string())
+                        .icon(IconName::Upload)
+                        .on_click(window.listener_for(
+                            &view_upload_folder,
+                            move |_this, _, _, cx| {
+                                cx.emit(FileListPanelEvent::UploadFolderTo {
+                                    full_path: path_for_upload_folder.clone(),
+                                });
+                            },
+                        )),
+                );
+        }
+
+        if capabilities.supports_favorite {
+            let view_favorite = view_ref.clone();
+            menu = menu.separator().item(
+                PopupMenuItem::new(t!("FavoritePath.add_path").to_string())
+                    .icon(IconName::Star)
+                    .on_click(window.listener_for(&view_favorite, move |_this, _, _, cx| {
+                        cx.emit(FileListPanelEvent::FavoritePath {
+                            full_path: path_for_favorite.clone(),
+                        });
+                    })),
+            );
+        }
+
+        let view_terminal_at = view_ref.clone();
+        let view_terminal = view_ref.clone();
+        menu = menu
+            .separator()
+            .item(
+                PopupMenuItem::new(t!("Terminal.open_here").to_string())
+                    .icon(IconName::Terminal)
+                    .on_click(
+                        window.listener_for(&view_terminal_at, move |_this, _, _, cx| {
+                            cx.emit(FileListPanelEvent::OpenInTerminalAt {
+                                full_path: path_for_terminal.clone(),
+                            });
+                        }),
+                    ),
+            )
+            .item(
+                PopupMenuItem::new(t!("Terminal.open_in_current").to_string())
+                    .icon(IconName::SquareTerminal)
+                    .on_click(window.listener_for(&view_terminal, move |_this, _, _, cx| {
+                        cx.emit(FileListPanelEvent::OpenInTerminal);
+                    })),
+            );
+
+        let view_copy_path = view_ref.clone();
+        let view_refresh = view_ref.clone();
+        let view_toggle_hidden = view_ref;
+        menu.separator()
+            .item(
+                PopupMenuItem::new(t!("File.copy_path").to_string())
+                    .icon(IconName::Copy)
+                    .on_click(
+                        window.listener_for(&view_copy_path, move |_this, _, _, cx| {
+                            cx.emit(FileListPanelEvent::CopyAbsolutePath {
+                                full_path: path_for_copy.clone(),
+                            });
+                        }),
+                    ),
+            )
+            .item(
+                PopupMenuItem::new(t!("Common.refresh").to_string())
+                    .icon(IconName::Refresh)
+                    .on_click(window.listener_for(&view_refresh, move |_this, _, _, cx| {
+                        cx.emit(FileListPanelEvent::Refresh);
+                    })),
+            )
+            .item(
+                PopupMenuItem::new(t!("File.toggle_hidden").to_string())
+                    .icon(IconName::Eye)
+                    .on_click(
+                        window.listener_for(&view_toggle_hidden, move |_this, _, _, cx| {
+                            cx.emit(FileListPanelEvent::ToggleHiddenFiles);
+                        }),
+                    ),
+            )
     }
 
     /// 构建文件项的右键菜单
@@ -1686,9 +1864,9 @@ impl Render for DraggedFileItem {
 mod tests {
     use super::{
         DirectorySizeState, FileColumn, FileContextMenuCapabilities, FileItem,
-        FileListContentState, TransferMenuAction, display_file_name,
-        file_context_menu_capabilities, file_list_content_state, format_file_size, size_sort_key,
-        transfer_menu_action,
+        FileListContentState, TransferMenuAction, directory_context_menu_capabilities,
+        display_file_name, file_context_menu_capabilities, file_list_content_state,
+        format_file_size, size_sort_key, transfer_menu_action,
     };
     use crate::endpoint::DragSource;
     use std::collections::HashSet;
@@ -1800,6 +1978,39 @@ mod tests {
                 supports_upload_picker: true,
             },
             file_context_menu_capabilities(DragSource::RemoteRight)
+        );
+    }
+
+    #[test]
+    fn directory_context_menu_keeps_only_directory_level_actions() {
+        assert_eq!(
+            super::DirectoryContextMenuCapabilities {
+                supports_entry_mutation: false,
+                supports_favorite: false,
+                supports_upload_picker: false,
+            },
+            directory_context_menu_capabilities(DragSource::RemoteLeft),
+            "左侧远程端点的空白菜单不能暴露尚未端点化的新建/收藏/上传动作"
+        );
+
+        assert_eq!(
+            super::DirectoryContextMenuCapabilities {
+                supports_entry_mutation: true,
+                supports_favorite: true,
+                supports_upload_picker: false,
+            },
+            directory_context_menu_capabilities(DragSource::LocalLeft),
+            "本地面板的空白菜单不能把上传目标误指向本地目录"
+        );
+
+        assert_eq!(
+            super::DirectoryContextMenuCapabilities {
+                supports_entry_mutation: true,
+                supports_favorite: true,
+                supports_upload_picker: true,
+            },
+            directory_context_menu_capabilities(DragSource::RemoteRight),
+            "右侧远程面板的空白菜单应保留上传等目录级修改动作"
         );
     }
 
@@ -1916,6 +2127,9 @@ impl Render for FileListPanel {
             filtered_count
         };
         let scroll_handle = self.scroll_handle.clone();
+        let directory_menu_path = self.current_path.clone();
+        let directory_menu_source = self.drag_source;
+        let directory_menu_view = cx.entity();
         let mut list_content = div()
             .flex_1()
             .min_h_0()
@@ -2104,6 +2318,15 @@ impl Render for FileListPanel {
             .size_full()
             .child(self.render_search_bar(cx))
             .child(self.render_header(cx))
-            .child(list_content)
+            .child(list_content.context_menu(move |menu, window, cx| {
+                Self::build_directory_context_menu(
+                    menu,
+                    &directory_menu_path,
+                    directory_menu_source,
+                    &directory_menu_view,
+                    window,
+                    cx,
+                )
+            }))
     }
 }

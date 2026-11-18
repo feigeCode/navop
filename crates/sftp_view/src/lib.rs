@@ -6831,6 +6831,7 @@ impl SftpView {
             .left_remote
             .as_ref()
             .is_none_or(|endpoint| endpoint.state == LeftRemoteConnectionState::Connected);
+        let show_hidden = self.local_panel.read(cx).show_hidden();
         let can_paste = endpoint_ready && self.can_paste_file_clipboard(clipboard_endpoint);
         let left_endpoint_title = self.left_endpoint_title();
         let local_actions_view = cx.entity();
@@ -6984,6 +6985,28 @@ impl SftpView {
                                             this.refresh_local_dir_with_window(window, cx);
                                         }
                                     })),
+                            )
+                            .child(
+                                IconButton::new(
+                                    "local_toggle_hidden",
+                                    if show_hidden {
+                                        IconName::Eye
+                                    } else {
+                                        IconName::EyeOff
+                                    },
+                                )
+                                .role(IconButtonRole::Toolbar)
+                                .selected(show_hidden)
+                                .tooltip(t!("File.toggle_hidden"))
+                                .disabled(!endpoint_ready)
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.local_panel.update(cx, |panel, cx| {
+                                            panel.toggle_show_hidden(cx);
+                                        });
+                                        cx.notify();
+                                    },
+                                )),
                             )
                             .when(is_left_remote, |toolbar| {
                                 toolbar.child(
@@ -7245,6 +7268,7 @@ impl SftpView {
         let can_go_forward = self.can_go_forward_remote();
         let is_favorite = self.is_current_remote_path_favorite();
         let favorite_paths = self.remote_favorite_paths();
+        let show_hidden = self.remote_panel.read(cx).show_hidden();
         let paste_target_dir = self.remote_current_path.clone();
         let can_paste =
             is_connected && self.can_paste_file_clipboard(ClipboardEndpoint::RemoteRight);
@@ -7356,6 +7380,28 @@ impl SftpView {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.refresh_remote_dir_with_window(window, cx);
                                     })),
+                            )
+                            .child(
+                                IconButton::new(
+                                    "remote_toggle_hidden",
+                                    if show_hidden {
+                                        IconName::Eye
+                                    } else {
+                                        IconName::EyeOff
+                                    },
+                                )
+                                .role(IconButtonRole::Toolbar)
+                                .selected(show_hidden)
+                                .tooltip(t!("File.toggle_hidden"))
+                                .disabled(!is_connected)
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.remote_panel.update(cx, |panel, cx| {
+                                            panel.toggle_show_hidden(cx);
+                                        });
+                                        cx.notify();
+                                    },
+                                )),
                             )
                             .child(
                                 IconButton::new("remote_download", transfer_icon)
@@ -9933,6 +9979,53 @@ mod local_volume_wiring_tests {
         assert!(
             volume_menu < path_bar,
             "盘符切换器必须放在地址栏外，不能藏在点击即编辑的路径框里"
+        );
+    }
+
+    #[test]
+    fn both_sftp_toolbars_expose_hidden_files_toggles() {
+        let source = include_str!("lib.rs");
+        let local = method_body(source, "render_local_panel");
+        let remote = method_body(source, "render_remote_panel");
+
+        for (side, body, id) in [
+            ("左侧", local, "local_toggle_hidden"),
+            ("右侧", remote, "remote_toggle_hidden"),
+        ] {
+            assert!(
+                body.contains(id),
+                "{side}顶部工具栏必须直接提供隐藏文件开关，而不是只放在文件行右键菜单里"
+            );
+            assert!(
+                body.contains("toggle_show_hidden"),
+                "{side}开关必须复用 FileListPanel 的隐藏文件切换逻辑"
+            );
+            assert!(
+                body.contains("File.toggle_hidden"),
+                "{side}开关必须有可发现的本地化提示"
+            );
+        }
+    }
+
+    #[test]
+    fn file_list_surfaces_open_a_directory_context_menu() {
+        let source = include_str!("file_list_panel.rs");
+        let render = source
+            .split("impl Render for FileListPanel")
+            .nth(1)
+            .expect("FileListPanel render implementation");
+
+        assert!(
+            source.contains("fn build_directory_context_menu("),
+            "空白文件区需要独立的目录级菜单构建器"
+        );
+        assert!(
+            render.contains("build_directory_context_menu"),
+            "空白文件区和空目录必须真正挂上目录级右键菜单"
+        );
+        assert!(
+            render.contains(".context_menu("),
+            "目录级菜单必须接在文件列表容器上才能覆盖空白区域"
         );
     }
 

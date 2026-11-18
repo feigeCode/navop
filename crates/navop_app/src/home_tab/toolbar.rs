@@ -256,16 +256,112 @@ impl HomePage {
 }
 
 fn prompt_export_connections(window: &mut Window, cx: &mut App) {
-    let json = match app_kit::import::export_bundle(cx) {
-        Ok(json) => json,
-        Err(error) => {
-            window.push_notification(
-                t!("Home.export_connections_failed", error = error).to_string(),
-                cx,
-            );
-            return;
-        }
-    };
+    // 导出密码只用于加密迁移包里的连接凭据，不与主密钥混用；用户必须在导入端
+    // 输入同一密码才能还原本机加密库中的密码/密钥。
+    let password_input = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder(t!("Home.export_connections_password_label").to_string())
+            .masked(true)
+    });
+    let confirm_input = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder(t!("Home.export_connections_password_confirm_label").to_string())
+            .masked(true)
+    });
+    let error_message = cx.new(|_| Option::<String>::None);
+
+    let password_for_ok = password_input.clone();
+    let confirm_for_ok = confirm_input.clone();
+    let error_for_ok = error_message.clone();
+    let password_for_render = password_input.clone();
+    let confirm_for_render = confirm_input.clone();
+    let error_for_render = error_message.clone();
+
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let password_ok = password_for_ok.clone();
+        let confirm_ok = confirm_for_ok.clone();
+        let error_ok = error_for_ok.clone();
+
+        dialog
+            .title(t!("Home.export_connections_password_title").to_string())
+            .width(px(520.))
+            .confirm()
+            .on_ok(move |_, window, cx: &mut App| -> bool {
+                let password = password_ok.read(cx).value().trim().to_string();
+                let confirm = confirm_ok.read(cx).value().trim().to_string();
+
+                if password.is_empty() {
+                    error_ok.update(cx, |message, cx| {
+                        *message = Some(t!("Home.export_connections_password_empty").to_string());
+                        cx.notify();
+                    });
+                    return false;
+                }
+                if password != confirm {
+                    error_ok.update(cx, |message, cx| {
+                        *message =
+                            Some(t!("Home.export_connections_password_mismatch").to_string());
+                        cx.notify();
+                    });
+                    return false;
+                }
+
+                match app_kit::import::export_bundle(cx, &password) {
+                    Ok(json) => {
+                        save_export_bundle(json, window, cx);
+                        true
+                    }
+                    Err(error) => {
+                        error_ok.update(cx, |message, cx| {
+                            *message = Some(
+                                t!("Home.export_connections_failed", error = error).to_string(),
+                            );
+                            cx.notify();
+                        });
+                        false
+                    }
+                }
+            })
+            .child(
+                v_flex()
+                    .gap_4()
+                    .p_4()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("Home.export_connections_password_hint").to_string()),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div().text_sm().flex_shrink_0().w(px(96.)).child(
+                                    t!("Home.export_connections_password_label").to_string(),
+                                ),
+                            )
+                            .child(Input::new(&password_for_render).mask_toggle().w_full()),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_3()
+                            .child(div().text_sm().flex_shrink_0().w(px(96.)).child(
+                                t!("Home.export_connections_password_confirm_label").to_string(),
+                            ))
+                            .child(Input::new(&confirm_for_render).mask_toggle().w_full()),
+                    )
+                    .when_some(error_for_render.read(cx).clone(), |this, message| {
+                        this.child(div().text_sm().text_color(cx.theme().danger).child(message))
+                    }),
+            )
+    });
+    password_input.update(cx, |input, cx| input.focus(window, cx));
+}
+
+/// 让用户选目录并写入迁移包；密码已经在弹窗里校验过。
+fn save_export_bundle(json: String, window: &mut Window, cx: &mut App) {
     let future = cx.prompt_for_paths(PathPromptOptions {
         files: false,
         directories: true,

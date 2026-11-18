@@ -1,3 +1,8 @@
+[env]
+# quickjs-jit-sys bundles C sources that require C99 declarations. The host's
+# default `cc` invocation otherwise fails without this flag.
+CFLAGS = { value = "-std=gnu99", force = false }
+
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "link-arg=/STACK:8000000"]
 

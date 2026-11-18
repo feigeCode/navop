@@ -42,6 +42,7 @@ fn full_bundle() -> ConnectionBundle {
             selected_databases: Some(r#"["app"]"#.to_string()),
             sync_enabled: false,
         }],
+        encrypted_credentials: None,
     }
 }
 
@@ -51,7 +52,7 @@ fn bundle_round_trips_through_json() {
     let json = serde_json::to_string(&bundle).expect("序列化失败");
     let decoded: ConnectionBundle = serde_json::from_str(&json).expect("反序列化失败");
     assert_eq!(decoded, bundle);
-    assert!(json.contains(r#""version":2"#));
+    assert!(json.contains(r#""version":3"#));
 }
 
 #[test]
@@ -154,6 +155,7 @@ fn unsupported_and_port_forwarding_are_counted_separately() {
             connection("跳板", "PortForwarding"),
             connection("怪", "Quantum"),
         ],
+        encrypted_credentials: None,
     };
     let supported = vec!["Database".to_string(), "PortForwarding".to_string()];
     let plan = plan_import(&bundle, empty_input(), &supported);
@@ -227,6 +229,7 @@ fn workspace_bundle(workspaces: Vec<BundleWorkspace>) -> ConnectionBundle {
         app_id: Some("navop".to_string()),
         workspaces,
         connections: vec![],
+        encrypted_credentials: None,
     }
 }
 

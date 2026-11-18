@@ -24,7 +24,10 @@ fn local_terminal_launcher_is_visible_in_home_toolbar() {
 fn home_toolbar_exports_a_connection_bundle() {
     let toolbar = include_str!("../toolbar.rs");
     assert!(toolbar.contains("Home.export_connections"));
-    assert!(toolbar.contains("app_kit::import::export_bundle(cx)"));
+    assert!(toolbar.contains("Home.export_connections_password_title"));
+    assert!(toolbar.contains("app_kit::import::export_bundle(cx, &password)"));
+    assert!(toolbar.contains(".masked(true)"));
+    assert!(toolbar.contains("save_export_bundle"));
     assert!(toolbar.contains("prompt_for_paths(PathPromptOptions"));
     assert!(toolbar.contains("navop-connections-"));
 }

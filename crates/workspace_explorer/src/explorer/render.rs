@@ -146,14 +146,20 @@ impl WorkspaceExplorer {
         let rows = visible_rows(&self.root, &self.listings, &self.expanded);
         let explorer = cx.entity();
         let root = self.root.clone();
-        let mut section = v_flex().w_full().child(
-            div()
-                .id("workspace-files-context-region")
-                .child(self.render_section_header(ExplorerSection::Files, cx))
-                .context_menu(move |menu, window, cx| {
-                    build_files_context_menu(menu, explorer.clone(), root.clone(), window, cx)
-                }),
-        );
+        let has_rows = !rows.is_empty();
+        let mut section = v_flex()
+            .w_full()
+            .when(!has_rows && self.files_expanded, |section| {
+                section.min_h(px(80.0))
+            })
+            .context_menu(move |menu, window, cx| {
+                build_files_context_menu(menu, explorer.clone(), root.clone(), window, cx)
+            })
+            .child(
+                div()
+                    .id("workspace-files-context-region")
+                    .child(self.render_section_header(ExplorerSection::Files, cx)),
+            );
         if self.files_expanded {
             section = section.children(rows.into_iter().map(|row| self.render_file_row(row, cx)));
         }

@@ -972,6 +972,7 @@ impl ContextMenuHandler for SftpView {
                 });
             }
         }
+        cx.notify();
     }
 
     fn select_and_upload_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
