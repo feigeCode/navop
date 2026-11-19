@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use gpui::{AppContext, Context};
+use gpui::Context;
 use one_core::settings::AppSettings;
 use one_core::storage::models::ConnectionType;
 
@@ -63,11 +63,24 @@ impl HomePage {
                 continue;
             };
             self.host_metrics.in_flight.insert(connection_id);
-            let task = cx.background_spawn(async move {
+            // SSH 建连依赖 Tokio 运行时（crates/ssh/src/ssh.rs 里的 tokio::time::timeout 等），
+            // 必须走 Tokio::spawn；cx.background_spawn 跑在 GPUI 自己的线程池上，没有 reactor，
+            // 一旦开始建连就会 panic：there is no reactor running。
+            let task = one_core::gpui_tokio::Tokio::spawn(cx, async move {
                 terminal_view::probe_host_resource_usage(config.ssh_config).await
             });
             cx.spawn(async move |this, cx| {
-                let usage = task.await;
+                let usage = match task.await {
+                    Ok(usage) => usage,
+                    Err(error) => {
+                        _ = this.update(cx, |this, cx| {
+                            this.host_metrics.in_flight.remove(&connection_id);
+                            cx.notify();
+                        });
+                        tracing::debug!(connection_id, %error, "采集远端资源占用任务失败");
+                        return;
+                    }
+                };
                 _ = this.update(cx, |this, cx| {
                     this.host_metrics.in_flight.remove(&connection_id);
                     match usage {
