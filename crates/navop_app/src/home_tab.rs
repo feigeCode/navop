@@ -195,6 +195,13 @@ pub struct HomePage {
     pub(crate) selected_connection_id: Option<i64>,
     /// 批量操作选择状态；卡片/列表/树三种布局共享（参考常驻侧栏连接树）。
     pub(crate) connection_selection: connection_selection::ConnectionSelection,
+    /// 批量模式下的按住左键拖动取反状态（#560：划过即切换选中）。
+    pub(crate) drag_selection: connection_selection::DragSelection,
+    /// 连接卡片的远端资源占用缓存（#279，后台 SSH 采集）。
+    #[cfg(feature = "shell")]
+    pub(crate) host_metrics: host_metrics::HostMetricsCache,
+    /// 拖动结束后吞掉紧随其后的 click，避免整段选择被替换成单个连接。
+    pub(crate) suppress_next_click: bool,
     pub(crate) filtered_workspace_ids: HashSet<i64>,
     pub(crate) workspace_filter_open: bool,
     pub(crate) account_menu_open: bool,
@@ -277,6 +284,8 @@ mod encryption;
 mod grid;
 mod home_layout;
 mod home_shortcuts;
+#[cfg(feature = "shell")]
+mod host_metrics;
 mod keybindings;
 mod lifecycle;
 #[cfg(feature = "shell")]
@@ -320,3 +329,11 @@ pub(crate) use team_permissions::TeamPermissionSnapshot;
 use sync_route::sync_route_for_provider;
 #[cfg(test)]
 mod tests;
+
+#[cfg(not(feature = "shell"))]
+impl HomePage {
+    /// 没有 shell 能力时不采集远端资源，卡片上不显示这一行。
+    pub(crate) fn host_metrics_summary(&self, _connection_id: Option<i64>) -> Option<String> {
+        None
+    }
+}

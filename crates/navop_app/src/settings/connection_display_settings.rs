@@ -23,4 +23,21 @@ pub fn connection_display_setting_group() -> SettingGroup {
             )
             .description(t!("Settings.General.ConnectionDisplay.show_recent_desc").to_string()),
         )
+        .item(
+            SettingItem::new(
+                t!("Settings.General.ConnectionDisplay.show_host_metrics"),
+                SettingField::switch(
+                    |cx: &App| AppSettings::global(cx).home_show_host_metrics,
+                    |val: bool, cx: &mut App| {
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings.home_show_host_metrics = val;
+                        });
+                    },
+                )
+                .default_value(default_settings.home_show_host_metrics),
+            )
+            .description(
+                t!("Settings.General.ConnectionDisplay.show_host_metrics_desc").to_string(),
+            ),
+        )
 }

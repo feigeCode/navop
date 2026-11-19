@@ -35,7 +35,10 @@ pub use serial_form_window::{SerialFormWindow, SerialFormWindowConfig};
 pub use settings::{
     TerminalHighlightRule, TerminalSettings, current_settings, init_settings, update_settings,
 };
-pub use sidebar::{SettingsPanel, SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
+pub use sidebar::{
+    HostResourceUsage, SettingsPanel, SidebarPanel, TerminalSidebar, TerminalSidebarEvent,
+    probe_host_resource_usage,
+};
 pub use sidebar::{
     ExtensionPanelSpec as SidebarExtensionPanelSpec, TerminalExtensionPanelHost,
     init_terminal_extension_panels as init_sidebar_extension_panels,

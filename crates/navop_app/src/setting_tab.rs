@@ -911,6 +911,83 @@ impl SettingsPanel {
                                 t!("Settings.General.FileTransfer.direct_server_transfer_desc")
                                     .to_string(),
                             ),
+                        )
+                        .item(
+                            SettingItem::new(
+                                t!("Settings.General.FileTransfer.prefer_merge_for_directories"),
+                                SettingField::switch(
+                                    |cx: &App| {
+                                        AppSettings::global(cx)
+                                            .transfer_prefer_merge_for_directories
+                                    },
+                                    |value: bool, cx: &mut App| {
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.transfer_prefer_merge_for_directories = value;
+                                        });
+                                    },
+                                )
+                                .default_value(
+                                    default_settings.transfer_prefer_merge_for_directories,
+                                ),
+                            )
+                            .description(
+                                t!(
+                                    "Settings.General.FileTransfer.prefer_merge_for_directories_desc"
+                                )
+                                .to_string(),
+                            ),
+                        )
+                        .item(
+                            SettingItem::new(
+                                t!("Settings.General.FileTransfer.prefer_overwrite_for_files"),
+                                SettingField::switch(
+                                    |cx: &App| {
+                                        AppSettings::global(cx)
+                                            .transfer_prefer_overwrite_for_files
+                                    },
+                                    |value: bool, cx: &mut App| {
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.transfer_prefer_overwrite_for_files = value;
+                                        });
+                                    },
+                                )
+                                .default_value(
+                                    default_settings.transfer_prefer_overwrite_for_files,
+                                ),
+                            )
+                            .description(
+                                t!(
+                                    "Settings.General.FileTransfer.prefer_overwrite_for_files_desc"
+                                )
+                                .to_string(),
+                            ),
+                        )
+                        .item(
+                            SettingItem::new(
+                                t!("Settings.General.FileTransfer.default_local_directory"),
+                                SettingField::input(
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx)
+                                                .transfer_default_local_directory
+                                                .clone(),
+                                        )
+                                    },
+                                    |val: SharedString, cx: &mut App| {
+                                        let directory = val.trim().to_string();
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.transfer_default_local_directory = directory;
+                                        });
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.transfer_default_local_directory.clone(),
+                                )),
+                            )
+                            .description(
+                                t!("Settings.General.FileTransfer.default_local_directory_desc")
+                                    .to_string(),
+                            ),
                         ),
                     close_behavior_setting_group(default_settings.close_button_behavior),
                     notes_setting_group(font_options.clone()),

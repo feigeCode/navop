@@ -1,6 +1,8 @@
 use gpui::{InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px};
 use gpui_component::{
-    ActiveTheme, Sizable, Size, h_flex,
+    ActiveTheme, Sizable, Size,
+    button::Button,
+    h_flex,
     input::{Input, Textarea},
     scroll::ScrollableElement,
     switch::Switch,
@@ -91,6 +93,7 @@ impl CredentialForm {
                 t!("CredentialForm.ssh_key_description").to_string(),
                 cx,
             ))
+            .child(self.render_generate_ssh_key(cx))
             .child(form_field(
                 t!("CredentialForm.private_key_path").to_string(),
                 Input::new(&self.private_key_path_input).w_full(),
@@ -108,6 +111,44 @@ impl CredentialForm {
                 Input::new(&self.passphrase_input).w_full().mask_toggle(),
             ))
             .child(self.render_forward_to_agent_setting(cx))
+    }
+
+    /// 「生成密钥」入口：一键生成 Ed25519 密钥对，私钥填进表单、公钥复制到剪贴板。
+    fn render_generate_ssh_key(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        h_flex()
+            .w_full()
+            .items_center()
+            .justify_between()
+            .gap_4()
+            .rounded_md()
+            .border_1()
+            .border_color(cx.theme().border)
+            .p_3()
+            .child(
+                v_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(t!("CredentialForm.generate_key").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("CredentialForm.generate_key_description").to_string()),
+                    ),
+            )
+            .child(
+                Button::new("credential-generate-key")
+                    .small()
+                    .outline()
+                    .label(t!("CredentialForm.generate_key_action").to_string())
+                    .on_click(cx.listener(|form, _, window, cx| {
+                        form.generate_ed25519_key(window, cx);
+                    })),
+            )
     }
 
     fn render_forward_to_agent_setting(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -329,6 +370,30 @@ mod tests {
         assert!(!basic.contains("self.username_expect_input"));
         assert!(!ssh_key.contains("self.username_expect_input"));
         assert!(sync.contains("credential-sync-enabled"));
+    }
+
+    #[test]
+    fn ssh_key_tab_offers_key_generation() {
+        let source = include_str!("form_render.rs");
+        let ssh_key = source
+            .split("fn render_ssh_key_tab")
+            .nth(1)
+            .and_then(|source| source.split("fn render_generate_ssh_key").next())
+            .expect("SSH key tab");
+        let form = include_str!("form.rs");
+
+        assert!(ssh_key.contains("self.render_generate_ssh_key(cx)"));
+        assert!(source.contains("credential-generate-key"));
+        assert!(source.contains("CredentialForm.generate_key_action"));
+        assert!(source.contains("form.generate_ed25519_key(window, cx)"));
+        assert!(form.contains("pub(super) fn generate_ed25519_key"));
+        assert!(form.contains("one_core::storage::generate_ed25519_key(&comment)"));
+        assert!(
+            form.contains(
+                "cx.write_to_clipboard(ClipboardItem::new_string(key.public_key_openssh))"
+            )
+        );
+        assert!(form.contains("CredentialForm.generate_key_success"));
     }
 
     #[test]

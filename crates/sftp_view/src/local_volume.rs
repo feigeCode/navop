@@ -170,8 +170,8 @@ fn display_label(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalVolume, current_volume_index, display_label, local_volumes, normalize_local_path_input,
-        normalize_local_path_input_for, volume_menu_enabled,
+        LocalVolume, current_volume_index, display_label, local_volumes,
+        normalize_local_path_input, normalize_local_path_input_for, volume_menu_enabled,
     };
     use std::path::{Path, PathBuf};
 
@@ -282,7 +282,10 @@ mod tests {
             Some(1),
             current_volume_index(&volumes, Path::new("/Volumes/USB/docs"))
         );
-        assert_eq!(Some(0), current_volume_index(&volumes, Path::new("/Users/me")));
+        assert_eq!(
+            Some(0),
+            current_volume_index(&volumes, Path::new("/Users/me"))
+        );
         assert_eq!(None, current_volume_index(&[], Path::new("/")));
     }
 }

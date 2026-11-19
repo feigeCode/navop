@@ -127,10 +127,11 @@ pub enum MasterKeyStorage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HomeConnectionLayout {
-    #[default]
     Card,
     List,
     Tree,
+    /// 全局导航是默认布局：左侧固定连接树，右侧主页功能入口（issue #560）。
+    #[default]
     Navigation,
 }
 
@@ -152,6 +153,34 @@ pub enum SqlIndentStyle {
     TwoSpaces,
     FourSpaces,
     Tabs,
+}
+
+/// 笔记 Markdown 首次打开时的默认视图（#132）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkdownDefaultViewMode {
+    /// 所见即所得：直接在渲染结果上编辑。
+    #[default]
+    Wysiwyg,
+    /// 源码：纯文本 Markdown 编辑。
+    Source,
+}
+
+impl MarkdownDefaultViewMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wysiwyg => "wysiwyg",
+            Self::Source => "source",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "wysiwyg" | "rendered" => Some(Self::Wysiwyg),
+            "source" => Some(Self::Source),
+            _ => None,
+        }
+    }
 }
 
 /// SQL 美化 / 压缩相关的用户设置
@@ -1372,6 +1401,9 @@ pub struct AppSettings {
     /// Markdown 编辑器代码字体（行内代码、代码块、表格内代码）。
     #[serde(default = "default_monospace_font_family")]
     pub markdown_code_font_family: String,
+    /// 笔记 Markdown 首次打开时的默认视图（#132）。
+    #[serde(default)]
+    pub notes_markdown_default_view_mode: MarkdownDefaultViewMode,
     #[serde(default = "default_monospace_font_family")]
     pub terminal_font_family: String,
     #[serde(
@@ -1473,6 +1505,15 @@ pub struct AppSettings {
     pub remote_file_editor: RemoteFileEditorUserSettings,
     #[serde(default = "default_true")]
     pub direct_server_transfer_enabled: bool,
+    /// 文件传输发生文件夹冲突时，默认把「合并」作为推荐选项（issue #176）。
+    #[serde(default = "default_true")]
+    pub transfer_prefer_merge_for_directories: bool,
+    /// 文件传输发生同名文件冲突时，默认把「覆盖」作为推荐选项（issue #176）。
+    #[serde(default = "default_true")]
+    pub transfer_prefer_overwrite_for_files: bool,
+    /// 文件传输面板默认打开的本地目录；为空时使用用户家目录（issue #176）。
+    #[serde(default)]
+    pub transfer_default_local_directory: String,
     #[serde(default)]
     pub database_open_mode: DatabaseOpenMode,
     #[serde(default)]
@@ -1493,6 +1534,9 @@ pub struct AppSettings {
     /// 首页是否显示「最近连接」分组
     #[serde(default = "default_true")]
     pub home_show_recent_connections: bool,
+    /// 首页连接卡片是否在后台采集并显示远端 CPU/内存/磁盘占用（#279）。
+    #[serde(default = "default_true")]
+    pub home_show_host_metrics: bool,
     /// 连接列表排序方式
     #[serde(default)]
     pub connection_sort_order: ConnectionSortOrder,
@@ -1839,6 +1883,7 @@ impl Default for AppSettings {
             sql_editor_hover_enabled: default_sql_editor_hover_enabled(),
             table_preview_font_family: default_monospace_font_family(),
             markdown_code_font_family: default_monospace_font_family(),
+            notes_markdown_default_view_mode: MarkdownDefaultViewMode::default(),
             terminal_font_family: default_monospace_font_family(),
             custom_fonts: Vec::new(),
             terminal_font_size: default_terminal_font_size(),
@@ -1877,6 +1922,9 @@ impl Default for AppSettings {
             personal_sync: PersonalSyncSettings::default(),
             remote_file_editor: RemoteFileEditorUserSettings::default(),
             direct_server_transfer_enabled: true,
+            transfer_prefer_merge_for_directories: true,
+            transfer_prefer_overwrite_for_files: true,
+            transfer_default_local_directory: String::new(),
             database_open_mode: DatabaseOpenMode::default(),
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             startup_default_page: StartupDefaultPage::default(),
@@ -1885,6 +1933,7 @@ impl Default for AppSettings {
             master_key_storage: MasterKeyStorage::SystemCredentialStore,
             home_connection_layout: HomeConnectionLayout::default(),
             home_show_recent_connections: true,
+            home_show_host_metrics: true,
             connection_sort_order: ConnectionSortOrder::default(),
             connection_sidebar_expanded: true,
             connection_sidebar_tree_state: ConnectionSidebarTreeState::default(),
@@ -2429,12 +2478,12 @@ mod tests {
         LocalTerminalProfileKind, LocalTerminalProfileSettings, LogLevel,
         MAX_AI_REQUEST_TIMEOUT_SECS, MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MAX_RECENT_WORKSPACE_ROOTS,
         MAX_REMEMBERED_ACP_SESSIONS, MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState,
-        MasterKeyStorage, McpPermissionMode, McpServerMode, PersonalSyncBackendKind,
-        RemoteFileOpenMode, SidebarPlacement, SqlFormatSettings, SqlIndentStyle, SqlKeywordCase,
-        StartupDefaultPage, SyncProvider, TableViewMode, UpdateChannel, UpdateMirror,
-        default_grid_font_fallback_families, default_grid_monospace_font_family,
-        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
-        resolve_installed_grid_monospace_font_family,
+        MarkdownDefaultViewMode, MasterKeyStorage, McpPermissionMode, McpServerMode,
+        PersonalSyncBackendKind, RemoteFileOpenMode, SidebarPlacement, SqlFormatSettings,
+        SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider, TableViewMode,
+        UpdateChannel, UpdateMirror, default_grid_font_fallback_families,
+        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
+        is_installed_font_family, resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -2570,6 +2619,52 @@ mod tests {
         assert!((settings.font_size - 13.0).abs() < f64::EPSILON);
         assert_eq!(settings.sql_format.keyword_case, SqlKeywordCase::Upper);
         assert_eq!(settings.sql_format.indent, SqlIndentStyle::Tabs);
+    }
+
+    #[test]
+    fn notes_markdown_default_view_mode_defaults_to_wysiwyg_and_round_trips() {
+        assert_eq!(
+            MarkdownDefaultViewMode::default(),
+            MarkdownDefaultViewMode::Wysiwyg
+        );
+        let settings = AppSettings {
+            notes_markdown_default_view_mode: MarkdownDefaultViewMode::Source,
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize app settings");
+        assert!(json.contains(r#""notes_markdown_default_view_mode":"source""#));
+        let restored: AppSettings = serde_json::from_str(&json).expect("roundtrip");
+        assert_eq!(
+            restored.notes_markdown_default_view_mode,
+            MarkdownDefaultViewMode::Source
+        );
+
+        let legacy: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("empty deserialize");
+        assert_eq!(
+            legacy.notes_markdown_default_view_mode,
+            MarkdownDefaultViewMode::Wysiwyg
+        );
+    }
+
+    #[test]
+    fn home_show_host_metrics_defaults_on_and_survives_legacy_configs() {
+        // 默认开启：用户升级后无需手动打开就能在卡片上看到资源占用。
+        assert!(AppSettings::default().home_show_host_metrics);
+
+        let settings = AppSettings {
+            home_show_host_metrics: false,
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize app settings");
+        assert!(json.contains(r#""home_show_host_metrics":false"#));
+        let restored: AppSettings = serde_json::from_str(&json).expect("roundtrip");
+        assert!(!restored.home_show_host_metrics);
+
+        // 旧配置缺省该字段时回退到默认开启（向后兼容）。
+        let legacy_settings: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("empty deserialize");
+        assert!(legacy_settings.home_show_host_metrics);
     }
 
     #[test]
@@ -2717,6 +2812,36 @@ mod tests {
     #[test]
     fn app_settings_enables_direct_server_transfer_by_default() {
         assert!(AppSettings::default().direct_server_transfer_enabled);
+    }
+
+    #[test]
+    fn transfer_conflicts_default_to_merge_for_directories_and_overwrite_for_files() {
+        let settings = AppSettings::default();
+
+        assert!(settings.transfer_prefer_merge_for_directories);
+        assert!(settings.transfer_prefer_overwrite_for_files);
+    }
+
+    #[test]
+    fn transfer_default_local_directory_is_empty_by_default() {
+        assert!(
+            AppSettings::default()
+                .transfer_default_local_directory
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn legacy_app_settings_keep_transfer_conflict_defaults() {
+        let mut value = serde_json::to_value(AppSettings::default()).expect("serialize settings");
+        let object = value.as_object_mut().expect("settings object");
+        object.remove("transfer_prefer_merge_for_directories");
+        object.remove("transfer_prefer_overwrite_for_files");
+
+        let settings: AppSettings = serde_json::from_value(value).expect("deserialize settings");
+
+        assert!(settings.transfer_prefer_merge_for_directories);
+        assert!(settings.transfer_prefer_overwrite_for_files);
     }
 
     #[test]
@@ -3217,10 +3342,13 @@ mod tests {
     }
 
     #[test]
-    fn app_settings_defaults_to_modern_home_with_cards_and_expanded_sidebar() {
+    fn app_settings_defaults_to_global_navigation_and_expanded_sidebar() {
         let settings = AppSettings::default();
 
-        assert_eq!(HomeConnectionLayout::Card, settings.home_connection_layout);
+        assert_eq!(
+            HomeConnectionLayout::Navigation,
+            settings.home_connection_layout
+        );
         assert_eq!(ConnectionSortOrder::Natural, settings.connection_sort_order);
         assert!(settings.connection_sidebar_expanded);
     }

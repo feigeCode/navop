@@ -69,6 +69,32 @@ impl HomePage {
                     .hover(move |style| style.bg(hover_bg))
             })
             .cursor_pointer()
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _event: &gpui::MouseDownEvent, _, _cx| {
+                    if batch_mode && can_manage {
+                        if let Some(id) = conn_id {
+                            this.begin_drag_selection(id);
+                        }
+                    }
+                }),
+            )
+            .on_mouse_move(
+                cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
+                    if batch_mode
+                        && can_manage
+                        && event.pressed_button == Some(gpui::MouseButton::Left)
+                    {
+                        this.drag_toggle_connection(conn_id, cx);
+                    }
+                }),
+            )
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _event: &gpui::MouseUpEvent, _, _cx| {
+                    this.finish_drag_selection();
+                }),
+            )
             .on_double_click(cx.listener(move |this, _, window, cx| {
                 // 平台只按时间与坐标判定双击：第一次点击若落在刚关闭的快捷打开
                 // 对话框上，第二次点击穿透到这里时 click_count 仍是 2。只有本项
@@ -87,6 +113,13 @@ impl HomePage {
                 }
             }))
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                // 拖选取反已经处理过本次整段选择：吞掉这次 click，不要把它替换成单选。
+                if this.suppress_next_click {
+                    this.suppress_next_click = false;
+                    this.selected_connection_id = conn_id;
+                    cx.notify();
+                    return;
+                }
                 this.connection_double_click
                     .record_click(conn_id, Instant::now());
                 if batch_mode && can_manage {

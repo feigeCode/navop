@@ -131,6 +131,48 @@ impl ProviderType {
     }
 }
 
+/// 供应商使用哪个 OpenAI 风格接口。
+///
+/// 部分端点（例如火山方舟的 `/responses`）只提供 Responses API，用户需要能显式
+/// 选择走 `/chat/completions` 还是 `/responses`（issue #565）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiMode {
+    /// 默认：`POST /chat/completions`（OpenAI 兼容事实标准）。
+    #[default]
+    ChatCompletions,
+    /// `POST /responses`（OpenAI Responses API）。
+    Responses,
+}
+
+impl ApiMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ApiMode::ChatCompletions => "chat_completions",
+            ApiMode::Responses => "responses",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "chat_completions" | "chat" | "chat_completion" => Some(ApiMode::ChatCompletions),
+            "responses" | "response" => Some(ApiMode::Responses),
+            _ => None,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ApiMode::ChatCompletions => "Chat Completions",
+            ApiMode::Responses => "Responses",
+        }
+    }
+
+    pub fn all() -> [Self; 2] {
+        [ApiMode::ChatCompletions, ApiMode::Responses]
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub id: i64,
@@ -148,6 +190,9 @@ pub struct ProviderConfig {
     /// 默认思考级别；`None` 表示不传该参数，跟随上游默认。
     #[serde(default)]
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// 该供应商走 `/chat/completions` 还是 `/responses`（issue #565）。
+    #[serde(default)]
+    pub api_mode: ApiMode,
     pub model: String,
     pub models: Vec<String>,
     pub max_tokens: Option<i32>,
@@ -170,6 +215,7 @@ impl Default for ProviderConfig {
             extra_headers: Vec::new(),
             proxy: None,
             reasoning_effort: None,
+            api_mode: ApiMode::ChatCompletions,
             model: String::new(),
             models: Vec::new(),
             max_tokens: None,
@@ -184,7 +230,55 @@ impl Default for ProviderConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderConfig, ProviderType};
+    use super::{ApiMode, ProviderConfig, ProviderType};
+
+    /// 新供应商默认走 chat/completions，老配置读回也不能改变行为。
+    #[test]
+    fn api_mode_defaults_to_chat_completions() {
+        assert_eq!(ApiMode::ChatCompletions, ApiMode::default());
+        assert_eq!(ApiMode::ChatCompletions, ProviderConfig::default().api_mode);
+    }
+
+    /// 存储里用 snake_case 字面量，来回都能认出来（issue #565）。
+    #[test]
+    fn api_mode_round_trips_storage_ids() {
+        let cases = [
+            (ApiMode::ChatCompletions, "chat_completions"),
+            (ApiMode::Responses, "responses"),
+        ];
+
+        for (api_mode, storage_id) in cases {
+            assert_eq!(storage_id, api_mode.as_str());
+            assert_eq!(Some(api_mode), ApiMode::from_str(storage_id));
+            assert!(
+                !api_mode.display_name().is_empty(),
+                "{storage_id} 缺少展示名"
+            );
+        }
+
+        assert_eq!(None, ApiMode::from_str("unknown"));
+        assert_eq!(2, ApiMode::all().len());
+    }
+
+    #[test]
+    fn provider_config_deserializes_legacy_json_without_api_mode() {
+        let mut value = serde_json::to_value(ProviderConfig::default()).unwrap();
+        value.as_object_mut().unwrap().remove("api_mode");
+
+        let config: ProviderConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(ApiMode::ChatCompletions, config.api_mode);
+    }
+
+    #[test]
+    fn provider_config_serializes_api_mode_with_snake_case() {
+        let config = ProviderConfig {
+            api_mode: ApiMode::Responses,
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(config).unwrap();
+        assert_eq!(Some("responses"), value["api_mode"].as_str());
+    }
 
     #[test]
     fn provider_config_defaults_to_no_extra_headers() {

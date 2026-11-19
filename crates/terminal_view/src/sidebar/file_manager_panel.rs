@@ -35,6 +35,7 @@ use one_assets::IconName;
 use one_core::background_tasks::{BackgroundTaskHandle, BackgroundTaskSpec};
 use one_core::gpui_tokio::Tokio;
 use one_core::notification_throttle::NotificationThrottle;
+use one_core::settings::AppSettings;
 use one_core::sidebar_contribution::SidebarPlacement;
 use one_core::storage::models::{ConnectionType, StoredConnection};
 use one_core::storage::{
@@ -44,6 +45,7 @@ use one_core::storage::{
 use one_ui::IconSize;
 use one_ui::file_conflict_prompt::{
     FileConflictChoice, FileConflictPrompt, FileConflictPromptLabels, FileConflictPromptSpec,
+    preferred_conflict_choice,
 };
 use one_ui::marquee_text::marquee_text;
 use remote_file_editor::{
@@ -1193,6 +1195,7 @@ fn upload_conflict_prompt_labels(position: (usize, usize)) -> FileConflictPrompt
         keep_both: t!("Conflict.keep_both").to_string().into(),
         merge: t!("Conflict.merge").to_string().into(),
         overwrite: t!("Conflict.overwrite").to_string().into(),
+        difference_hint: t!("Conflict.difference_hint").to_string().into(),
         overwrite_warning_title: t!("Conflict.overwrite_warning_title").to_string().into(),
         overwrite_warning: t!("Conflict.overwrite_warning").to_string().into(),
         overwrite_warning_apply_all: t!("Conflict.overwrite_warning_apply_all")
@@ -3453,11 +3456,20 @@ impl FileManagerPanel {
         };
         let view = cx.entity().clone();
         let apply_all = Arc::new(AtomicBool::new(false));
+        let preferred = {
+            let settings = AppSettings::global(cx);
+            preferred_conflict_choice(
+                current.is_dir,
+                settings.transfer_prefer_merge_for_directories,
+                settings.transfer_prefer_overwrite_for_files,
+            )
+        };
         let prompt = FileConflictPrompt::entity(
             cx,
             FileConflictPromptSpec {
                 name: current.name.clone().into(),
                 is_directory: current.is_dir,
+                preferred,
                 show_apply_all: position.1 > 1,
                 apply_all: apply_all.clone(),
                 labels: upload_conflict_prompt_labels(position),

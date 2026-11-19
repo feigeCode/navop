@@ -778,6 +778,22 @@ fn resolve_ssh_connection(
     })
 }
 
+/// 由存储连接构造 SSH 终端配置。
+///
+/// 终端页签由 `resolve_ssh_connection` 内部完成同样的解析；首页资源采集等
+/// 不打开终端的场景复用本函数，避免各处重复拼装认证、跳板机与代理参数。
+pub fn ssh_terminal_config_from_connection(
+    connection: &StoredConnection,
+) -> Result<SshTerminalConfig> {
+    let (event_tx, _event_rx) = unbounded_channel();
+    let update = SshConnectionUpdate {
+        connection: connection.clone(),
+        working_dir: None,
+        sync_path_with_terminal: false,
+    };
+    resolve_ssh_connection(update, event_tx).map(|resolved| resolved.config)
+}
+
 /// 判断某个连接失败是否应触发「keyboard-interactive → 纯密码认证」的降级兜底。
 ///
 /// `keyboard_interactive_enabled` 传生效开关（见 `ssh_keyboard_interactive_effective`）：

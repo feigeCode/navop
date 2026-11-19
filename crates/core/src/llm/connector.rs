@@ -8,11 +8,15 @@ use base64::Engine as _;
 use futures::Stream;
 use llm_connector::builder::LlmClientBuilder;
 use llm_connector::core::ProviderBuilder;
+use llm_connector::responses_chat::{
+    chat_request_to_responses_request, responses_response_to_chat_response,
+    responses_stream_to_chat_stream,
+};
 use llm_connector::types::{ChatRequest, ChatResponse, Message, Role, StreamingResponse};
 use llm_connector::{GenericProvider, HttpClient, LlmClient, OpenAIProtocol};
 use sha2::{Digest, Sha256};
 
-use super::types::{ProviderConfig, ProviderType};
+use super::types::{ApiMode, ProviderConfig, ProviderType};
 
 pub type ChatStream = Pin<Box<dyn Stream<Item = Result<StreamingResponse>> + Send>>;
 
@@ -73,6 +77,11 @@ pub struct LlmConnector {
     provider_type: ProviderType,
     /// 用户在该供应商上配置的额外请求头，聊天请求会随每次调用下发。
     extra_headers: Vec<(String, String)>,
+    /// 该供应商走 `/chat/completions` 还是 `/responses`（issue #565）。
+    ///
+    /// 上层仍然只构造 `ChatRequest` 并消费 `ChatResponse` / `ChatStream`；选择
+    /// `Responses` 时由本类型做请求与响应的互转。
+    api_mode: ApiMode,
 }
 
 impl LlmConnector {
@@ -105,6 +114,7 @@ impl LlmConnector {
             client,
             provider_type: config.provider_type,
             extra_headers: config.extra_headers.clone(),
+            api_mode: config.api_mode,
         })
     }
 
@@ -446,24 +456,52 @@ impl LlmConnector {
         request.extra_headers = Some(headers);
         request
     }
+
+    /// 是否真的走 `/responses`。
+    ///
+    /// 只有协议自身声明支持 Responses API 时才切换；其它协议（Anthropic、Gemini、
+    /// Ollama……）即便用户选了 Responses，也继续用各自的 chat 通道，避免把请求
+    /// 转换成对方并不认识的 `/responses` 报文。
+    fn uses_responses_api(&self) -> bool {
+        self.api_mode == ApiMode::Responses && self.client.capabilities().supports_responses_api
+    }
 }
 
 #[async_trait]
 impl LlmProvider for LlmConnector {
     async fn chat(&self, request: &ChatRequest) -> Result<String> {
-        let request = self.request_with_config_headers(request);
-        let response = self.client.chat(&request).await?;
-        Ok(response.content)
+        Ok(self.chat_completion(request).await?.content)
     }
 
     async fn chat_completion(&self, request: &ChatRequest) -> Result<ChatResponse> {
         let request = self.request_with_config_headers(request);
-        Ok(self.client.chat(&request).await?)
+        if !self.uses_responses_api() {
+            return Ok(self.client.chat(&request).await?);
+        }
+
+        let mut responses_request = chat_request_to_responses_request(&request)?;
+        // 非流式调用不应该被请求里残留的 stream 标记带进 SSE 分支。
+        responses_request.stream = None;
+        let response = self.client.invoke_responses(&responses_request).await?;
+        Ok(responses_response_to_chat_response(&response))
     }
 
     async fn chat_stream(&self, request: &ChatRequest) -> Result<ChatStream> {
         let request = self.request_with_config_headers(request);
-        let stream = self.client.chat_stream(&request).await?;
+        if !self.uses_responses_api() {
+            let stream = self.client.chat_stream(&request).await?;
+            return Ok(Box::pin(futures::stream::StreamExt::map(
+                stream,
+                |result| result.map_err(|e| anyhow::anyhow!("{}", e)),
+            )));
+        }
+
+        let responses_request = chat_request_to_responses_request(&request)?;
+        let stream = self
+            .client
+            .invoke_responses_stream(&responses_request)
+            .await?;
+        let stream = responses_stream_to_chat_stream(stream);
         Ok(Box::pin(futures::stream::StreamExt::map(
             stream,
             |result| result.map_err(|e| anyhow::anyhow!("{}", e)),
@@ -862,6 +900,186 @@ mod tests {
             &config,
             Some("http://"),
         ));
+    }
+
+    /// 选择 Responses 接口后，chat 请求必须发到 `/responses`，响应也要还原成
+    /// `ChatResponse`（issue #565：豆包等端点只提供 `/responses`）。
+    #[tokio::test]
+    async fn responses_api_mode_sends_chat_requests_to_the_responses_endpoint() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("local address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = vec![0u8; 8192];
+            let bytes_read = socket.read(&mut request).await.expect("read request");
+            let request = String::from_utf8_lossy(&request[..bytes_read]).to_string();
+            let body = r#"{"id":"resp_1","object":"response","created_at":7,"model":"gpt-4.1","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"你好"}]}],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}"#;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("write response");
+            request
+        });
+
+        let config = ProviderConfig {
+            id: 46,
+            name: "responses".to_string(),
+            provider_type: ProviderType::OpenAICompatible,
+            api_key: Some("sk-test".to_string()),
+            api_base: Some(format!("http://{address}/v1")),
+            model: "gpt-4.1".to_string(),
+            api_mode: ApiMode::Responses,
+            ..Default::default()
+        };
+        let connector = LlmConnector::from_config(&config).expect("build connector");
+        let request = ChatRequest {
+            model: "gpt-4.1".to_string(),
+            messages: vec![Message::text(Role::User, "hi")],
+            ..Default::default()
+        };
+
+        let response = connector
+            .chat_completion(&request)
+            .await
+            .expect("chat through the responses api");
+        assert_eq!("你好", response.content);
+        assert_eq!(3, response.prompt_tokens());
+
+        let request = server.await.expect("server task");
+        assert!(
+            request.starts_with("POST /v1/responses "),
+            "unexpected request path: {request}"
+        );
+        assert!(
+            !request.to_ascii_lowercase().contains("/chat/completions"),
+            "Responses 模式不应再请求 chat/completions: {request}"
+        );
+        assert!(
+            request.contains("\"input\""),
+            "chat 消息应转成 Responses input: {request}"
+        );
+    }
+
+    /// 默认的 Chat Completions 模式必须保持原有端点，避免这次改造改变老行为。
+    #[tokio::test]
+    async fn chat_completions_api_mode_keeps_the_chat_endpoint() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("local address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = vec![0u8; 8192];
+            let bytes_read = socket.read(&mut request).await.expect("read request");
+            let request = String::from_utf8_lossy(&request[..bytes_read]).to_string();
+            let body = r#"{"id":"chatcmpl_1","object":"chat.completion","created":7,"model":"gpt-4.1","choices":[{"index":0,"message":{"role":"assistant","content":"你好"},"finish_reason":"stop"}]}"#;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("write response");
+            request
+        });
+
+        let config = ProviderConfig {
+            id: 47,
+            name: "chat".to_string(),
+            provider_type: ProviderType::OpenAICompatible,
+            api_key: Some("sk-test".to_string()),
+            api_base: Some(format!("http://{address}/v1")),
+            model: "gpt-4.1".to_string(),
+            ..Default::default()
+        };
+        let connector = LlmConnector::from_config(&config).expect("build connector");
+        let request = ChatRequest {
+            model: "gpt-4.1".to_string(),
+            messages: vec![Message::text(Role::User, "hi")],
+            ..Default::default()
+        };
+
+        let response = connector
+            .chat_completion(&request)
+            .await
+            .expect("chat through the chat completions api");
+        assert_eq!("你好", response.content);
+
+        let request = server.await.expect("server task");
+        assert!(
+            request.starts_with("POST /v1/chat/completions "),
+            "默认模式应保持 chat/completions 端点: {request}"
+        );
+    }
+
+    /// 不支持 Responses API 的协议即使配置成 Responses，也必须继续走自己的 chat 通道，
+    /// 不能把请求改写成对方不认识的 `/responses` 报文。
+    #[tokio::test]
+    async fn responses_mode_falls_back_to_chat_for_protocols_without_responses_support() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("local address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = vec![0u8; 8192];
+            let bytes_read = socket.read(&mut request).await.expect("read request");
+            let request = String::from_utf8_lossy(&request[..bytes_read]).to_string();
+            let body = r#"{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("write response");
+            request
+        });
+
+        let config = ProviderConfig {
+            id: 48,
+            name: "anthropic".to_string(),
+            provider_type: ProviderType::Anthropic,
+            api_key: Some("sk-ant-test".to_string()),
+            api_base: Some(format!("http://{address}")),
+            model: "claude-test".to_string(),
+            api_mode: ApiMode::Responses,
+            ..Default::default()
+        };
+        let connector = LlmConnector::from_config(&config).expect("build connector");
+        let request = ChatRequest {
+            model: "claude-test".to_string(),
+            messages: vec![Message::text(Role::User, "hi")],
+            ..Default::default()
+        };
+
+        connector
+            .chat_completion(&request)
+            .await
+            .expect("chat through the anthropic protocol");
+
+        let request = server.await.expect("server task");
+        assert!(
+            request.starts_with("POST /v1/messages "),
+            "不支持 Responses 的协议应继续走自身端点: {request}"
+        );
     }
 
     /// 新增供应商预置的默认地址。锁定取值，避免以后被无意改掉。

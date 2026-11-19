@@ -448,6 +448,10 @@ Conflict:
     en: Overwrite
     zh-CN: 覆盖
     zh-HK: 覆蓋
+  difference_hint:
+    en: "Merge keeps everything already in the destination folder and only replaces files with the same name. Overwrite replaces the whole folder, so files that exist only in the destination are deleted."
+    zh-CN: "合并：保留目标文件夹里已有的内容，只替换同名文件；覆盖：整个文件夹被替换，目标文件夹里独有的文件会被删除。"
+    zh-HK: "合併：保留目標文件夾裡已有的內容，只替換同名檔案；覆蓋：整個文件夾被替換，目標文件夾裡獨有的檔案會被刪除。"
   overwrite_warning_title:
     en: Confirm Overwrite Folder
     zh-CN: 确认覆盖文件夹

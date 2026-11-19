@@ -63,6 +63,7 @@ use one_core::tab_container::{TabContent, TabContentEvent};
 use one_ui::IconSize;
 use one_ui::file_conflict_prompt::{
     FileConflictChoice, FileConflictPrompt, FileConflictPromptLabels, FileConflictPromptSpec,
+    preferred_conflict_choice,
 };
 use one_ui::marquee_text::marquee_text;
 use one_ui::{IconButton, IconButtonRole};
@@ -1183,6 +1184,16 @@ fn server_copy_conflict_flags(
     (conflict_count, has_mergeable_directory, has_type_mismatch)
 }
 
+/// 解析「默认本地目录」设置；为空、目录不存在或不可读时返回 `None`，由调用方回退家目录。
+fn resolve_initial_local_directory(configured: &str) -> Option<PathBuf> {
+    let trimmed = configured.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    path.is_dir().then_some(path)
+}
+
 fn upload_directory_conflict_policy(
     transfer: &PendingTransfer,
     selected_policy: DirectoryConflictPolicy,
@@ -1526,6 +1537,7 @@ fn upload_conflict_prompt_labels(position: (usize, usize)) -> FileConflictPrompt
         keep_both: t!("Conflict.keep_both").to_string().into(),
         merge: t!("Conflict.merge").to_string().into(),
         overwrite: t!("Conflict.overwrite").to_string().into(),
+        difference_hint: t!("Conflict.difference_hint").to_string().into(),
         overwrite_warning_title: t!("Conflict.overwrite_warning_title").to_string().into(),
         overwrite_warning: t!("Conflict.overwrite_warning").to_string().into(),
         overwrite_warning_apply_all: t!("Conflict.overwrite_warning_apply_all")
@@ -1744,7 +1756,11 @@ impl SftpView {
             };
 
         let focus_handle = cx.focus_handle();
-        let local_current_path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        // 使用 current() 读取设置：设置全局状态尚未安装时（例如组件测试）回退到默认值。
+        let configured_local_directory = AppSettings::current(cx).transfer_default_local_directory;
+        let local_current_path = resolve_initial_local_directory(&configured_local_directory)
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(|| PathBuf::from("/"));
 
         let local_panel = cx.new(|cx| {
             FileListPanel::new(
@@ -3965,11 +3981,20 @@ impl SftpView {
         };
         let view = cx.entity().clone();
         let apply_all = Arc::new(AtomicBool::new(false));
+        let preferred = {
+            let settings = AppSettings::global(cx);
+            preferred_conflict_choice(
+                current.transfer.is_dir,
+                settings.transfer_prefer_merge_for_directories,
+                settings.transfer_prefer_overwrite_for_files,
+            )
+        };
         let prompt = FileConflictPrompt::entity(
             cx,
             FileConflictPromptSpec {
                 name: current.transfer.name.clone().into(),
                 is_directory: current.transfer.is_dir,
+                preferred,
                 show_apply_all: position.1 > 1,
                 apply_all: apply_all.clone(),
                 labels: upload_conflict_prompt_labels(position),
@@ -7919,11 +7944,11 @@ mod tests {
         breadcrumb_item_min_width, is_valid_entry_name, join_remote_path,
         mark_server_copy_directory_replacements, prepare_global_download,
         prepare_global_remote_delete, prepare_global_upload, reconcile_global_transfer_snapshot,
-        release_transfer_client, remote_path_parent, resolve_upload_conflict,
-        resolve_upload_conflicts, safe_local_download_path, server_copy_conflict_flags,
-        should_apply_local_listing, should_apply_remote_listing, should_refresh_transfer_target,
-        tab_connection_status, transfer_error_summary, transfer_task_state_from_global,
-        upload_directory_conflict_policy,
+        release_transfer_client, remote_path_parent, resolve_initial_local_directory,
+        resolve_upload_conflict, resolve_upload_conflicts, safe_local_download_path,
+        server_copy_conflict_flags, should_apply_local_listing, should_apply_remote_listing,
+        should_refresh_transfer_target, tab_connection_status, transfer_error_summary,
+        transfer_task_state_from_global, upload_directory_conflict_policy,
     };
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
@@ -8178,7 +8203,8 @@ mod tests {
     fn test_stored_connection() -> StoredConnection {
         StoredConnection::new_ssh(
             "SFTP entity test".to_string(),
-            SshParams { otp: None,
+            SshParams {
+                otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
@@ -9266,6 +9292,22 @@ mod tests {
         assert_eq!(
             (2, true, true),
             server_copy_conflict_flags(&items, &existing_entries)
+        );
+    }
+
+    #[test]
+    fn initial_local_directory_falls_back_unless_configured_directory_exists() {
+        assert_eq!(None, resolve_initial_local_directory(""));
+        assert_eq!(None, resolve_initial_local_directory("   "));
+        assert_eq!(
+            None,
+            resolve_initial_local_directory("/definitely/not/a/real/dir")
+        );
+
+        let temp = std::env::temp_dir();
+        assert_eq!(
+            Some(temp.clone()),
+            resolve_initial_local_directory(&temp.to_string_lossy())
         );
     }
 
