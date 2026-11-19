@@ -54,6 +54,19 @@
   <p><img src="app.png" alt="Navop overview" width="820" /></p>
 </div>
 
+## Sponsors
+
+<p align="center">
+  <a href="https://www.infistar.cc/register?aff=TKUN9HBM&amp;ref_source=link">
+    <img src="resources/sponsors/navop-infistar-en.png" alt="Navop × Infistar.cc — one API key for Claude, GPT, Gemini, Grok, DeepSeek, and more" width="100%" />
+  </a>
+</p>
+
+Navop × Infistar.cc | Use one API key for Claude, GPT, Gemini, Grok, DeepSeek, and more in Navop’s SQL generation and AI chat.
+- Save up to 99% off official pricing. All models come from official channels and can be verified.
+- 200+ models from 16 brands, with 1,000+ redundant routes and automatic failover.
+- [Sign up through Navop’s link and get CNY 5 in trial credit](https://www.infistar.cc/register?aff=TKUN9HBM&ref_source=link)
+
 ## What Navop is
 
 Navop is a native desktop workspace for the work around databases, servers, and AI. Database and Redis/MongoDB clients, SSH/SFTP and terminals, remote desktops, and AI agents share one window instead of separate tools.
