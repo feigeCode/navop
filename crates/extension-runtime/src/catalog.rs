@@ -182,19 +182,28 @@ impl ExtensionRuntimeCatalog {
 
     /// 工具箱聚合的独立 app，按 title 排序。
     ///
-    /// 有非终端连接的扩展从工具箱排除：它是从连接打开的，工具箱打开只会
-    /// 停在「请先打开一条连接」的空态。没有连接的 app（如 dev-tools）才
-    /// 作为独立工具出现。
+    /// 依赖连接的 app 从工具箱排除，它们应由连接或侧栏打开：
+    /// - 有非终端连接：从连接打开，工具箱打开只会停在「请先打开一条连接」的空态；
+    /// - 贡献了 panels：面板挂在终端 / 数据库侧栏里，页面依赖当前连接上下文
+    ///   （活动会话、选中的库表），同样只有连接内才有意义。
+    ///
+    /// 没有连接、也没有面板的 app（如 dev-tools）才作为独立工具出现。
     pub fn toolbox_apps(&self) -> Vec<&RegisteredShellAppContribution> {
         let connection_extensions: HashSet<&str> = self
             .resource_connections()
             .filter(|conn| conn.terminal.is_none())
             .map(|conn| conn.extension_id.as_str())
             .collect();
+        let panel_extensions: HashSet<&str> = self
+            .panels
+            .iter()
+            .map(|panel| panel.extension_id.as_str())
+            .collect();
         let mut tools: Vec<_> = self
             .shell_apps
             .values()
             .filter(|app| !connection_extensions.contains(app.extension_id.as_str()))
+            .filter(|app| !panel_extensions.contains(app.extension_id.as_str()))
             .collect();
         tools.sort_by(|a, b| a.title.cmp(&b.title));
         tools
