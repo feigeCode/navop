@@ -11,9 +11,10 @@ impl HomePage {
         let display_name = connection_display_name(conn);
         let name_tooltip: SharedString = display_name.clone().into();
         let connection_info = card_connection_info(conn);
-        let host_metrics = self.host_metrics_summary(conn.id);
+        let host_metrics =
+            self.render_host_metrics_card(conn.id, &format!("{card_id}-host-metrics"), cx);
 
-        h_flex()
+        let header = h_flex()
             .items_center()
             .gap_2p5()
             .w_full()
@@ -78,21 +79,15 @@ impl HomePage {
                                 })
                                 .child(info),
                         )
-                    })
-                    .when_some(host_metrics, |this, summary| {
-                        this.child(
-                            div()
-                                .id(SharedString::from(format!("{card_id}-host-metrics")))
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .max_w_full()
-                                .child(summary),
-                        )
                     }),
             )
+            .into_any_element();
+
+        v_flex()
+            .w_full()
+            .gap_2()
+            .child(header)
+            .when_some(host_metrics, |this, metrics| this.child(metrics))
             .into_any_element()
     }
 }

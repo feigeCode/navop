@@ -2278,8 +2278,12 @@ async fn collect_remote_stats(
 /// 首页等非终端场景看到的一份远端资源占用快照。
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostResourceUsage {
+    pub os_name: Option<String>,
+    pub cpu_cores: Option<usize>,
     pub cpu_percent: Option<f64>,
+    pub memory_total_kib: Option<u64>,
     pub memory_percent: Option<f64>,
+    pub disk_total_kib: Option<u64>,
     pub disk_percent: Option<f64>,
 }
 
@@ -2313,9 +2317,37 @@ pub async fn probe_host_resource_usage(
     let parsed = payload.and_then(|payload| parse_server_stats(&payload));
     session_manager.disconnect().await.ok();
     let stats = parsed?;
+    let disk_total_kib = stats
+        .disks
+        .iter()
+        .find(|disk| disk.mount == "/")
+        .map(|disk| disk.size)
+        .or_else(|| stats.disks.iter().map(|disk| disk.size).max());
     Ok(HostResourceUsage {
+        os_name: stats.os.as_ref().map(|os| os.pretty_name.clone()),
+        cpu_cores: stats
+            .cpu_usage
+            .as_ref()
+            .map(|sample| sample.cores.len())
+            .filter(|cores| *cores > 0)
+            .or_else(|| {
+                let cores = stats
+                    .cpu_snapshots
+                    .iter()
+                    .filter(|snapshot| {
+                        snapshot.name != "cpu"
+                            && snapshot
+                                .name
+                                .strip_prefix("cpu")
+                                .is_some_and(|suffix| !suffix.is_empty())
+                    })
+                    .count();
+                (cores > 0).then_some(cores)
+            }),
         cpu_percent: stats.cpu_usage.as_ref().map(|sample| sample.total_percent),
+        memory_total_kib: stats.memory.as_ref().map(|memory| memory.total),
         memory_percent: stats.memory.as_ref().map(|memory| memory.used_percent()),
+        disk_total_kib,
         disk_percent: stats.disks.iter().map(|disk| disk.percent).reduce(f64::max),
     })
 }
@@ -2452,8 +2484,12 @@ mod tests {
     fn host_resource_usage_summary_skips_missing_metrics() {
         assert_eq!(
             HostResourceUsage {
+                os_name: None,
+                cpu_cores: None,
                 cpu_percent: Some(12.4),
+                memory_total_kib: None,
                 memory_percent: None,
+                disk_total_kib: None,
                 disk_percent: Some(51.6),
             }
             .summary()
@@ -2462,8 +2498,12 @@ mod tests {
         );
         assert_eq!(
             HostResourceUsage {
+                os_name: None,
+                cpu_cores: None,
                 cpu_percent: None,
+                memory_total_kib: None,
                 memory_percent: None,
+                disk_total_kib: None,
                 disk_percent: None,
             }
             .summary(),

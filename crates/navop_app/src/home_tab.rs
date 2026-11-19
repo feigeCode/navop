@@ -322,8 +322,33 @@ mod tests;
 
 #[cfg(not(feature = "shell"))]
 impl HomePage {
-    /// 没有 shell 能力时不采集远端资源，卡片上不显示这一行。
-    pub(crate) fn host_metrics_summary(&self, _connection_id: Option<i64>) -> Option<String> {
+    /// 没有 shell 能力时不采集远端资源，卡片和列表上不显示这一行。
+    pub(crate) fn render_host_metrics_detail(
+        &self,
+        _connection_id: Option<i64>,
+        _id_prefix: &str,
+        _cx: &App,
+    ) -> Option<AnyElement> {
+        None
+    }
+
+    /// 没有 shell 能力时卡片底部不显示资源状态带。
+    pub(crate) fn render_host_metrics_card(
+        &self,
+        _connection_id: Option<i64>,
+        _id_prefix: &str,
+        _cx: &App,
+    ) -> Option<AnyElement> {
+        None
+    }
+
+    /// 没有 shell 能力时树行也不显示资源进度条。
+    pub(crate) fn render_host_metrics_compact(
+        &self,
+        _connection_id: Option<i64>,
+        _id_prefix: &str,
+        _cx: &App,
+    ) -> Option<AnyElement> {
         None
     }
 }

@@ -260,6 +260,9 @@ impl HomePage {
             .detach();
         }
 
+        #[cfg(feature = "shell")]
+        page.start_host_metrics_refresh(cx);
+
         page
     }
 

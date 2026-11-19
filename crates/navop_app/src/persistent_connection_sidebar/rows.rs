@@ -332,9 +332,19 @@ impl PersistentConnectionSidebar {
             .and_then(|connection| connection.id)
             .map(|id| self.ai_access_levels.get(&id).copied().unwrap_or_default())
             .and_then(|level| connection_ai_access_badge(level, cx));
-        let type_tag = connection
-            .as_ref()
-            .map(|connection| connection_type_tag(connection, cx));
+        let host_metrics_compact = home.read(cx).render_host_metrics_compact(
+            Some(id),
+            &format!("persistent-connection-metrics-{id}"),
+            cx,
+        );
+        // 树只有一行可用；有资源快照时让更有决策价值的数据占用类型标签位置。
+        let type_tag = (host_metrics_compact.is_none())
+            .then(|| {
+                connection
+                    .as_ref()
+                    .map(|connection| connection_type_tag(connection, cx))
+            })
+            .flatten();
         let icon = connection
             .as_ref()
             .map(|connection| {
@@ -500,6 +510,7 @@ impl PersistentConnectionSidebar {
             })
             .child(tree_connection_icon_slot(icon, palette))
             .child(tree_connection_name_with_type_tag(name, type_tag))
+            .when_some(host_metrics_compact, |row, metrics| row.child(metrics))
             .when_some(team_indicator, |row, indicator| row.child(indicator))
             .when_some(ai_access_badge, |row, badge| row.child(badge))
             .into_any_element()

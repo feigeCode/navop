@@ -47,8 +47,8 @@ impl HomePage {
             .justify_center()
             .id(card_id.clone())
             .w_full()
-            // 最近区更紧凑，靠留白与去重信息实现（redesign §6.1）。
-            .h(gpui::rems(if recent { 3.625 } else { 4.5 }))
+            // 卡片底部需要容纳一行资源状态带；统一高度避免有/无快照时跳变。
+            .h(gpui::rems(5.5))
             .rounded(px(12.0))
             .bg(cx.theme().background)
             .px_3()
