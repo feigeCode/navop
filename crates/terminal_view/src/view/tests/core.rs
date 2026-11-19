@@ -434,14 +434,14 @@ fn recording_playback_tab_title_is_visibly_read_only_playback() {
 fn remote_clipboard_image_path_uses_tmp_prefix_and_format_extension() {
     let path = remote_clipboard_image_path(ImageFormat::Png, 1_720_000_000_123);
 
-    assert_eq!("/tmp/onetcli-paste-1720000000123.png", path);
+    assert_eq!("/tmp/navop-paste-1720000000123.png", path);
 }
 
 #[test]
 fn remote_clipboard_image_path_uses_jpg_for_jpeg_images() {
     let path = remote_clipboard_image_path(ImageFormat::Jpeg, 42);
 
-    assert_eq!("/tmp/onetcli-paste-42.jpg", path);
+    assert_eq!("/tmp/navop-paste-42.jpg", path);
 }
 
 #[test]

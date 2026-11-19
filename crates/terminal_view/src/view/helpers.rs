@@ -2,7 +2,7 @@ use super::*;
 use alacritty_terminal::sync::FairMutex;
 
 pub(super) const REMOTE_CLIPBOARD_IMAGE_DIR: &str = "/tmp";
-pub(super) const REMOTE_CLIPBOARD_IMAGE_PREFIX: &str = "onetcli-paste";
+pub(super) const REMOTE_CLIPBOARD_IMAGE_PREFIX: &str = "navop-paste";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct WrappedLineSegment {

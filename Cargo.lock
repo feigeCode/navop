@@ -11811,6 +11811,7 @@ dependencies = [
  "anyhow",
  "gpui-component",
  "gpui-fast",
+ "image",
  "one-core",
  "rust-i18n",
  "sftp",
