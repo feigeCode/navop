@@ -25,3 +25,4 @@ workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+rand = "0.10"

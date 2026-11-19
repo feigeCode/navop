@@ -12,7 +12,10 @@ mod session_registry;
 mod socks5;
 mod ssh;
 
-pub use connection_error::{LegacyAlgorithmRequired, add_legacy_algorithm_hint};
+pub use connection_error::{
+    JumpChannelRejected, LegacyAlgorithmRequired, add_jump_channel_rejected_hint,
+    add_legacy_algorithm_hint,
+};
 pub use connection_key::{
     ConnectionCredentialRevisions, ConnectionKey, ConnectionKeyError, CredentialRevision,
     CredentialScope,
@@ -35,14 +38,14 @@ pub use session_registry::{
     SshSessionServiceState, SshSessionShutdownReport,
 };
 pub use ssh::{
-    AgentIdentity, AuthFailureMessages, ChannelEvent, JumpServerConnectConfig,
-    KeyboardInteractivePrompt, KeyboardInteractiveRequest, KeyboardInteractiveResponder,
-    KeyboardInteractiveTarget, LocalPortForwardActivity, LocalPortForwardConfig,
-    LocalPortForwardTunnel, ProxyConnectConfig, ProxyType, PtyConfig, RusshChannel, RusshClient,
-    SshAuth, SshChannel, SshClient, SshConnectConfig, authenticate_session,
-    authenticate_session_with_fallbacks, authenticate_with_strategy,
-    build_client_preferred_algorithms, build_client_preferred_algorithms_with_legacy,
-    connect_via_proxy, defaults, expand_auto_publickey_auth, start_local_port_forward,
-    start_local_port_forward_with_config,
+    AgentIdentity, AuthFailureMessages, BastionUserFormat, ChannelEvent, JumpMode,
+    JumpServerConnectConfig, KeyboardInteractivePrompt, KeyboardInteractiveRequest,
+    KeyboardInteractiveResponder, KeyboardInteractiveTarget, LocalPortForwardActivity,
+    LocalPortForwardConfig, LocalPortForwardTunnel, ProxyConnectConfig, ProxyType, PtyConfig,
+    RusshChannel, RusshClient, SshAuth, SshChannel, SshClient, SshConnectConfig,
+    authenticate_session, authenticate_session_with_fallbacks, authenticate_with_strategy,
+    authenticate_with_strategy_for_target, build_client_preferred_algorithms,
+    build_client_preferred_algorithms_with_legacy, connect_via_proxy, defaults,
+    expand_auto_publickey_auth, start_local_port_forward, start_local_port_forward_with_config,
 };
 pub use x11_forwarding::{ForwardRequest, X11Proxy};

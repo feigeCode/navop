@@ -503,6 +503,38 @@ SSH:
     en: Enable Jump Server
     zh-CN: 启用跳板机
     zh-HK: 啟用跳板機
+  jump_mode:
+    en: Jump Mode
+    zh-CN: 跳板机模式
+    zh-HK: 跳板機模式
+  jump_mode_proxy_jump:
+    en: ProxyJump
+    zh-CN: 标准跳转 (ProxyJump)
+    zh-HK: 標準跳轉 (ProxyJump)
+  jump_mode_bastion_direct:
+    en: Bastion Direct
+    zh-CN: 堡垒机直连
+    zh-HK: 堡壘機直連
+  jump_mode_bastion_direct_hint:
+    en: Connect straight to the bastion host and let it proxy the session to the asset. Login username is rendered from the fields below (e.g. user#account#asset for JumpServer). The bastion host address is still the Jump Host above; target address fields are ignored.
+    zh-CN: 直接连上堡垒机，由它把会话代理到目标资产；登录用户名按下方字段渲染（JumpServer 格式为 用户名#账号#资产）。地址仍填上方跳板机地址，目标机地址不再参与连接。
+    zh-HK: 直接连上堡壘機，由它把會話代理到目標資產；登錄用戶名按下方字段渲染（JumpServer 格式為 用戶名#賬號#資產）。地址仍填上方跳板機地址，目標機地址不再參與連接。
+  bastion_asset:
+    en: Bastion Asset ID
+    zh-CN: 堡垒机资产 ID
+    zh-HK: 堡壘機資產 ID
+  bastion_asset_placeholder:
+    en: Asset ID on the bastion host, e.g. 0e85eca7-...
+    zh-CN: 堡垒机上的资产 ID，如 0e85eca7-...
+    zh-HK: 堡壘機上的資產 ID，如 0e85eca7-...
+  bastion_account:
+    en: Bastion Asset Account
+    zh-CN: 资产登录账号
+    zh-HK: 資產登錄賬號
+  bastion_account_placeholder:
+    en: Login account on the asset, e.g. root
+    zh-CN: 资产上的登录账号，如 root
+    zh-HK: 資產上的登錄賬號，如 root
   jump_host:
     en: Jump Host
     zh-CN: 跳板机地址

@@ -4,15 +4,15 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use one_core::storage::{
-    ConnectionType, PortForwardingKind, ProxyType as StorageProxyType, SshAuthMethod, SshParams,
-    StoredConnection,
+    ConnectionType, PortForwardingKind, SshAuthMethod, SshParams, StoredConnection,
 };
+use sftp_transfer::{jump_connect_config, proxy_connect_config, ssh_auth};
 use ssh::{
     AgentIdentity, DynamicSocksConfig, DynamicSocksTunnel, HostKeyVerifier,
-    JumpServerConnectConfig, LocalPortForwardActivity, LocalPortForwardConfig,
-    LocalPortForwardTunnel, ProxyConnectConfig, ProxyType, RemotePortForwardConfig,
-    RemotePortForwardTunnel, SshAuth, SshConnectConfig, start_dynamic_socks_forward,
-    start_local_port_forward_with_config, start_remote_port_forward_with_config,
+    LocalPortForwardActivity, LocalPortForwardConfig, LocalPortForwardTunnel,
+    RemotePortForwardConfig, RemotePortForwardTunnel, SshConnectConfig,
+    start_dynamic_socks_forward, start_local_port_forward_with_config,
+    start_remote_port_forward_with_config,
 };
 
 pub struct LocalForwardingRequest {
@@ -240,29 +240,12 @@ fn build_ssh_connect_config(params: &SshParams) -> SshConnectConfig {
         host: params.host.clone(),
         port: params.port,
         username: params.username.clone(),
-        auth: build_ssh_auth(&params.auth_method),
+        auth: ssh_auth(params.auth_method.clone()),
         timeout: params.connect_timeout.map(Duration::from_secs),
         keepalive_interval: params.keepalive_interval.map(Duration::from_secs),
         keepalive_max: params.keepalive_max,
-        jump_server: params
-            .jump_server
-            .as_ref()
-            .map(|jump| JumpServerConnectConfig {
-                host: jump.host.clone(),
-                port: jump.port,
-                username: jump.username.clone(),
-                auth: build_ssh_auth(&jump.auth_method),
-            }),
-        proxy: params.proxy.as_ref().map(|proxy| ProxyConnectConfig {
-            proxy_type: match proxy.proxy_type {
-                StorageProxyType::Socks5 => ProxyType::Socks5,
-                StorageProxyType::Http => ProxyType::Http,
-            },
-            host: proxy.host.clone(),
-            port: proxy.port,
-            username: proxy.username.clone(),
-            password: proxy.password.clone(),
-        }),
+        jump_server: params.jump_server.as_ref().map(jump_connect_config),
+        proxy: params.proxy.as_ref().map(proxy_connect_config),
         keyboard_interactive_responder: None,
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
@@ -297,29 +280,3 @@ fn agent_identities_from_auth(auth: &SshAuthMethod) -> Vec<AgentIdentity> {
     }
 }
 
-fn build_ssh_auth(auth_method: &SshAuthMethod) -> SshAuth {
-    match auth_method {
-        SshAuthMethod::Password { password } => SshAuth::Password(password.clone()),
-        SshAuthMethod::PrivateKey {
-            key_path,
-            passphrase,
-        } => SshAuth::PrivateKey {
-            key_path: key_path.clone(),
-            passphrase: passphrase.clone(),
-            certificate_path: None,
-        },
-        SshAuthMethod::PrivateKeyContent {
-            private_key,
-            passphrase,
-        } => SshAuth::PrivateKeyContent {
-            private_key: private_key.clone(),
-            passphrase: passphrase.clone(),
-            certificate_path: None,
-        },
-        SshAuthMethod::Agent => SshAuth::Agent,
-        SshAuthMethod::Pageant => SshAuth::Pageant,
-        SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
-        SshAuthMethod::None => SshAuth::None,
-        SshAuthMethod::Chain(steps) => SshAuth::Chain(steps.iter().map(build_ssh_auth).collect()),
-    }
-}

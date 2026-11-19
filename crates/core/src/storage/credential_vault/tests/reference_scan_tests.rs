@@ -70,6 +70,8 @@ pub(super) fn ssh_connection(id: i64) -> StoredConnection {
                     password: String::new(),
                 },
                 credential_reference: Some(reference(id)),
+                mode: Default::default(),
+                bastion: None,
             }),
             proxy: Some(proxy(id)),
             os_id: None,
@@ -353,6 +355,8 @@ fn reference_scanner_finds_disabled_jump_server_reference() {
                 password: String::new(),
             },
             credential_reference: Some(reference(credential_id)),
+            mode: Default::default(),
+            bastion: None,
         });
         connection.params = serde_json::to_string(&params).expect("serialize SSH params");
     }

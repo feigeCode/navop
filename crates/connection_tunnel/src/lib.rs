@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use ssh::{
-    HostKeyVerifier, LocalPortForwardTunnel, SshAuth, SshConnectConfig, start_local_port_forward,
+    BastionUserFormat, HostKeyVerifier, JumpMode, JumpServerConnectConfig, LocalPortForwardTunnel,
+    SshAuth, SshConnectConfig, start_local_port_forward,
 };
 use thiserror::Error;
 use tokio::time::timeout;
@@ -171,6 +172,65 @@ pub struct SshTunnelConfig {
     pub target_port: Option<u16>,
     #[serde(default)]
     pub timeout: Option<u64>,
+    /// 引用 SSH 连接继承的跳板机配置（隧道也走跳板，语义不丢失）。
+    ///
+    /// 存储层（one-core）定义的 `JumpServerConfig` 不能直接出现在这里
+    /// （connection_tunnel 是 one-core 的依赖，反向引用会成环），因此
+    /// 用一个隧道本地的可序列化子集，由
+    /// `one_core::storage::models::inherit_tunnel_jump_and_proxy` 回填。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jump: Option<TunnelJumpConfig>,
+    /// 引用 SSH 连接继承的代理配置（SOCKS5/HTTP）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<TunnelProxyConfig>,
+}
+
+/// 隧道继承的跳板机配置（`one_core::storage::models::JumpServerConfig`
+/// 的可序列化子集；凭据引用不进隧道，隧道始终用已解析的具体凭据）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelJumpConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_key_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_key_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_key_passphrase: Option<String>,
+    /// 工作模式：proxy_jump / bastion_direct。缺省 proxy_jump（旧数据）。
+    #[serde(default)]
+    pub mode: TunnelJumpMode,
+    /// 堡垒机直连目标资产 ID。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bastion_asset: Option<String>,
+    /// 堡垒机直连资产登录账号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bastion_account: Option<String>,
+}
+
+/// 隧道跳板工作模式，与存储层 `JumpMode` 一一对应。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TunnelJumpMode {
+    #[default]
+    ProxyJump,
+    BastionDirect,
+}
+
+/// 隧道继承的代理配置（`one_core::storage::models::ProxyConfig` 的子集）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelProxyConfig {
+    pub proxy_type: String,
+    pub host: String,
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
 }
 
 impl Default for SshTunnelConfig {
@@ -189,6 +249,8 @@ impl Default for SshTunnelConfig {
             target_host: None,
             target_port: None,
             timeout: None,
+            jump: None,
+            proxy: None,
         }
     }
 }
@@ -280,7 +342,7 @@ async fn resolve_ssh_target(
         timeout: Some(Duration::from_secs(timeout_secs)),
         keepalive_interval: None,
         keepalive_max: None,
-        jump_server: None,
+        jump_server: tunnel_jump_connect_config(tunnel),
         proxy: proxy.map(ProxyTunnelConfig::to_ssh_proxy).transpose()?,
         keyboard_interactive_responder: None,
         host_key_verifier: HostKeyVerifier::default(),
@@ -306,6 +368,41 @@ async fn resolve_ssh_target(
         host: local_addr.ip().to_string(),
         port: local_addr.port(),
         tunnel: Some(tunnel.into()),
+    })
+}
+
+/// 隧道继承的跳板配置 → 连接层跳板配置。
+///
+/// 凭据字段由 `tunnel_auth_fields` 同款规则从 auth_type + 密钥材料还原；
+/// 未配置跳板时返回 `None`，行为与历史版本一致。
+fn tunnel_jump_connect_config(tunnel: &SshTunnelConfig) -> Option<JumpServerConnectConfig> {
+    let jump = tunnel.jump.as_ref()?;
+    let auth = match jump.auth_type.trim().to_ascii_lowercase().as_str() {
+        "agent" => SshAuth::Agent,
+        "private_key" => SshAuth::PrivateKey {
+            key_path: jump.private_key_path.clone().unwrap_or_default(),
+            passphrase: jump.private_key_passphrase.clone(),
+            certificate_path: None,
+        },
+        "private_key_content" => SshAuth::PrivateKeyContent {
+            private_key: jump.private_key_content.clone().unwrap_or_default(),
+            passphrase: jump.private_key_passphrase.clone(),
+            certificate_path: None,
+        },
+        _ => SshAuth::Password(jump.password.clone().unwrap_or_default()),
+    };
+    Some(JumpServerConnectConfig {
+        host: jump.host.clone(),
+        port: jump.port,
+        username: jump.username.clone(),
+        auth,
+        mode: match jump.mode {
+            TunnelJumpMode::ProxyJump => JumpMode::ProxyJump,
+            TunnelJumpMode::BastionDirect => JumpMode::BastionDirect,
+        },
+        bastion_asset: jump.bastion_asset.clone().unwrap_or_default(),
+        bastion_account: jump.bastion_account.clone().unwrap_or_default(),
+        bastion_user_format: BastionUserFormat::JumpServer,
     })
 }
 

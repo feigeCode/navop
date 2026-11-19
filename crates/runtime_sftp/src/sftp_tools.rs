@@ -4,15 +4,12 @@ mod tests;
 use base64::{Engine as _, engine::general_purpose};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    ConnectionRepository, ConnectionType, JumpServerConfig, ProxyConfig,
-    ProxyType as StorageProxyType, SshAuthMethod, SshParams, StoredConnection,
+    ConnectionRepository, ConnectionType, SshAuthMethod, SshParams, StoredConnection,
 };
 use serde_json::{Value, json};
 use sftp::{DirectoryConflictPolicy, RemoteFileClient, RusshSftpClient, SftpClient};
-use ssh::{
-    AgentIdentity, HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType,
-    SshAuth, SshConnectConfig,
-};
+use sftp_transfer::{jump_connect_config, proxy_connect_config, ssh_auth};
+use ssh::{AgentIdentity, HostKeyVerifier, SshAuth, SshConnectConfig};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -253,7 +250,7 @@ fn ssh_config_from_params(params: &SshParams) -> SshConnectConfig {
         ),
         _ => (
             params.username.clone(),
-            auth_from_method(&params.auth_method),
+            ssh_auth(params.auth_method.clone()),
         ),
     };
     SshConnectConfig {
@@ -264,8 +261,8 @@ fn ssh_config_from_params(params: &SshParams) -> SshConnectConfig {
         timeout: params.connect_timeout.map(Duration::from_secs),
         keepalive_interval: params.keepalive_interval.map(Duration::from_secs),
         keepalive_max: params.keepalive_max,
-        jump_server: params.jump_server.as_ref().map(jump_config),
-        proxy: params.proxy.as_ref().map(proxy_config),
+        jump_server: params.jump_server.as_ref().map(jump_connect_config),
+        proxy: params.proxy.as_ref().map(proxy_connect_config),
         keyboard_interactive_responder: None,
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
@@ -300,55 +297,8 @@ fn agent_identities_from_auth(auth: &SshAuthMethod) -> Vec<AgentIdentity> {
     }
 }
 
-fn auth_from_method(auth: &SshAuthMethod) -> SshAuth {
-    match auth {
-        SshAuthMethod::Password { password } => SshAuth::Password(password.clone()),
-        SshAuthMethod::PrivateKey {
-            key_path,
-            passphrase,
-        } => SshAuth::PrivateKey {
-            key_path: key_path.clone(),
-            passphrase: passphrase.clone(),
-            certificate_path: None,
-        },
-        SshAuthMethod::PrivateKeyContent {
-            private_key,
-            passphrase,
-        } => SshAuth::PrivateKeyContent {
-            private_key: private_key.clone(),
-            passphrase: passphrase.clone(),
-            certificate_path: None,
-        },
-        SshAuthMethod::Agent => SshAuth::Agent,
-        SshAuthMethod::Pageant => SshAuth::Pageant,
-        SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
-        SshAuthMethod::None => SshAuth::None,
-        SshAuthMethod::Chain(steps) => SshAuth::Chain(steps.iter().map(auth_from_method).collect()),
-    }
-}
 
-fn jump_config(jump: &JumpServerConfig) -> JumpServerConnectConfig {
-    JumpServerConnectConfig {
-        host: jump.host.clone(),
-        port: jump.port,
-        username: jump.username.clone(),
-        auth: auth_from_method(&jump.auth_method),
-    }
-}
 
-fn proxy_config(proxy: &ProxyConfig) -> ProxyConnectConfig {
-    let proxy_type = match proxy.proxy_type {
-        StorageProxyType::Socks5 => ProxyType::Socks5,
-        StorageProxyType::Http => ProxyType::Http,
-    };
-    ProxyConnectConfig {
-        proxy_type,
-        host: proxy.host.clone(),
-        port: proxy.port,
-        username: proxy.username.clone(),
-        password: proxy.password.clone(),
-    }
-}
 
 fn file_entry_json(entry: sftp::FileEntry) -> Value {
     let modified_unix_secs = entry

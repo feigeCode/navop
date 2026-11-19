@@ -34,7 +34,11 @@ impl russh::server::Server for HuaweiVrpServer {
 impl russh::server::Handler for HuaweiVrpServer {
     type Error = anyhow::Error;
 
-    async fn auth_password(&mut self, _: &str, _: &str) -> Result<russh::server::Auth, Self::Error> {
+    async fn auth_password(
+        &mut self,
+        _: &str,
+        _: &str,
+    ) -> Result<russh::server::Auth, Self::Error> {
         Ok(russh::server::Auth::Accept)
     }
 }
@@ -84,10 +88,7 @@ async fn spawn_huawei_vrp_server() -> (
                 russh::kex::DH_G1_SHA1,
             ]),
             key: Cow::Owned(vec![Algorithm::Rsa { hash: None }]),
-            cipher: Cow::Owned(vec![
-                russh::cipher::AES_256_CTR,
-                russh::cipher::AES_128_CTR,
-            ]),
+            cipher: Cow::Owned(vec![russh::cipher::AES_256_CTR, russh::cipher::AES_128_CTR]),
             mac: Cow::Owned(vec![russh::mac::HMAC_SHA256, russh::mac::HMAC_SHA1]),
             compression: Cow::Owned(vec![russh::compression::NONE]),
             ..russh::Preferred::default()
@@ -105,11 +106,7 @@ async fn spawn_huawei_vrp_server() -> (
 #[tokio::test]
 async fn client_connects_to_huawei_vrp_profile_with_legacy_algorithms() {
     let (address, server_task) = spawn_huawei_vrp_server().await;
-    let config = client_config(
-        address.ip().to_string(),
-        address.port(),
-        true,
-    );
+    let config = client_config(address.ip().to_string(), address.port(), true);
 
     let result = RusshClient::connect(config).await;
     server_task.abort();

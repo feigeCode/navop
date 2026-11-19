@@ -536,6 +536,8 @@ impl RedisFormWindow {
             target_host: value.target_host,
             target_port: value.target_port,
             timeout: value.timeout,
+            jump: None,
+            proxy: None,
         })
     }
 

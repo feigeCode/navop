@@ -85,3 +85,11 @@ Ssh:
     en: The server may only support legacy SSH algorithms, for example a DSA host key, SHA-1 key exchange, or SHA-1 MAC. Edit this connection and enable “Allow Legacy SSH Algorithms” under “Advanced Settings”, then try again.
     zh-CN: 服务器可能仅支持旧版 SSH 算法，例如 DSA 主机密钥、SHA-1 密钥交换或 SHA-1 MAC。请编辑此连接，在“高级设置”中开启“允许旧版 SSH 算法”后重试。
     zh-HK: 伺服器可能僅支援舊版 SSH 演算法，例如 DSA 主機金鑰、SHA-1 金鑰交換或 SHA-1 MAC。請編輯此連線，在「進階設定」中開啟「允許舊版 SSH 演算法」後重試。
+  jump_channel_rejected_hint:
+    en: "The jump server refused to open a forwarded channel to the target host (reason code %{reason}). Many bastion hosts (such as JumpServer) disable SSH port forwarding by policy, so ProxyJump-style jump connections cannot work. Edit this connection, disable “Jump Server”, and connect to the bastion directly (or ask the administrator to allow port forwarding)."
+    zh-CN: "跳板机拒绝了到目标主机的转发通道（原因码 %{reason}）。很多堡垒机（如 JumpServer）默认禁用 SSH 端口转发，ProxyJump 式跳板连接无法工作。请编辑此连接，关闭「跳板机」并直连堡垒机（或联系管理员开放端口转发）。"
+    zh-HK: "跳板機拒絕了到目標主機的轉發通道（原因碼 %{reason}）。很多堡壘機（如 JumpServer）預設停用 SSH 連接埠轉發，ProxyJump 式跳板連線無法工作。請編輯此連線，關閉「跳板機」並直連堡壘機（或聯絡管理員開放連接埠轉發）。"
+  server_reason:
+    en: "Server message: %{reason}"
+    zh-CN: "服务器返回： %{reason}"
+    zh-HK: "伺服器返回： %{reason}"

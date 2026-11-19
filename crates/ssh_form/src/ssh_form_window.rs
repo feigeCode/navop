@@ -35,17 +35,20 @@ use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    FtpParams, JumpServerConfig, PreferredOpenMode, ProxyConfig, ProxyType as StorageProxyType,
-    RemoteFileParams, RemoteFileProtocol as StoredRemoteFileProtocol, SSH_ICON_IDS, SftpAccount,
-    SshAccountExpect, SshAgentForwardKey, SshAuthMethod, SshElevationExpect, SshParams,
-    StoredConnection, StoredTerminalEncoding, StoredTerminalType, Workspace, ssh_os_icon,
+    BastionTarget, FtpParams,
+    JumpMode as StorageJumpMode, JumpServerConfig, PreferredOpenMode, ProxyConfig,
+    ProxyType as StorageProxyType, RemoteFileParams,
+    RemoteFileProtocol as StoredRemoteFileProtocol, SSH_ICON_IDS, SftpAccount, SshAccountExpect,
+    SshAgentForwardKey, SshAuthMethod, SshElevationExpect, SshParams, StoredConnection,
+    StoredTerminalEncoding, StoredTerminalType, Workspace, ssh_os_icon,
 };
 use otp::OtpSecret;
 use rust_i18n::t;
+use sftp_transfer::{jump_connect_config, proxy_connect_config, ssh_auth};
 use ssh::{
     AgentIdentity, ChannelEvent, HostKeyDetails, HostKeyIdentity, HostKeyRejection,
-    HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, RusshClient, SshAuth,
-    SshChannel, SshClient, SshConnectConfig, SshSessionManager,
+    HostKeyVerifier, RusshClient, SshAuth, SshChannel, SshClient, SshConnectConfig,
+    SshSessionManager,
 };
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -276,6 +279,12 @@ pub struct SshFormWindow {
     // 跳板机设置
     enable_jump_server: bool,
     jump_auth_method: AuthMethodSelection,
+    /// 跳板机模式：ProxyJump（默认，标准跳转）或 BastionDirect（堡垒机直连）。
+    jump_mode: StorageJumpMode,
+    /// 堡垒机直连模式下的目标资产 ID（如 JumpServer 的资产 UUID）。
+    bastion_asset_input: Entity<InputState>,
+    /// 堡垒机直连模式下的资产登录账号（如 root）。
+    bastion_account_input: Entity<InputState>,
     jump_host_input: Entity<InputState>,
     jump_port_input: Entity<InputState>,
     jump_username_input: Entity<InputState>,
@@ -641,6 +650,9 @@ fn preferred_open_mode_from_form(open_dual_pane_by_default: bool) -> Option<Pref
 fn load_jump_server_into_form(
     jump: &JumpServerConfig,
     jump_auth_method: &mut AuthMethodSelection,
+    jump_mode: &mut StorageJumpMode,
+    bastion_asset_input: &Entity<InputState>,
+    bastion_account_input: &Entity<InputState>,
     jump_credential_reference: &mut Option<one_core::storage::CredentialReference>,
     enabled: &mut bool,
     jump_host_input: &Entity<InputState>,
@@ -655,6 +667,11 @@ fn load_jump_server_into_form(
 ) {
     *jump_credential_reference = jump.credential_reference.clone();
     *enabled = true;
+    *jump_mode = jump.mode;
+    if let Some(ref bastion) = jump.bastion {
+        bastion_asset_input.update(cx, |s, cx| s.set_value(&bastion.asset, window, cx));
+        bastion_account_input.update(cx, |s, cx| s.set_value(&bastion.account, window, cx));
+    }
     jump_host_input.update(cx, |s, cx| s.set_value(&jump.host, window, cx));
     jump_port_input.update(cx, |s, cx| s.set_value(&jump.port.to_string(), window, cx));
     jump_username_input.update(cx, |s, cx| s.set_value(&jump.username, window, cx));
@@ -800,32 +817,6 @@ fn combined_auth_fields(auth: &SshAuthMethod) -> (String, String, String, String
 }
 
 /// 存储层认证方式 → 运行时认证方式（组合认证递归展开）。
-fn runtime_ssh_auth(auth: &SshAuthMethod) -> SshAuth {
-    match auth {
-        SshAuthMethod::Password { password } => SshAuth::Password(password.clone()),
-        SshAuthMethod::PrivateKey {
-            key_path,
-            passphrase,
-        } => SshAuth::PrivateKey {
-            key_path: key_path.clone(),
-            passphrase: passphrase.clone(),
-            certificate_path: None,
-        },
-        SshAuthMethod::PrivateKeyContent {
-            private_key,
-            passphrase,
-        } => SshAuth::PrivateKeyContent {
-            private_key: private_key.clone(),
-            passphrase: passphrase.clone(),
-            certificate_path: None,
-        },
-        SshAuthMethod::Agent => SshAuth::Agent,
-        SshAuthMethod::Pageant => SshAuth::Pageant,
-        SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
-        SshAuthMethod::None => SshAuth::None,
-        SshAuthMethod::Chain(steps) => SshAuth::Chain(steps.iter().map(runtime_ssh_auth).collect()),
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProxyTypeSelection {
@@ -896,6 +887,11 @@ impl SshFormWindow {
             let mut state = InputState::new(window, cx).placeholder("22");
             state.set_value("22", window, cx);
             state
+        });
+        let bastion_asset_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t!("SSH.bastion_asset_placeholder")));
+        let bastion_account_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("SSH.bastion_account_placeholder"))
         });
         let jump_username_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.username_placeholder")));
@@ -1048,6 +1044,7 @@ impl SshFormWindow {
         let mut otp_secret: Option<OtpSecret> = None;
         let mut sudo_password_auto_fill: Option<bool> = None;
         let mut jump_auth_method = AuthMethodSelection::Password;
+        let mut jump_mode = StorageJumpMode::default();
         // 新建连接向导指定了目标分组时预选该分组（编辑 / 复制连接走下面的回填逻辑）。
         let mut workspace_id: Option<i64> = if is_editing || config.initial_connection.is_some() {
             None
@@ -1202,6 +1199,9 @@ impl SshFormWindow {
                     load_jump_server_into_form(
                         jump,
                         &mut jump_auth_method,
+                        &mut jump_mode,
+                        &bastion_asset_input,
+                        &bastion_account_input,
                         &mut jump_credential_reference,
                         &mut enable_jump_server,
                         &jump_host_input,
@@ -1220,6 +1220,9 @@ impl SshFormWindow {
                     load_jump_server_into_form(
                         jump,
                         &mut jump_auth_method,
+                        &mut jump_mode,
+                        &bastion_asset_input,
+                        &bastion_account_input,
                         &mut jump_credential_reference,
                         &mut enabled,
                         &jump_host_input,
@@ -1447,6 +1450,9 @@ impl SshFormWindow {
             team_select,
             enable_jump_server,
             jump_auth_method,
+            jump_mode: StorageJumpMode::default(),
+            bastion_asset_input,
+            bastion_account_input,
             jump_host_input,
             jump_port_input,
             jump_username_input,
@@ -1576,6 +1582,27 @@ impl SshFormWindow {
             .text()
             .to_string();
         let jump_passphrase = self.jump_passphrase_input.read(cx).text().to_string();
+        // 堡垒机直连模式需要资产与账号才能渲染登录用户名；缺失时退回 ProxyJump，
+        // 避免保存出无法连接的半成品配置。
+        let bastion_asset = self.bastion_asset_input.read(cx).text().to_string();
+        let bastion_account = self.bastion_account_input.read(cx).text().to_string();
+        let jump_mode = match self.jump_mode {
+            StorageJumpMode::BastionDirect
+                if !bastion_asset.is_empty() && !bastion_account.is_empty() =>
+            {
+                StorageJumpMode::BastionDirect
+            }
+            _ => StorageJumpMode::ProxyJump,
+        };
+        let bastion = if jump_mode == StorageJumpMode::BastionDirect {
+            Some(BastionTarget {
+                asset: bastion_asset,
+                account: bastion_account,
+                user_format: Default::default(),
+            })
+        } else {
+            None
+        };
         Some(JumpServerConfig {
             host: jump_host,
             port: jump_port,
@@ -1588,6 +1615,8 @@ impl SshFormWindow {
                 jump_private_key,
                 jump_passphrase,
             ),
+            mode: jump_mode,
+            bastion,
         })
     }
 
@@ -1911,33 +1940,12 @@ impl SshFormWindow {
     }
 
     fn build_ssh_connect_config(&self, params: &SshParams) -> SshConnectConfig {
-        let auth = runtime_ssh_auth(&params.auth_method);
+        let auth = ssh_auth(params.auth_method.clone());
 
-        // 构建跳板机配置
-        let jump_server = params.jump_server.as_ref().map(|jump| {
-            let jump_auth = runtime_ssh_auth(&jump.auth_method);
-            JumpServerConnectConfig {
-                host: jump.host.clone(),
-                port: jump.port,
-                username: jump.username.clone(),
-                auth: jump_auth,
-            }
-        });
-
+        // 构建跳板机配置（统一映射入口，与终端/端口转发/SFTP 工具一致）
+        let jump_server = params.jump_server.as_ref().map(jump_connect_config);
         // 构建代理配置
-        let proxy = params.proxy.as_ref().map(|p| {
-            let proxy_type = match p.proxy_type {
-                StorageProxyType::Socks5 => ProxyType::Socks5,
-                StorageProxyType::Http => ProxyType::Http,
-            };
-            ProxyConnectConfig {
-                proxy_type,
-                host: p.host.clone(),
-                port: p.port,
-                username: p.username.clone(),
-                password: p.password.clone(),
-            }
-        });
+        let proxy = params.proxy.as_ref().map(proxy_connect_config);
 
         SshConnectConfig {
             host: params.host.clone(),
@@ -3256,6 +3264,7 @@ impl SshFormWindow {
     fn render_jump_server_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let enable_jump = self.enable_jump_server;
         let jump_auth_method = self.jump_auth_method;
+        let jump_mode = self.jump_mode;
         let jump_credential_is_manual = self
             .jump_credential_picker
             .read(cx)
@@ -3280,7 +3289,51 @@ impl SshFormWindow {
                 ),
             )
             .when(enable_jump, |this| {
-                this.child(self.render_form_row(
+                this.child(
+                    self.render_form_row(
+                        &t!("SSH.jump_mode"),
+                        h_flex()
+                            .gap_4()
+                            .flex_wrap()
+                            .child(
+                                Radio::new("jump-mode-proxy-jump")
+                                    .label(t!("SSH.jump_mode_proxy_jump").to_string())
+                                    .checked(jump_mode == StorageJumpMode::ProxyJump)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.jump_mode = StorageJumpMode::ProxyJump;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Radio::new("jump-mode-bastion-direct")
+                                    .label(t!("SSH.jump_mode_bastion_direct").to_string())
+                                    .checked(jump_mode == StorageJumpMode::BastionDirect)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.jump_mode = StorageJumpMode::BastionDirect;
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+                )
+                .when(jump_mode == StorageJumpMode::BastionDirect, |this| {
+                    this.child(
+                        h_flex().justify_center().child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.jump_mode_bastion_direct_hint").to_string()),
+                        ),
+                    )
+                    .child(self.render_form_row(
+                        &t!("SSH.bastion_asset"),
+                        self.render_form_input(&self.bastion_asset_input),
+                    ))
+                    .child(self.render_form_row(
+                        &t!("SSH.bastion_account"),
+                        self.render_form_input(&self.bastion_account_input),
+                    ))
+                })
+                .child(self.render_form_row(
                     &t!("SSH.jump_host"),
                     self.render_form_input(&self.jump_host_input),
                 ))
@@ -5113,6 +5166,8 @@ mod tests {
             auth_method: SshAuthMethod::Password {
                 password: "jump-secret".to_string(),
             },
+            mode: Default::default(),
+            bastion: None,
         });
         let initial_connection =
             StoredConnection::new_ssh("disabled-jump".to_string(), params, None);

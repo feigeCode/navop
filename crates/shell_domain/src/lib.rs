@@ -8,6 +8,9 @@ rust_i18n::i18n!("locales", fallback = "en");
 mod connection_forms;
 mod connection_openers;
 mod lifecycle;
+
+/// 应用级 SSH 会话共享服务获取口（见 [`lifecycle`]）。
+pub use lifecycle::ssh_session_service;
 #[cfg(feature = "nsh-host")]
 mod native_terminal;
 mod recording;

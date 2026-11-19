@@ -5,6 +5,7 @@ use super::{SftpConnectionIdentity, SftpTransferState, scheduler::ConnectionLane
 
 mod delete_remote_tests;
 mod download_tests;
+mod jump_config_mapping_tests;
 mod lifecycle_tests;
 mod support;
 mod upload_retry_tests;

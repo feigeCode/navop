@@ -22,8 +22,9 @@ use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 use rust_i18n::t;
 use ssh::{
     AuthFailureMessages, HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyVerifier,
-    ProxyConnectConfig, ProxyType, RusshClient, SshConnectConfig, add_legacy_algorithm_hint,
-    authenticate_with_strategy, build_client_preferred_algorithms_with_legacy, defaults,
+    KeyboardInteractiveTarget, ProxyConnectConfig, ProxyType, RusshClient, SshConnectConfig,
+    add_jump_channel_rejected_hint, add_legacy_algorithm_hint, authenticate_with_strategy,
+    authenticate_with_strategy_for_target, build_client_preferred_algorithms_with_legacy, defaults,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -1282,6 +1283,8 @@ struct SftpHandler {
     identity: HostKeyIdentity,
     host_key_verifier: HostKeyVerifier,
     accepted_server_public_key: Option<Arc<StdMutex<Option<String>>>>,
+    /// 最近一次 CHANNEL_OPEN_FAILURE 的服务器侧描述（russh 错误链只保留原因码枚举）。
+    last_open_failure: Option<Arc<StdMutex<Option<(russh::ChannelOpenFailure, String)>>>>,
 }
 
 impl SftpHandler {
@@ -1290,6 +1293,7 @@ impl SftpHandler {
             identity,
             host_key_verifier,
             accepted_server_public_key: None,
+            last_open_failure: None,
         }
     }
 
@@ -1302,7 +1306,17 @@ impl SftpHandler {
             identity,
             host_key_verifier,
             accepted_server_public_key: Some(accepted_server_public_key),
+            last_open_failure: None,
         }
+    }
+
+    /// 附带共享槽位，捕获服务器拒绝通道时回传的描述文本。
+    fn with_open_failure_capture(
+        mut self,
+        slot: Arc<StdMutex<Option<(russh::ChannelOpenFailure, String)>>>,
+    ) -> Self {
+        self.last_open_failure = Some(slot);
+        self
     }
 }
 
@@ -1366,6 +1380,31 @@ impl client::Handler for SftpHandler {
                 Some(server_public_key.to_string());
         }
         Ok(true)
+    }
+
+    /// 服务器拒绝通道打开请求时的回调：把被 russh 丢弃的描述文本记录到共享槽位。
+    async fn channel_open_failure(
+        &mut self,
+        channel: russh::ChannelId,
+        reason: russh::ChannelOpenFailure,
+        description: &str,
+        _language: &str,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        tracing::warn!(
+            target: "ssh.channel",
+            identity = %self.identity,
+            channel = ?channel,
+            reason = ?reason,
+            description = %description,
+            "SFTP: SSH 服务器拒绝打开通道"
+        );
+        if let Some(slot) = &self.last_open_failure {
+            if let Ok(mut guard) = slot.lock() {
+                *guard = Some((reason, description.to_string()));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -2371,56 +2410,121 @@ impl SftpClient for RusshSftpClient {
             let jump_russh_config = jump_russh_config
                 .clone()
                 .expect("jump config must exist when jump server is configured");
+            // 捕获跳板机在 CHANNEL_OPEN_FAILURE 里回传的描述文本。
+            let open_failure_slot = Arc::new(StdMutex::new(None));
 
-            // 连接跳板机
-            let mut jump_session = if let Some(ref proxy) = ssh_config.proxy {
-                tracing::info!("SFTP: 通过代理 {}:{} 连接跳板机", proxy.host, proxy.port);
-                let stream = sftp_connect_via_proxy(proxy, &jump.host, jump.port).await?;
-                let handler = SftpHandler::new(jump_identity, host_key_verifier.clone());
-                client::connect_stream(jump_russh_config, stream, handler)
-                    .await
-                    .map_err(|error| {
-                        add_legacy_algorithm_hint(error, ssh_config.allow_legacy_algorithms)
-                    })?
-            } else {
-                let handler = SftpHandler::new(jump_identity, host_key_verifier.clone());
-                client::connect(jump_russh_config, (jump.host.as_str(), jump.port), handler)
-                    .await
-                    .map_err(|error| {
-                        add_legacy_algorithm_hint(error, ssh_config.allow_legacy_algorithms)
-                    })?
-            };
+            // 堡垒机直连（BastionDirect）：目标会话就是堡垒机会话本身，
+            // 用户名按预设格式渲染（如 JumpServer 的 user#account#asset），
+            // 不开 direct-tcpip——直连型堡垒机按策略禁用端口转发，
+            // SFTP 子系统由堡垒机代理到资产（Koko DirectConnectSftpMode）。
+            if let Some(bastion_username) = jump.bastion_login_username() {
+                tracing::info!(
+                    "SFTP: 堡垒机直连模式，以渲染用户名登录 {}:{}",
+                    jump.host,
+                    jump.port
+                );
+                let handler = SftpHandler::with_server_public_key_capture(
+                    jump_identity,
+                    host_key_verifier.clone(),
+                    accepted_server_public_key.clone(),
+                );
+                let mut session = if let Some(ref proxy) = ssh_config.proxy {
+                    let stream = sftp_connect_via_proxy(proxy, &jump.host, jump.port).await?;
+                    client::connect_stream(jump_russh_config, stream, handler)
+                        .await
+                        .map_err(|error| {
+                            add_legacy_algorithm_hint(error, ssh_config.allow_legacy_algorithms)
+                        })?
+                } else {
+                    client::connect(jump_russh_config, (jump.host.as_str(), jump.port), handler)
+                        .await
+                        .map_err(|error| {
+                            add_legacy_algorithm_hint(error, ssh_config.allow_legacy_algorithms)
+                        })?
+                };
 
-            // 认证跳板机
-            authenticate_with_strategy(
-                &mut jump_session,
-                &jump.username,
-                &jump.auth,
-                sftp_auth_failure_messages(),
-            )
-            .await?;
-
-            // 通过跳板机转发到目标服务器
-            let forwarded_channel = jump_session
-                .channel_open_direct_tcpip(&ssh_config.host, ssh_config.port as u32, "127.0.0.1", 0)
+                // 认证堡垒机（会话即目标：SFTP 子系统跑在这条会话上）
+                authenticate_with_strategy_for_target(
+                    &mut session,
+                    &bastion_username,
+                    &jump.auth,
+                    sftp_auth_failure_messages(),
+                    KeyboardInteractiveTarget::JumpServer,
+                    ssh_config.keyboard_interactive_responder.clone(),
+                )
                 .await?;
 
-            let handler = SftpHandler::with_server_public_key_capture(
-                target_host_key_identity.clone(),
-                host_key_verifier.clone(),
-                accepted_server_public_key.clone(),
-            );
-            let session = client::connect_stream(
-                target_russh_config,
-                forwarded_channel.into_stream(),
-                handler,
-            )
-            .await
-            .map_err(|error| {
-                add_legacy_algorithm_hint(error, ssh_config.allow_legacy_algorithms)
-            })?;
+                (session, None)
+            } else {
+                // 连接跳板机
+                let mut jump_session = if let Some(ref proxy) = ssh_config.proxy {
+                    tracing::info!("SFTP: 通过代理 {}:{} 连接跳板机", proxy.host, proxy.port);
+                    let stream = sftp_connect_via_proxy(proxy, &jump.host, jump.port).await?;
+                    let handler = SftpHandler::new(jump_identity, host_key_verifier.clone())
+                        .with_open_failure_capture(Arc::clone(&open_failure_slot));
+                    client::connect_stream(jump_russh_config, stream, handler)
+                        .await
+                        .map_err(|error| {
+                            add_legacy_algorithm_hint(error, ssh_config.allow_legacy_algorithms)
+                        })?
+                } else {
+                    let handler = SftpHandler::new(jump_identity, host_key_verifier.clone())
+                        .with_open_failure_capture(Arc::clone(&open_failure_slot));
+                    client::connect(jump_russh_config, (jump.host.as_str(), jump.port), handler)
+                        .await
+                        .map_err(|error| {
+                            add_legacy_algorithm_hint(error, ssh_config.allow_legacy_algorithms)
+                        })?
+                };
 
-            (session, Some(jump_session))
+                // 认证跳板机（与 ssh.rs 终端路径一致：携带 keyboard-interactive 响应器，
+                // 支持跳板机 MFA/OTP，并按跳板机目标归类认证失败提示）
+                authenticate_with_strategy_for_target(
+                    &mut jump_session,
+                    &jump.username,
+                    &jump.auth,
+                    sftp_auth_failure_messages(),
+                    KeyboardInteractiveTarget::JumpServer,
+                    ssh_config.keyboard_interactive_responder.clone(),
+                )
+                .await?;
+
+                // 通过跳板机转发到目标服务器
+                let forwarded_channel = jump_session
+                    .channel_open_direct_tcpip(
+                        &ssh_config.host,
+                        ssh_config.port as u32,
+                        "127.0.0.1",
+                        0,
+                    )
+                    .await
+                    .map_err(|error| {
+                        let description = open_failure_slot
+                            .lock()
+                            .ok()
+                            .and_then(|guard| guard.clone())
+                            .map(|(_, description)| description)
+                            .unwrap_or_default();
+                        add_jump_channel_rejected_hint(anyhow::Error::new(error), &description)
+                    })?;
+
+                let handler = SftpHandler::with_server_public_key_capture(
+                    target_host_key_identity.clone(),
+                    host_key_verifier.clone(),
+                    accepted_server_public_key.clone(),
+                );
+                let session = client::connect_stream(
+                    target_russh_config,
+                    forwarded_channel.into_stream(),
+                    handler,
+                )
+                .await
+                .map_err(|error| {
+                    add_legacy_algorithm_hint(error, ssh_config.allow_legacy_algorithms)
+                })?;
+
+                (session, Some(jump_session))
+            }
         } else if let Some(ref proxy) = ssh_config.proxy {
             tracing::info!("SFTP: 通过代理 {}:{} 连接", proxy.host, proxy.port);
             let stream = sftp_connect_via_proxy(proxy, &ssh_config.host, ssh_config.port).await?;
@@ -2453,14 +2557,20 @@ impl SftpClient for RusshSftpClient {
             (session, None)
         };
 
-        // 认证目标服务器
-        authenticate_with_strategy(
-            &mut session,
-            &ssh_config.username,
-            &ssh_config.auth,
-            sftp_auth_failure_messages(),
-        )
-        .await?;
+        // 认证目标服务器（堡垒机直连模式下会话已在上面认证过，跳过）
+        let bastion_direct = ssh_config
+            .jump_server
+            .as_ref()
+            .is_some_and(|jump| jump.bastion_login_username().is_some());
+        if !bastion_direct {
+            authenticate_with_strategy(
+                &mut session,
+                &ssh_config.username,
+                &ssh_config.auth,
+                sftp_auth_failure_messages(),
+            )
+            .await?;
+        }
 
         let channel = session.channel_open_session().await?;
         channel.request_subsystem(true, "sftp").await?;

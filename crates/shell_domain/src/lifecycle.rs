@@ -27,6 +27,15 @@ impl GlobalSshSessionService {
     }
 }
 
+/// 获取应用级 SSH 会话服务；未安装（测试环境/领域未初始化）时返回 `None`。
+///
+/// Terminal 在连接尝试时经此入口获取共享传输服务；拿不到时回退到
+/// 本地 `SshSessionManager`，保证非装配环境行为不变。
+pub fn ssh_session_service(cx: &App) -> Option<SshSessionService> {
+    cx.try_global::<GlobalSshSessionService>()
+        .map(|global| global.service())
+}
+
 /// 安装 SSH 会话服务，并注册平台退出路径的兜底关停回调。
 pub(crate) fn init(cx: &mut App) {
     assert!(
@@ -37,6 +46,9 @@ pub(crate) fn init(cx: &mut App) {
     let global = GlobalSshSessionService::new();
     let fallback_service = global.service();
     cx.set_global(global);
+
+    // 把共享服务同步注入 Terminal 侧的获取桥，供连接尝试时 acquire 共享租约。
+    terminal::terminal::install_ssh_session_service(fallback_service.clone(), cx);
 
     // 正常退出路径会先 await 关停再退出；这里只是平台强制退出的幂等兜底。
     // GPUI 给退出回调的时间很短，因此它不能承担主要关停职责。
@@ -178,5 +190,34 @@ mod tests {
         let rdp = body.find("rdp_shutdown_task.await").expect("rdp await");
         let ssh = body.find("spawn_ssh_session_shutdown").expect("ssh spawn");
         assert!(rdp < ssh);
+    }
+
+    /// `init` 必须把同一个服务同时装进两个全局：领域自身的
+    /// `GlobalSshSessionService`（关停路径用）与 Terminal 侧的获取桥
+    /// （连接尝试 acquire 共享租约用），保证两条路径拿到同一实例。
+    #[test]
+    fn init_installs_shared_service_into_both_globals() {
+        let source = include_str!("lifecycle.rs").replace("\r\n", "\n");
+        let init_start = source.find("pub(crate) fn init").expect("init fn");
+        let init_end = source[init_start..]
+            .find("\n}\n\n")
+            .map(|offset| init_start + offset)
+            .expect("init fn end");
+        let init = &source[init_start..init_end];
+
+        let set_global = init
+            .find("cx.set_global(global)")
+            .expect("domain global install");
+        let bridge = init
+            .find("terminal::terminal::install_ssh_session_service(")
+            .expect("terminal bridge install");
+        assert!(
+            set_global < bridge,
+            "先装领域全局，再注入 Terminal 获取桥（桥注入依赖全局已就位）"
+        );
+        assert!(
+            init.contains("fallback_service"),
+            "两条注入路径必须共享同一个服务实例"
+        );
     }
 }

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -14,7 +14,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, oneshot};
 use x11_forwarding::{ForwardRequest, X11Proxy, X11ProxyHandle};
 
-use crate::connection_error::add_private_key_load_hint;
+use crate::connection_error::{add_jump_channel_rejected_hint, add_private_key_load_hint};
 use crate::remote_forwarding::RemoteForwardTarget;
 use crate::{
     HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyProxyType, HostKeyRoute,
@@ -261,6 +261,25 @@ fn host_key_proxy_type(proxy_type: ProxyType) -> HostKeyProxyType {
     }
 }
 
+/// 跳板机工作模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum JumpMode {
+    /// 现有语义：在跳板机上开 direct-tcpip 通道连目标（ProxyJump 式）。
+    #[default]
+    ProxyJump,
+    /// 直连型堡垒机：目标会话就是堡垒机会话，用户名按预设格式渲染
+    /// （JumpServer 的 `{user}#{account}#{asset}`），不开端口转发通道。
+    BastionDirect,
+}
+
+/// 堡垒机用户名格式预设
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BastionUserFormat {
+    /// JumpServer：`{user}#{account}#{asset}`
+    #[default]
+    JumpServer,
+}
+
 /// 跳板机连接配置
 #[derive(Clone)]
 pub struct JumpServerConnectConfig {
@@ -268,10 +287,34 @@ pub struct JumpServerConnectConfig {
     pub port: u16,
     pub username: String,
     pub auth: SshAuth,
+    /// 工作模式。缺省 ProxyJump，保持既有调用点语义不变。
+    pub mode: JumpMode,
+    /// 堡垒机直连目标资产（IP / 名称 / UUID）。仅 BastionDirect 时有意义。
+    pub bastion_asset: String,
+    /// 堡垒机直连目标账号（如 root）。仅 BastionDirect 时有意义。
+    pub bastion_account: String,
+    /// 堡垒机登录用户名格式预设。仅 BastionDirect 时有意义。
+    pub bastion_user_format: BastionUserFormat,
+}
+
+impl JumpServerConnectConfig {
+    /// 渲染堡垒机直连登录用户名；ProxyJump 模式返回 `None`（沿用普通用户名）。
+    #[must_use]
+    pub fn bastion_login_username(&self) -> Option<String> {
+        if self.mode != JumpMode::BastionDirect {
+            return None;
+        }
+        match self.bastion_user_format {
+            BastionUserFormat::JumpServer => Some(format!(
+                "{}#{}#{}",
+                self.username, self.bastion_account, self.bastion_asset
+            )),
+        }
+    }
 }
 
 /// 代理类型
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProxyType {
     Socks5,
     Http,
@@ -287,7 +330,7 @@ pub struct ProxyConnectConfig {
     pub password: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SshAuth {
     Password(String),
     PrivateKey {
@@ -508,6 +551,9 @@ struct RusshHandler {
     remote_forward_target: Arc<RwLock<Option<RemoteForwardTarget>>>,
     /// 是否把收到的 `auth-agent@openssh.com` 回连通道桥接到本地 ssh-agent。
     forward_agent: bool,
+    /// 最近一次 CHANNEL_OPEN_FAILURE 的服务器侧描述，供连接流程把被丢弃的
+    /// 描述文本（russh 只回传原因码枚举）补回给用户。
+    last_open_failure: Option<Arc<StdMutex<Option<(russh::ChannelOpenFailure, String)>>>>,
 }
 
 impl RusshHandler {
@@ -524,7 +570,17 @@ impl RusshHandler {
             host_key_verifier,
             remote_forward_target,
             forward_agent,
+            last_open_failure: None,
         }
+    }
+
+    /// 附带一个共享槽位，用于捕获服务器拒绝通道时回传的描述文本。
+    fn with_open_failure_capture(
+        mut self,
+        slot: Arc<StdMutex<Option<(russh::ChannelOpenFailure, String)>>>,
+    ) -> Self {
+        self.last_open_failure = Some(slot);
+        self
     }
 }
 
@@ -611,6 +667,36 @@ impl client::Handler for RusshHandler {
             client::DisconnectReason::ReceivedDisconnect(_) => Ok(()),
             client::DisconnectReason::Error(err) => Err(err),
         }
+    }
+
+    /// 服务器拒绝通道打开请求时的回调。
+    ///
+    /// russh 的 `wait_channel_confirmation` 只把原因码枚举透传给调用方
+    /// （`Error::ChannelOpenFailure(ChannelOpenFailure)`），服务器附带的描述文本
+    /// （如 JumpServer 的 "port forwarding is disabled"）在默认路径上被丢弃。
+    /// 这里记录到共享槽位并打 warn，供连接流程在失败时把描述补回错误链。
+    async fn channel_open_failure(
+        &mut self,
+        channel: russh::ChannelId,
+        reason: russh::ChannelOpenFailure,
+        description: &str,
+        _language: &str,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        tracing::warn!(
+            target: "ssh.channel",
+            identity = %self.identity,
+            channel = ?channel,
+            reason = ?reason,
+            description = %description,
+            "SSH 服务器拒绝打开通道"
+        );
+        if let Some(slot) = &self.last_open_failure {
+            if let Ok(mut guard) = slot.lock() {
+                *guard = Some((reason, description.to_string()));
+            }
+        }
+        Ok(())
     }
 
     /// sshd 为远端 X client 回连的 `x11` 通道：按 fake cookie 找到注册会话，
@@ -1477,7 +1563,7 @@ where
     .await
 }
 
-async fn authenticate_with_strategy_for_target<H>(
+pub async fn authenticate_with_strategy_for_target<H>(
     session: &mut client::Handle<H>,
     username: &str,
     auth: &SshAuth,
@@ -2629,6 +2715,61 @@ impl SshClient for RusshClient {
                 let jump_russh_config = jump_russh_config
                     .clone()
                     .expect("jump config must exist when jump server is configured");
+                // 捕获跳板机在 CHANNEL_OPEN_FAILURE 里回传的描述文本，
+                // russh 错误链只保留原因码枚举，描述需要经 Handler 钩子找回。
+                let open_failure_slot = Arc::new(StdMutex::new(None));
+
+                // 堡垒机直连（BastionDirect）：目标会话就是堡垒机会话本身，
+                // 用户名按预设格式渲染（如 JumpServer 的 user#account#asset），
+                // 不开 direct-tcpip 通道——直连型堡垒机按策略禁用端口转发。
+                if let Some(bastion_username) = jump.bastion_login_username() {
+                    tracing::info!(
+                        "堡垒机直连模式：以渲染用户名登录 {}:{}",
+                        jump.host,
+                        jump.port
+                    );
+                    let handler = RusshHandler::new(
+                        jump_identity,
+                        host_key_verifier.clone(),
+                        x11_handle.clone(),
+                        Arc::new(RwLock::new(None)),
+                        config.forward_agent,
+                    )
+                    .with_open_failure_capture(Arc::clone(&open_failure_slot));
+                    let mut session = if let Some(ref proxy) = config.proxy {
+                        let stream = connect_via_proxy(proxy, &jump.host, jump.port).await?;
+                        client::connect_stream(jump_russh_config, stream, handler)
+                            .await
+                            .map_err(|error| {
+                                add_legacy_algorithm_hint(error, config.allow_legacy_algorithms)
+                            })?
+                    } else {
+                        client::connect(jump_russh_config, (jump.host.as_str(), jump.port), handler)
+                            .await
+                            .map_err(|error| {
+                                add_legacy_algorithm_hint(error, config.allow_legacy_algorithms)
+                            })?
+                    };
+
+                    // 认证堡垒机（会话即目标：PTY/exec/SFTP 都跑在这条会话上）
+                    authenticate_with_strategy_for_target(
+                        &mut session,
+                        &bastion_username,
+                        &jump.auth,
+                        default_auth_failure_messages(),
+                        KeyboardInteractiveTarget::JumpServer,
+                        config.keyboard_interactive_responder.clone(),
+                    )
+                    .await?;
+
+                    return Ok(Self {
+                        session,
+                        _jump_session: None,
+                        x11_proxy: x11_proxy.clone(),
+                        remote_forward_target: Arc::clone(&remote_forward_target),
+                        forward_agent: config.forward_agent,
+                    });
+                }
 
                 // 先连接到跳板机（可能通过代理）
                 let jump_session = if let Some(ref proxy) = config.proxy {
@@ -2640,7 +2781,8 @@ impl SshClient for RusshClient {
                         None,
                         Arc::new(RwLock::new(None)),
                         config.forward_agent,
-                    );
+                    )
+                    .with_open_failure_capture(Arc::clone(&open_failure_slot));
                     client::connect_stream(jump_russh_config, stream, handler)
                         .await
                         .map_err(|error| {
@@ -2654,7 +2796,8 @@ impl SshClient for RusshClient {
                         None,
                         Arc::new(RwLock::new(None)),
                         config.forward_agent,
-                    );
+                    )
+                    .with_open_failure_capture(Arc::clone(&open_failure_slot));
                     client::connect(jump_russh_config, addrs, handler)
                         .await
                         .map_err(|error| {
@@ -2678,7 +2821,16 @@ impl SshClient for RusshClient {
                 tracing::info!("通过跳板机转发到目标服务器 {}:{}", config.host, config.port);
                 let forwarded_channel = jump_session
                     .channel_open_direct_tcpip(&config.host, config.port as u32, "127.0.0.1", 0)
-                    .await?;
+                    .await
+                    .map_err(|error| {
+                        let description = open_failure_slot
+                            .lock()
+                            .ok()
+                            .and_then(|guard| guard.clone())
+                            .map(|(_, description)| description)
+                            .unwrap_or_default();
+                        add_jump_channel_rejected_hint(anyhow::Error::new(error), &description)
+                    })?;
 
                 // 使用转发通道创建SSH会话
                 let handler = RusshHandler::new(
@@ -2901,14 +3053,15 @@ mod port_forward_tests {
     use tempfile::TempDir;
     use tokio::net::TcpListener;
 
-    use crate::{HostKeyPolicy, LegacyAlgorithmRequired};
+    use crate::{HostKeyPolicy, JumpChannelRejected, LegacyAlgorithmRequired};
 
     use super::{
-        Algorithm, EcdsaCurve, HostKeyDetails, HostKeyIdentity, HostKeyProxyType, HostKeyRoute,
-        HostKeyVerifier, JumpServerConnectConfig, Preferred, PrivateKey, ProxyConnectConfig,
-        ProxyType, RusshClient, SshAuth, SshClient, SshConnectConfig,
-        build_client_preferred_algorithms_with_legacy, build_local_forward_bind_addr,
-        build_russh_client_config, legacy_gex_params, normalize_disconnect_result,
+        Algorithm, BastionUserFormat, EcdsaCurve, HostKeyDetails, HostKeyIdentity,
+        HostKeyProxyType, HostKeyRoute, HostKeyVerifier, JumpMode, JumpServerConnectConfig,
+        Preferred, PrivateKey, ProxyConnectConfig, ProxyType, RusshClient, SshAuth, SshClient,
+        SshConnectConfig, build_client_preferred_algorithms_with_legacy,
+        build_local_forward_bind_addr, build_russh_client_config, legacy_gex_params,
+        normalize_disconnect_result,
     };
 
     #[derive(Clone)]
@@ -3031,6 +3184,10 @@ mod port_forward_tests {
             port: 2222,
             username: "jumper".to_owned(),
             auth: SshAuth::Agent,
+            mode: JumpMode::default(),
+            bastion_asset: String::new(),
+            bastion_account: String::new(),
+            bastion_user_format: BastionUserFormat::default(),
         });
         config.proxy = Some(ProxyConnectConfig {
             proxy_type: ProxyType::Http,
@@ -3077,6 +3234,10 @@ mod port_forward_tests {
             port: 22,
             username: "jumper".to_owned(),
             auth: SshAuth::Agent,
+            mode: super::JumpMode::default(),
+            bastion_asset: String::new(),
+            bastion_account: String::new(),
+            bastion_user_format: super::BastionUserFormat::default(),
         });
 
         assert_eq!(
@@ -3261,6 +3422,10 @@ mod port_forward_tests {
             port: 22,
             username: "jumper".to_owned(),
             auth: SshAuth::Agent,
+            mode: super::JumpMode::default(),
+            bastion_asset: String::new(),
+            bastion_account: String::new(),
+            bastion_user_format: super::BastionUserFormat::default(),
         });
         config.allow_legacy_algorithms = true;
         let target_identity = config.target_host_key_identity();
@@ -3978,6 +4143,123 @@ zsXyAAAAAAE=
         let result = normalize_disconnect_result(Err(russh::Error::SendError), false);
 
         assert!(result.is_err());
+    }
+
+    /// 跳板机测试服务器：接受登录，但像 JumpServer Koko 一样拒绝所有 direct-tcpip 通道。
+    #[derive(Clone)]
+    struct ForwardingDenyingJumpServer;
+
+    impl russh::server::Server for ForwardingDenyingJumpServer {
+        type Handler = Self;
+
+        fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self::Handler {
+            self.clone()
+        }
+    }
+
+    impl russh::server::Handler for ForwardingDenyingJumpServer {
+        type Error = anyhow::Error;
+
+        async fn auth_password(&mut self, _: &str, _: &str) -> Result<Auth, Self::Error> {
+            Ok(Auth::Accept)
+        }
+
+        async fn channel_open_direct_tcpip(
+            &mut self,
+            _channel: russh::Channel<russh::server::Msg>,
+            _host_to_connect: &str,
+            _port_to_connect: u32,
+            _originator_address: &str,
+            _originator_port: u32,
+            reply: russh::server::ChannelOpenHandle,
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            // 仿真 JumpServer：管理性拒绝端口转发，并附上服务器侧描述文本。
+            reply
+                .reject(russh::ChannelOpenFailure::Other {
+                    code: russh::ChannelOpenFailure::AdministrativelyProhibited.code(),
+                    reason: "port forwarding is disabled".to_string(),
+                })
+                .await;
+            Ok(())
+        }
+    }
+
+    async fn spawn_forwarding_denying_jump_server() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    ) {
+        let socket = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("forwarding-denying jump server should bind");
+        let address = socket
+            .local_addr()
+            .expect("forwarding-denying jump server should have an address");
+        let ed25519 = PrivateKey::random(&mut rand_010::rng(), Algorithm::Ed25519)
+            .expect("Ed25519 host key should be generated");
+        let server_config = Arc::new(russh::server::Config {
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            keys: vec![ed25519],
+            ..Default::default()
+        });
+        let server_task = tokio::spawn(async move {
+            let mut server = ForwardingDenyingJumpServer;
+            server.run_on_socket(server_config, &socket).await
+        });
+        (address, server_task)
+    }
+
+    fn jump_denied_test_config(jump_address: std::net::SocketAddr) -> SshConnectConfig {
+        SshConnectConfig {
+            host: "10.255.255.1".to_owned(),
+            port: 22,
+            username: "tester".to_owned(),
+            auth: SshAuth::Password("password".to_owned()),
+            timeout: Some(Duration::from_secs(10)),
+            keepalive_interval: None,
+            keepalive_max: None,
+            jump_server: Some(JumpServerConnectConfig {
+                host: jump_address.ip().to_string(),
+                port: jump_address.port(),
+                username: "jump".to_owned(),
+                auth: SshAuth::Password("password".to_owned()),
+                mode: JumpMode::default(),
+                bastion_asset: String::new(),
+                bastion_account: String::new(),
+                bastion_user_format: BastionUserFormat::default(),
+            }),
+            proxy: None,
+            keyboard_interactive_responder: None,
+            host_key_verifier: HostKeyVerifier::insecure(),
+            x11_forwarding: false,
+            allow_legacy_algorithms: false,
+            forward_agent: false,
+            agent_identities: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn jump_direct_tcpip_rejection_surfaces_hint_and_server_description() {
+        let (jump_address, server_task) = spawn_forwarding_denying_jump_server().await;
+
+        let result = RusshClient::connect(jump_denied_test_config(jump_address)).await;
+        server_task.abort();
+
+        let Err(error) = result else {
+            panic!("a jump server rejecting direct-tcpip must fail the connection");
+        };
+        assert!(
+            error.downcast_ref::<JumpChannelRejected>().is_some(),
+            "rejection should be wrapped as JumpChannelRejected, got: {error:#}"
+        );
+        assert!(error.to_string().contains("Failed to open channel"));
+        // 服务器描述必须透传，否则用户只会看到枚举名。
+        assert!(
+            error.to_string().contains("port forwarding is disabled"),
+            "server description should be surfaced, got: {error:#}"
+        );
+        assert!(error.to_string().contains("jump"));
     }
 }
 

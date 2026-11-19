@@ -464,6 +464,8 @@ mod tests {
                     password: "jump-secret".to_string(),
                 },
                 credential_reference: None,
+                mode: Default::default(),
+                bastion: None,
             }),
             proxy: None,
             os_id: None,

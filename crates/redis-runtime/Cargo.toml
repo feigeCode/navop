@@ -9,6 +9,7 @@ async-trait.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 futures.workspace = true
+connection_tunnel.workspace = true
 one-core.workspace = true
 rust-i18n.workspace = true
 serde.workspace = true
