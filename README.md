@@ -1,15 +1,3 @@
-## Sponsors
-
-<p align="center">
-  <a href="https://www.infistar.cc/register?aff=TKUN9HBM&amp;ref_source=link">
-    <img src="resources/sponsors/navop-infistar-en.png" alt="Navop × Infistar.cc — one API key for Claude, GPT, Gemini, Grok, DeepSeek, and more" width="100%" />
-  </a>
-</p>
-
-Navop × Infistar.cc | Use one API key for Claude, GPT, Gemini, Grok, DeepSeek, and more in Navop’s SQL generation and AI chat. Save up to 99% off official pricing, with all models coming from verifiable official channels. Choose from 200+ models across 16 brands, backed by 1,000+ redundant routes and automatic failover. [Sign up through Navop’s link and get CNY 5 in trial credit](https://www.infistar.cc/register?aff=TKUN9HBM&ref_source=link).
-
----
-
 <div align="center">
   <p><img src="resources/navop-icon.png" alt="Navop" width="120" /></p>
   <h1>Navop</h1>
@@ -65,6 +53,16 @@ Navop × Infistar.cc | Use one API key for Claude, GPT, Gemini, Grok, DeepSeek, 
 
   <p><img src="app.png" alt="Navop overview" width="820" /></p>
 </div>
+
+## Sponsors
+
+<p align="center">
+  <a href="https://www.infistar.cc/register?aff=TKUN9HBM&amp;ref_source=link">
+    <img src="resources/sponsors/navop-infistar-en.png" alt="Navop × Infistar.cc — one API key for Claude, GPT, Gemini, Grok, DeepSeek, and more" width="100%" />
+  </a>
+</p>
+
+Navop × Infistar.cc | Use one API key for Claude, GPT, Gemini, Grok, DeepSeek, and more in Navop’s SQL generation and AI chat. Save up to 99% off official pricing, with all models coming from verifiable official channels. Choose from 200+ models across 16 brands, backed by 1,000+ redundant routes and automatic failover. [Sign up through Navop’s link and get CNY 5 in trial credit](https://www.infistar.cc/register?aff=TKUN9HBM&ref_source=link).
 
 ## What Navop is
 
