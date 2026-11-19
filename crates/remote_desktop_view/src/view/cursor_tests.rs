@@ -141,3 +141,66 @@ fn native_cursor_management_is_opt_in_for_rdp_only() {
     assert!(!RemoteCursorState::default().manage_native_cursor);
     assert!(RemoteCursorState::new(true).manage_native_cursor);
 }
+
+/// Regression: a Windows native (mstscax) session draws and sets its own
+/// session pointer. The view must not touch the OS cursor there — doing so on
+/// every frame made the visible cursor flip between the local arrow and the
+/// remote cursor (e.g. the resize arrow on a remote window border).
+#[test]
+fn native_presentation_does_not_touch_the_os_cursor() {
+    use crate::native_cursor::probe::{Call, count, reset};
+
+    reset();
+    let mut state = RemoteCursorState::new(true);
+    state.set_native_cursor_owned(true);
+    state.install(cursor(1)).unwrap();
+    state.set_pointer_hovered(true);
+    state.set_position(25, 40);
+    state.promote_latest();
+    let painted_while_owned = count(Call::Hide);
+
+    // Hand the cursor over to the native presentation, then keep driving the
+    // state exactly like an active session does.
+    state.set_native_cursor_owned(false);
+    reset();
+    state.promote_latest();
+    state.show_default();
+    state.hide();
+    state.set_position(26, 41);
+    state.set_pointer_hovered(false);
+    state.reset_session();
+
+    assert!(
+        painted_while_owned > 0,
+        "the canvas presentation must hide the OS cursor it replaces"
+    );
+    assert_eq!(
+        0,
+        count(Call::Hide) + count(Call::Restore),
+        "a Windows native session owns the OS cursor; navop must not call SetCursor"
+    );
+}
+
+#[test]
+fn handing_the_os_cursor_back_only_undoes_a_hide_navop_applied() {
+    use crate::native_cursor::probe::{Call, count, reset};
+
+    // Nothing was hidden, so giving the cursor up must not touch it. Taking
+    // ownership first adopts the current state for the canvas presentation,
+    // so reset after that to isolate the hand-back.
+    let mut state = RemoteCursorState::new(true);
+    state.set_native_cursor_owned(true);
+    reset();
+    state.set_native_cursor_owned(false);
+    assert_eq!(0, count(Call::Restore));
+
+    // A hidden cursor must be restored before the native presentation takes over.
+    state.set_native_cursor_owned(true);
+    state.install(cursor(1)).unwrap();
+    state.set_pointer_hovered(true);
+    state.set_position(25, 40);
+    state.promote_latest();
+    reset();
+    state.set_native_cursor_owned(false);
+    assert_eq!(1, count(Call::Restore));
+}
