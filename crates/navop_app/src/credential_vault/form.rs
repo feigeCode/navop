@@ -1,5 +1,11 @@
-use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, SharedString, Window};
-use gpui_component::input::{InputState, TextareaState};
+use gpui::{
+    App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, SharedString, Window,
+};
+use gpui_component::{
+    WindowExt,
+    input::{InputState, TextareaState},
+    notification::Notification,
+};
 use one_core::storage::{CredentialEntry, SshAccountExpect, TerminalExpectSend};
 use regex::Regex;
 use rust_i18n::t;
@@ -36,6 +42,32 @@ pub(crate) struct CredentialForm {
 }
 
 impl CredentialForm {
+    /// 生成一对 Ed25519 密钥：私钥写进表单，公钥复制到剪贴板并提示指纹。
+    ///
+    /// 使用凭据名称作为密钥注释，方便在 `authorized_keys` 里辨认来源。
+    pub(super) fn generate_ed25519_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let comment = self.name_input.read(cx).value().trim().to_string();
+        let key = one_core::storage::generate_ed25519_key(&comment);
+
+        self.private_key_content_input.update(cx, |state, cx| {
+            state.set_value(key.private_key_openssh.clone(), window, cx);
+        });
+        cx.write_to_clipboard(ClipboardItem::new_string(key.public_key_openssh));
+
+        window.push_notification(
+            Notification::success(
+                t!(
+                    "CredentialForm.generate_key_success",
+                    fingerprint = key.fingerprint
+                )
+                .to_string(),
+            )
+            .autohide(true),
+            cx,
+        );
+        cx.notify();
+    }
+
     pub(crate) fn new(
         existing: Option<CredentialEntry>,
         window: &mut Window,

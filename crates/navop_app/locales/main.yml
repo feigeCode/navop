@@ -6196,6 +6196,22 @@ CredentialForm:
     en: Store a local key path or encrypted private key content.
     zh-CN: 保存本机私钥路径，或加密保存私钥内容。
     zh-HK: 儲存本機私鑰路徑，或加密儲存私鑰內容。
+  generate_key:
+    en: Generate SSH Key
+    zh-CN: 生成 SSH 密钥
+    zh-HK: 產生 SSH 金鑰
+  generate_key_description:
+    en: Creates an Ed25519 key pair. The private key fills the form below and the public key goes to your clipboard.
+    zh-CN: 生成一对 Ed25519 密钥：私钥自动填入下方表单，公钥复制到剪贴板。
+    zh-HK: 產生一對 Ed25519 金鑰：私鑰會填入下方表單，公鑰複製到剪貼簿。
+  generate_key_action:
+    en: Generate
+    zh-CN: 生成
+    zh-HK: 產生
+  generate_key_success:
+    en: Key generated and public key copied. Fingerprint %{fingerprint}
+    zh-CN: 已生成密钥并复制公钥，指纹：%{fingerprint}
+    zh-HK: 已產生金鑰並複製公鑰，指紋：%{fingerprint}
   private_key_path:
     en: Private Key Path
     zh-CN: 私钥路径
