@@ -26,12 +26,13 @@ use font_kit::{file_type::FileType, font::Font};
 use gpui::http_client::{AsyncBody, Method, Request};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, Global, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement,
-    PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window, div,
+    AnyElement, App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, FontWeight, Global, InteractiveElement, IntoElement, KeyDownEvent, Keystroke,
+    ParentElement, PathPromptOptions, Render, SharedString, StatefulInteractiveElement,
+    StyleRefinement, Styled, WeakEntity, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, AxisExt, Disableable, Icon, IndexPath, Sizable, Size, WindowExt,
+    ActiveTheme, AxisExt, Disableable, Icon, IndexPath, Sizable, Size, StyledExt, WindowExt,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     group_box::GroupBoxVariant,
@@ -618,6 +619,7 @@ pub struct SettingsPanel {
     size: Size,
     group_variant: GroupBoxVariant,
     initial_page: InitialPage,
+    selected_page: Option<usize>,
     font_options_cache: Option<FontOptionsCache>,
 }
 
@@ -667,8 +669,138 @@ impl SettingsPanel {
             size: Size::default(),
             group_variant: GroupBoxVariant::Outline,
             initial_page,
+            selected_page: None,
             font_options_cache: None,
         }
+    }
+
+    fn settings_nav_items(&self, cx: &mut App) -> (Vec<SharedString>, usize, usize) {
+        let mut titles = vec![SharedString::from(t!("Settings.General.title"))];
+        titles.extend(app_kit::registry().settings_page_titles(cx));
+        let pages_before_rest = titles.len();
+        titles.extend([
+            SharedString::from(t!("Settings.Agent.title")),
+            SharedString::from(t!("Settings.AcpAgents.title")),
+            SharedString::from(t!("Settings.Mcp.title")),
+            SharedString::from(t!("Settings.Sync.title")),
+            SharedString::from(t!("Settings.Shortcuts.title")),
+            SharedString::from(t!("LlmProviders.title")),
+            SharedString::from(t!("Settings.Account.title")),
+            SharedString::from(t!("Settings.About.title")),
+        ]);
+        (
+            titles,
+            sync_page_index(pages_before_rest),
+            llm_providers_page_index(pages_before_rest),
+        )
+    }
+
+    fn effective_page_index(&self, sync_page_ix: usize, llm_page_ix: usize) -> usize {
+        self.selected_page.unwrap_or(match self.initial_page {
+            InitialPage::First => 0,
+            InitialPage::Sync => sync_page_ix,
+            InitialPage::LlmProviders => llm_page_ix,
+        })
+    }
+
+    /// Shell-owned settings category column.
+    pub(crate) fn render_secondary_column(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (titles, sync_page_ix, llm_page_ix) = self.settings_nav_items(cx);
+        let selected = self
+            .effective_page_index(sync_page_ix, llm_page_ix)
+            .min(titles.len().saturating_sub(1));
+        if self.selected_page != Some(selected) {
+            self.selected_page = Some(selected);
+        }
+        let view = cx.entity();
+        v_flex()
+            .id("settings-secondary-column")
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .bg(cx.theme().sidebar)
+            .text_color(cx.theme().sidebar_foreground)
+            .child(
+                h_flex()
+                    .h(one_ui::theme_geometry().layout.embedded_panel_header)
+                    .flex_shrink_0()
+                    .items_center()
+                    .px_3()
+                    .border_b_1()
+                    .border_color(cx.theme().sidebar_border)
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_semibold()
+                            .child(t!("Settings.title").to_string()),
+                    ),
+            )
+            .child(
+                div()
+                    .id("settings-secondary-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_y_scroll()
+                    .p_2()
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .gap_1()
+                            .children(titles.into_iter().enumerate().map(|(page_ix, title)| {
+                                let active = page_ix == selected;
+                                let view_for_click = view.clone();
+                                let view_for_key = view.clone();
+                                div()
+                                    .id(("settings-nav-page", page_ix))
+                                    .w_full()
+                                    .h(one_ui::theme_geometry().control.medium)
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_2()
+                                    .rounded_md()
+                                    .text_sm()
+                                    .cursor_pointer()
+                                    .focusable()
+                                    .when(active, |row| {
+                                        row.bg(cx.theme().sidebar_accent)
+                                            .text_color(cx.theme().sidebar_accent_foreground)
+                                            .font_weight(FontWeight::MEDIUM)
+                                    })
+                                    .when(!active, |row| {
+                                        row.hover(|style| style.bg(cx.theme().list_hover))
+                                    })
+                                    .on_click(move |_, window, cx| {
+                                        view_for_click.update(cx, |panel, cx| {
+                                            if panel.selected_page != Some(page_ix) {
+                                                panel.selected_page = Some(page_ix);
+                                                cx.notify();
+                                            }
+                                        });
+                                        window.refresh();
+                                    })
+                                    .on_key_down(move |event, window, cx| {
+                                        if matches!(event.keystroke.key.as_str(), "enter" | " ") {
+                                            view_for_key.update(cx, |panel, cx| {
+                                                if panel.selected_page != Some(page_ix) {
+                                                    panel.selected_page = Some(page_ix);
+                                                    cx.notify();
+                                                }
+                                            });
+                                            window.refresh();
+                                        }
+                                    })
+                                    .child(div().flex_1().min_w_0().truncate().child(title))
+                            })),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// 取字体下拉选项，返回 `(应用字体, 等宽字体)`。
@@ -2209,18 +2341,24 @@ impl Render for SettingsPanel {
             init_settings(cx);
         }
 
-        let (pages, sync_page_ix, llm_providers_page_ix) = self.setting_pages(window, cx);
-        let initial_page = self.initial_page;
-        let (settings_id, page_ix) = match initial_page {
-            InitialPage::Sync => ("main-app-settings-sync", sync_page_ix),
-            InitialPage::LlmProviders => ("main-app-settings-llm-providers", llm_providers_page_ix),
-            InitialPage::First => ("main-app-settings", 0),
-        };
+        let (_, sync_page_ix, llm_providers_page_ix) = self.settings_nav_items(cx);
+        let selected_page = self.effective_page_index(sync_page_ix, llm_providers_page_ix);
+        self.selected_page = Some(selected_page);
+        let (pages, _, _) = self.setting_pages(window, cx);
+        let page_ix = selected_page.min(pages.len().saturating_sub(1));
+        let settings_id = SharedString::from(format!("main-app-settings-{page_ix}"));
+        // The shell owns the one and only secondary column. Keep this fallback
+        // sidebar out of layout when the panel is opened from the application
+        // shell (`Settings` itself has no public "hide sidebar" switch).
+        let hidden_sidebar_style = StyleRefinement::default().hidden();
 
         div().track_focus(&self.focus_handle).size_full().child(
             Settings::new(settings_id)
                 .with_size(self.size)
                 .with_group_variant(self.group_variant)
+                .sidebar_width(px(0.0))
+                .sidebar_size_range(px(0.0)..px(0.0))
+                .sidebar_style(&hidden_sidebar_style)
                 .default_selected_index(SelectIndex {
                     page_ix,
                     ..Default::default()

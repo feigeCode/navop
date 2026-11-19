@@ -196,6 +196,18 @@ impl DomainRegistry {
         pages.into_iter().map(|(_, page)| page).collect()
     }
 
+    /// Lightweight settings page metadata in the same order as
+    /// [`Self::settings_pages`].
+    pub fn settings_page_titles(&self, cx: &mut App) -> Vec<SharedString> {
+        let mut titles: Vec<(i32, SharedString)> = self
+            .settings_providers
+            .iter()
+            .flat_map(|provider| provider.page_titles(cx))
+            .collect();
+        titles.sort_by_key(|(order, _)| *order);
+        titles.into_iter().map(|(_, title)| title).collect()
+    }
+
     pub fn domains(&self) -> &[DomainId] {
         &self.domains
     }

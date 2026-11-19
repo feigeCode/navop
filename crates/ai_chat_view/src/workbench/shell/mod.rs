@@ -75,6 +75,8 @@ pub struct WorkbenchShellConfig {
     pub session_nav: Option<AnyView>,
     /// 会话来源面板；提供后外壳直接渲染会话列表并订阅其刷新。
     pub session_source: Option<Entity<DefaultAgentChatPanel>>,
+    /// 应用外壳已经统一承载第二列时，工作台不再在内容区重复绘制会话导航。
+    pub nav_hosted_by_shell: bool,
     /// 初始布局（含面板落位与会话栏折叠）。宿主通常由持久化设置还原。
     pub initial_state: WorkbenchState,
     /// 主题覆盖；`None` 时取 `cx.theme()`。
@@ -96,6 +98,7 @@ pub struct WorkbenchShell {
     >,
     pub(super) nav: Option<AnyView>,
     pub(super) session_source: Option<Entity<DefaultAgentChatPanel>>,
+    pub(super) nav_hosted_by_shell: bool,
     /// 会话搜索框；仅内建会话列表（`session_source`）存在时创建。
     pub(super) search_input: Option<Entity<InputState>>,
     /// 搜索串（已同步自 `search_input`）。
@@ -131,6 +134,7 @@ impl WorkbenchShell {
             panels,
             session_nav,
             session_source,
+            nav_hosted_by_shell,
             initial_state,
             theme,
             subscriptions: mut external_subscriptions,
@@ -221,6 +225,7 @@ impl WorkbenchShell {
             lazy_panels,
             nav: session_nav,
             session_source,
+            nav_hosted_by_shell,
             search_input,
             search_query,
             theme,
@@ -597,6 +602,17 @@ impl WorkbenchShell {
         self.commit(changed, cx);
     }
 
+    pub fn set_nav_hosted_by_shell(&mut self, hosted: bool, cx: &mut Context<Self>) {
+        if self.nav_hosted_by_shell != hosted {
+            self.nav_hosted_by_shell = hosted;
+            cx.notify();
+        }
+    }
+
+    pub fn nav_hosted_by_shell(&self) -> bool {
+        self.nav_hosted_by_shell
+    }
+
     /// 切换工作区分组的展开/收起。`key` 为组根目录字符串，未分组传
     /// [`GROUP_KEY_UNGROUPED`]。
     pub fn toggle_workspace_group(&mut self, key: &str, cx: &mut Context<Self>) {
@@ -762,11 +778,19 @@ mod tests {
             panels,
             session_nav: None,
             session_source: None,
+            nav_hosted_by_shell: false,
             initial_state: WorkbenchState::new(WorkbenchPanelKind::Chat),
             theme: None,
             subscriptions: Vec::new(),
             workspace_root: Some(std::path::PathBuf::from("/tmp/navop-workbench-test")),
         }
+    }
+
+    #[test]
+    fn shell_hosted_navigation_is_not_drawn_twice() {
+        let impls = include_str!("impls.rs");
+        assert!(impls.contains("!self.nav_hosted_by_shell"));
+        assert!(impls.contains("pub fn render_secondary_column"));
     }
 
     #[gpui::test]

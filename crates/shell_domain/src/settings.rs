@@ -26,6 +26,13 @@ impl SettingsSectionProvider for ShellSettingsProvider {
     fn pages(&self, cx: &mut App) -> Vec<(i32, SettingPage)> {
         vec![(TERMINAL_SETTINGS_ORDER, terminal_settings_page(cx))]
     }
+
+    fn page_titles(&self, _cx: &mut App) -> Vec<(i32, SharedString)> {
+        vec![(
+            TERMINAL_SETTINGS_ORDER,
+            SharedString::from(t!("Settings.terminal.title")),
+        )]
+    }
 }
 
 /// 终端设置页：终端外观/行为 + 本地终端默认 shell 与自定义终端。

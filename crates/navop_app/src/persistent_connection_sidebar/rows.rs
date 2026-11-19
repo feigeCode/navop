@@ -414,12 +414,36 @@ impl PersistentConnectionSidebar {
                     },
                 ))
             })
-            .when(can_drag, |this| {
+            .when(can_drag && !batch_mode, |this| {
                 this.on_drag(drag, |drag, _, _, cx| {
                     cx.stop_propagation();
                     cx.new(|_| drag.clone())
                 })
             })
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    if batch_mode && can_drag {
+                        this.home_page
+                            .update(cx, |home, _| home.begin_drag_selection(id));
+                    }
+                }),
+            )
+            .on_mouse_move(
+                cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
+                    if batch_mode && can_drag && event.dragging() {
+                        this.home_page
+                            .update(cx, |home, cx| home.drag_toggle_connection(Some(id), cx));
+                    }
+                }),
+            )
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.home_page
+                        .update(cx, |home, _| home.finish_drag_selection());
+                }),
+            )
             .on_double_click({
                 let view_for_collapse = view_for_select.clone();
                 move |_, window, cx| {

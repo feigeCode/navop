@@ -83,7 +83,9 @@ impl NotesView {
                     .min_h_0()
                     .overflow_hidden()
                     .items_start()
-                    .child(self.render_sidebar(cx))
+                    .when(!self.sidebar_hosted_by_shell, |layout| {
+                        layout.child(self.render_sidebar(cx))
+                    })
                     .child(self.render_editor(cx)),
             )
             .into_any_element()
@@ -91,13 +93,7 @@ impl NotesView {
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let collapsed = self.sidebar_collapsed;
-        let view = cx.entity();
-        let rows = self
-            .rows
-            .iter()
-            .map(|row| self.render_row(row, cx))
-            .collect::<Vec<_>>();
-        let rows_are_empty = rows.is_empty();
+        let body = (!collapsed).then(|| self.render_sidebar_content(cx));
         v_flex()
             .relative()
             .w(if collapsed {
@@ -112,87 +108,7 @@ impl NotesView {
             .overflow_hidden()
             .border_r_1()
             .border_color(cx.theme().border)
-            .when(!collapsed, |this| this.child(self.render_toolbar(cx)))
-            .when(!collapsed, |this| {
-                this.child(
-                    div()
-                        .flex_1()
-                        .h_full()
-                        .min_h_0()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .child(
-                            v_flex()
-                                .size_full()
-                                .p_2()
-                                .gap_1()
-                                .overflow_y_scrollbar()
-                                .context_menu(move |menu, window, cx| {
-                                    let (target, directory, row) = {
-                                        let notes = view.read(cx);
-                                        let row =
-                                            notes.context_menu_path.as_ref().and_then(|path| {
-                                                notes
-                                                    .rows
-                                                    .iter()
-                                                    .find(|row| row.relative_path == *path)
-                                                    .cloned()
-                                            });
-                                        match row {
-                                            Some(row) => (
-                                                sidebar_context_target(&row),
-                                                creation_directory(&row),
-                                                Some(row),
-                                            ),
-                                            None => (
-                                                SidebarContextTarget::Background,
-                                                notes.current_directory.clone(),
-                                                None,
-                                            ),
-                                        }
-                                    };
-                                    view.update(cx, |notes, _| {
-                                        notes.context_menu_path = None;
-                                    });
-                                    build_sidebar_context_menu(
-                                        menu,
-                                        view.clone(),
-                                        target,
-                                        directory,
-                                        row,
-                                        window,
-                                        cx,
-                                    )
-                                })
-                                .children(rows)
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .min_h(px(64.0))
-                                        .items_center()
-                                        .justify_center()
-                                        .on_mouse_down(
-                                            MouseButton::Right,
-                                            cx.listener(|view, _, _, cx| {
-                                                view.context_menu_path = None;
-                                                cx.notify();
-                                            }),
-                                        )
-                                        .when(rows_are_empty, |this| {
-                                            this.gap_1()
-                                                .text_sm()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(t!("Notes.empty_title").to_string())
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .child(t!("Notes.empty_hint").to_string()),
-                                                )
-                                        }),
-                                ),
-                        ),
-                )
-            })
+            .when_some(body, |this, body| this.child(body))
             .child(
                 div()
                     .absolute()
@@ -236,6 +152,101 @@ impl NotesView {
                                 })
                                 .with_size(Size::Small)
                                 .text_color(cx.theme().muted_foreground),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    pub(crate) fn render_sidebar_content(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let view = cx.entity();
+        let rows = self
+            .rows
+            .iter()
+            .map(|row| self.render_row(row, cx))
+            .collect::<Vec<_>>();
+        let rows_are_empty = rows.is_empty();
+        v_flex()
+            .size_full()
+            .h_full()
+            .min_h_0()
+            .min_w_0()
+            .overflow_hidden()
+            .child(self.render_toolbar(cx))
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(
+                        v_flex()
+                            .size_full()
+                            .p_2()
+                            .gap_1()
+                            .overflow_y_scrollbar()
+                            .context_menu(move |menu, window, cx| {
+                                let (target, directory, row) = {
+                                    let notes = view.read(cx);
+                                    let row = notes.context_menu_path.as_ref().and_then(|path| {
+                                        notes
+                                            .rows
+                                            .iter()
+                                            .find(|row| row.relative_path == *path)
+                                            .cloned()
+                                    });
+                                    match row {
+                                        Some(row) => (
+                                            sidebar_context_target(&row),
+                                            creation_directory(&row),
+                                            Some(row),
+                                        ),
+                                        None => (
+                                            SidebarContextTarget::Background,
+                                            notes.current_directory.clone(),
+                                            None,
+                                        ),
+                                    }
+                                };
+                                view.update(cx, |notes, _| {
+                                    notes.context_menu_path = None;
+                                });
+                                build_sidebar_context_menu(
+                                    menu,
+                                    view.clone(),
+                                    target,
+                                    directory,
+                                    row,
+                                    window,
+                                    cx,
+                                )
+                            })
+                            .children(rows)
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_h(px(64.0))
+                                    .items_center()
+                                    .justify_center()
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(|view, _, _, cx| {
+                                            view.context_menu_path = None;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .when(rows_are_empty, |this| {
+                                        this.gap_1()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(t!("Notes.empty_title").to_string())
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .child(t!("Notes.empty_hint").to_string()),
+                                            )
+                                    }),
                             ),
                     ),
             )
@@ -567,6 +578,13 @@ impl Render for NotesView {
 #[cfg(test)]
 mod tests {
     use super::{SidebarContextTarget, SidebarMenuAction, sidebar_menu_actions};
+
+    #[test]
+    fn shell_hosted_sidebar_is_not_drawn_inside_the_main_content() {
+        let source = include_str!("notes_render.rs");
+        assert!(source.contains(".when(!self.sidebar_hosted_by_shell"));
+        assert!(source.contains("pub(crate) fn render_sidebar_content"));
+    }
 
     #[test]
     fn notes_content_is_bounded_by_the_active_tab_width() {

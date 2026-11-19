@@ -80,7 +80,8 @@ impl HomePage {
             .into_iter()
             .flat_map(|(_, _, connections)| connections)
             .collect::<Vec<_>>();
-        let right_width = window.bounds().size.width - GLOBAL_NAV_TREE_WIDTH;
+        let shell_chrome = self.shell_side_width(cx);
+        let right_width = window.bounds().size.width - shell_chrome;
         let (_, card_width) = grid::card_grid_metrics(right_width, window.rem_size());
         let mut body = v_flex()
             .w_full()
@@ -135,8 +136,28 @@ impl HomePage {
             .min_w_0()
             .overflow_y_scroll()
             .p_5()
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(|home, _, _, _cx| home.finish_drag_selection()),
+            )
             .child(body)
             .into_any_element()
+    }
+
+    fn shell_side_width(&self, cx: &App) -> Pixels {
+        let layout = one_ui::theme_geometry().layout;
+        let ribbon = if AppSettings::global(cx).navigation_ribbon_expanded {
+            layout.global_rail
+        } else {
+            px(0.0)
+        };
+        let context_sidebar = self
+            .connection_sidebar
+            .as_ref()
+            .filter(|sidebar| sidebar.read(cx).is_expanded())
+            .map(|sidebar| sidebar.read(cx).tree_width())
+            .unwrap_or_else(|| px(0.0));
+        ribbon + context_sidebar
     }
 
     fn render_navigation_heading(
@@ -237,7 +258,7 @@ impl HomePage {
         // 共享网格几何由内容区统一计算，所有分组使用同一组列边界（redesign §4.1）。
         let (columns, card_width) = match layout {
             ConnectionLayout::Card => grid::card_grid_metrics(
-                window.bounds().size.width - self.home_sidebar_width(),
+                window.bounds().size.width - self.shell_side_width(cx),
                 window.rem_size(),
             ),
             _ => (RECENT_ROW_FALLBACK, px(0.0)),
@@ -285,6 +306,10 @@ impl HomePage {
             .min_w_0()
             .overflow_y_scroll()
             .p_5()
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(|home, _, _, _cx| home.finish_drag_selection()),
+            )
             .child(body)
             .into_any_element()
     }

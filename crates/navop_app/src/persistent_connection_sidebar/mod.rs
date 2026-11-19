@@ -189,8 +189,9 @@ impl PersistentConnectionSidebar {
     /// squeezes the terminal. The caller (NavopApp) positions it at the
     /// left window edge, below the tab bar, and collapses it when the
     /// terminal regains focus.
-    pub(crate) fn render_floating_tree(
+    pub(crate) fn render_floating_tree_at(
         &mut self,
+        left: Pixels,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -215,7 +216,7 @@ impl PersistentConnectionSidebar {
                 .absolute()
                 .top(top)
                 .bottom_0()
-                .left_0()
+                .left(left)
                 .w(self.tree_width + pad)
                 // 浮动侧边栏覆盖在内容区之上：occlude 让命中测试在侧边栏处终止，
                 // 避免滚轮/鼠标事件穿透到下方的 tab 内容区（否则终端等会跟着滚动）。
@@ -315,6 +316,10 @@ impl PersistentConnectionSidebar {
         self.auto_hide_tree
     }
 
+    pub(crate) fn tree_width(&self) -> Pixels {
+        self.tree_width
+    }
+
     /// 非自动隐藏模式下，连接树作为与终端并排的分割面板渲染，而不是浮层。
     pub(crate) fn render_docked_connection_tree(
         &mut self,
@@ -354,7 +359,7 @@ mod tests {
             .unwrap();
 
         // 浮动模式保留：overlay 覆盖 + occlude 阻断事件穿透
-        assert!(implementation.contains("fn render_floating_tree"));
+        assert!(implementation.contains("fn render_floating_tree_at"));
         assert!(implementation.contains(".occlude()"));
         // 浮层卡片样式：圆角、阴影、与窗口边缘的间距
         assert!(implementation.contains(".rounded_lg()"));
@@ -364,10 +369,10 @@ mod tests {
         // 合成 visual 盖住：普通元素树内容在它下面，deferred 内容才在它上面。
         // 断言按函数体切片，不用整文件 contains —— 免得被别处的 `deferred(` 满足。
         let floating = implementation
-            .split("fn render_floating_tree")
+            .split("fn render_floating_tree_at")
             .nth(1)
             .and_then(|rest| rest.split("pub(crate) fn new(").next())
-            .expect("render_floating_tree source");
+            .expect("render_floating_tree_at source");
         assert!(floating.contains("deferred("));
         assert!(floating.contains(".into_any_element()"));
         // 旧的「零尺寸 deferred 标记」写法不够：布局在原处、绘制也在原处，侧栏仍然

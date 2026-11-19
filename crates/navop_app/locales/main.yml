@@ -2264,6 +2264,18 @@ Connection:
     en: Select or Deselect Visible Connections
     zh-CN: 选择或取消选择当前可见连接
     zh-HK: 選擇或取消選擇目前可見連線
+  batch_select_all:
+    en: Select All Visible
+    zh-CN: 全选当前可见连接
+    zh-HK: 全選目前可見連線
+  batch_invert:
+    en: Invert Visible Selection
+    zh-CN: 反选当前可见连接
+    zh-HK: 反選目前可見連線
+  batch_clear:
+    en: Clear Selection
+    zh-CN: 清空选择
+    zh-HK: 清除選取
   batch_exit:
     en: Exit Batch Operations
     zh-CN: 退出批量操作
@@ -3030,6 +3042,26 @@ Settings:
         en: Appearance
         zh-CN: 外观
         zh-HK: 外觀
+      density:
+        en: Interface density
+        zh-CN: 界面密度
+        zh-HK: 介面密度
+      density_desc:
+        en: Adjusts navigation, tree rows, spacing, and text together.
+        zh-CN: 统一调整导航、树行高、间距与字号。
+        zh-HK: 統一調整導覽、樹狀列高、間距與字級。
+      density_compact:
+        en: Compact
+        zh-CN: 紧凑
+        zh-HK: 緊湊
+      density_default:
+        en: Default
+        zh-CN: 默认
+        zh-HK: 預設
+      density_comfortable:
+        en: Comfortable
+        zh-CN: 舒适
+        zh-HK: 舒適
       dark_mode:
         en: Dark Mode
         zh-CN: 深色模式
@@ -4864,9 +4896,9 @@ Settings:
       zh-CN: 关闭当前窗口
       zh-HK: 關閉目前視窗
     toggle_connection_sidebar:
-      en: Toggle Connection Sidebar
-      zh-CN: 切换连接树
-      zh-HK: 切換連線樹
+      en: Toggle Navigation Ribbon
+      zh-CN: 显示或隐藏导航 Ribbon
+      zh-HK: 顯示或隱藏導覽 Ribbon
     switch_tab_n:
       en: "Switch to Tab N"
       zh-CN: "切换到第 N 个标签页"

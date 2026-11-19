@@ -100,7 +100,6 @@ impl HomePage {
             selected_filter: ConnectionFilter::All,
             connection_type_filter: Default::default(),
             connection_layout: AppSettings::current(cx).home_connection_layout.into(),
-            sidebar_collapsed: false,
             collapsed_groups: HashSet::new(),
             recent_collapsed: false,
             workspaces: Vec::new(),

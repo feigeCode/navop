@@ -165,6 +165,7 @@ pub(crate) fn build_ai_workbench_shell(
                 },
                 session_nav: None,
                 session_source: Some(chat.clone()),
+                nav_hosted_by_shell: true,
                 // 布局从持久化设置还原；坏字段/空配置由 from_settings 容错。
                 initial_state: WorkbenchState::from_settings(
                     &one_core::settings::AppSettings::current(cx)

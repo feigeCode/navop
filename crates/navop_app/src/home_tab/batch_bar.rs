@@ -29,7 +29,11 @@ impl HomePage {
                     .text_color(cx.theme().foreground)
                     .child(t!("Connection.batch_selected", count = selected_ids.len()).to_string()),
             )
-            .child(select_visible_button(view.clone(), visible_ids))
+            .child(connection_selection::connection_selection_actions(
+                view.clone(),
+                visible_ids,
+                selected_ids.len(),
+            ))
             .child(move_connections_button(
                 view.clone(),
                 selected_ids.clone(),
@@ -49,19 +53,6 @@ impl HomePage {
             )
             .collect()
     }
-}
-
-fn select_visible_button(view: Entity<HomePage>, visible_ids: Vec<i64>) -> IconButton {
-    let disabled = visible_ids.is_empty();
-    IconButton::new("home-select-visible-connections", IconName::Check)
-        .role(IconButtonRole::Compact)
-        .tooltip(t!("Connection.batch_select_visible"))
-        .disabled(disabled)
-        .on_click(move |_, _, cx| {
-            view.update(cx, |home, cx| {
-                home.select_visible_connections(&visible_ids, cx);
-            });
-        })
 }
 
 fn move_connections_button(
@@ -124,7 +115,7 @@ mod tests {
     #[test]
     fn batch_bar_exposes_select_move_delete_and_exit_actions() {
         let source = include_str!("batch_bar.rs");
-        assert!(source.contains("home-select-visible-connections"));
+        assert!(source.contains("connection_selection_actions"));
         assert!(source.contains("home-move-selected-connections"));
         assert!(source.contains("home-delete-selected-connections"));
         assert!(source.contains("home-exit-batch-connections"));

@@ -147,17 +147,16 @@ fn group_expand_commands_live_in_a_menu() {
 }
 
 #[test]
-fn home_sidebar_refinement_contracts() {
+fn application_ribbon_refinement_contracts() {
     let nav = include_str!("../sidebar_navigation.rs");
-    let sidebar = include_str!("../sidebar.rs");
     let card = include_str!("../connection_card.rs");
     let account = include_str!("../account_menu.rs");
     let applications = include_str!("../../navigation_applications.rs");
 
-    // 导航行本地 helper：hover 与选中分离，selected+hover 不被普通 hover 覆盖
-    assert!(nav.contains("fn home_nav_row"));
-    assert!(nav.contains("hover_bg"));
-    assert!(nav.contains("active_bg"));
+    // Ribbon 行是 icon-only shell 控件：hover 与选中分离，并支持键盘触发。
+    assert!(nav.contains("fn ribbon_row"));
+    assert!(nav.contains("hover_background"));
+    assert!(nav.contains("active_background"));
     assert!(nav.contains(".focus_visible("));
     assert!(nav.contains(".on_key_down("));
     assert!(!nav.contains("SidebarMenuItem::new"));
@@ -166,9 +165,10 @@ fn home_sidebar_refinement_contracts() {
     assert!(nav.contains(".mono()"));
     assert!(applications.contains("IconName::SquareTerminal"));
     assert!(!applications.contains("IconName::Terminal,"));
-    // 侧栏右边线读 sidebar_border，非通用 border
-    assert!(sidebar.contains("sidebar_border"));
-    assert!(!sidebar.contains("cx.theme().border"));
+    // Ribbon 是 shell 常驻第一列，不再由 HomePage 的普通内容布局绘制。
+    assert!(nav.contains("layout.global_rail"));
+    assert!(nav.contains("render_ribbon_account_entry"));
+    assert!(!include_str!("../home_layout.rs").contains("render_sidebar"));
     // 卡片：非选中 hover 才生效，selected+hover 保留选中组合
     assert!(card.contains(".when(!is_selected, |this|"));
     assert!(!card.contains("hover_border"));
@@ -226,7 +226,7 @@ fn account_menu_groups_sync_keys_and_authentication() {
     ] {
         assert!(account.contains(key));
     }
-    assert!(account.contains("Anchor::TopLeft"));
+    assert!(account.contains("Anchor::TopRight"));
 }
 
 #[test]
@@ -272,9 +272,19 @@ fn home_batch_mode_is_shared_across_card_list_and_tree_layouts() {
         assert!(source.contains("ConnectionSelectionMode::Range"));
         assert!(source.contains("ConnectionSelectionMode::Toggle"));
         assert!(source.contains("self.batch_mode_active() && !recent"));
+        assert!(source.contains("begin_drag_selection"));
+        assert!(source.contains("drag_toggle_connection"));
+        assert!(source.contains("finish_drag_selection"));
     }
-    // 批量条提供全选可见/移动/删除/退出
-    assert!(batch_bar.contains("home-select-visible-connections"));
+    let tree_rows = include_str!("../../persistent_connection_sidebar/rows.rs");
+    assert!(tree_rows.contains("begin_drag_selection"));
+    assert!(tree_rows.contains("drag_toggle_connection"));
+    assert!(tree_rows.contains("finish_drag_selection"));
+    assert!(tree_rows.contains("can_drag && !batch_mode"));
+    // 批量条提供全选/反选/清空、移动、删除与退出
+    assert!(batch_bar.contains("connection_selection_actions"));
+    assert!(selection.contains("fn select_all"));
+    assert!(selection.contains("fn invert"));
     assert!(batch_bar.contains("home-move-selected-connections"));
     assert!(batch_bar.contains("home-delete-selected-connections"));
     assert!(batch_bar.contains("home-exit-batch-connections"));
@@ -429,7 +439,8 @@ fn global_navigation_layout_combines_connection_tree_recent_connections_and_apps
 
     assert!(settings.contains("Navigation"));
     assert!(home.contains("render_navigation_content"));
-    assert!(app.contains("docked_tree = sidebar_expanded"));
+    assert!(app.contains("active_secondary_column"));
+    assert!(app.contains("docked_tree = secondary_expanded"));
     assert!(content.contains("render_navigation_home_content"));
     assert!(content.contains("render_application_workbench(window, cx)"));
     assert!(tree.contains("self.home_navigation_layout"));

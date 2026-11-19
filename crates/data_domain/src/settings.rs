@@ -28,6 +28,16 @@ impl SettingsSectionProvider for DataSettingsProvider {
             (DATABASE_SETTINGS_ORDER + 1, sql_format_page()),
         ]
     }
+
+    fn page_titles(&self, _cx: &mut App) -> Vec<(i32, SharedString)> {
+        vec![
+            (DATABASE_SETTINGS_ORDER, SharedString::from("数据库")),
+            (
+                DATABASE_SETTINGS_ORDER + 1,
+                SharedString::from("SQL 格式化"),
+            ),
+        ]
+    }
 }
 
 /// SQL 格式化设置页：关键字大小写、缩进风格与预览。
