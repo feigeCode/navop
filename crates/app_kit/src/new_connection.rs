@@ -316,7 +316,11 @@ impl ConnectionFormDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let kinds = crate::registry().kinds(cx);
+        let mut kinds = crate::registry().kinds(cx);
+        // 扩展贡献的连接（中间件）不在领域注册表里：由应用壳的扩展宿主补进来。
+        if let Some(host) = crate::host::extensions_host() {
+            kinds.extend(host.connection_kinds(cx));
+        }
         let mut dialog = Self {
             focus_handle: cx.focus_handle(),
             kinds,
@@ -428,18 +432,20 @@ impl ConnectionFormDialog {
     }
 
     /// 打开一个条目：真实种类进表单，伪条目跳扩展管理页。
+    ///
+    /// 条目可能只在自己类目下出现（例如「安装扩展」入口不在「全部」里），
+    /// 因此按 key 在全部类目里查找，而不是只查「全部」。
     fn open_entry(&mut self, key: SharedString, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(entry) = self
-            .entries_in(WizardCategory::All)
-            .into_iter()
-            .find(|entry| entry.key() == key)
-        else {
+        let Some(entry) = find_entry(
+            &self.kinds,
+            key.as_ref(),
+            crate::host::extensions_available(),
+        ) else {
             return;
         };
-        if entry.opens_extensions() {
-            self.open_extensions(window, cx);
-        } else if let WizardEntry::Kind(kind) = entry {
-            self.open_kind(kind.id, window, cx);
+        match entry {
+            WizardEntry::Kind(kind) => self.open_kind(kind.id, window, cx),
+            WizardEntry::Install(_) | WizardEntry::More => self.open_extensions(window, cx),
         }
     }
 
@@ -789,7 +795,7 @@ pub fn open_form(request: ConnectionFormRequest, window: &mut Window, cx: &mut A
         return false;
     }
     let kind_id = request.kind_id.clone();
-    let Some(form) = crate::registry().build_connection_form(request.clone(), window, cx) else {
+    let Some(form) = build_form_for_request(request.clone(), window, cx) else {
         window.push_notification(
             Notification::error(format!("当前产品不支持该连接类型：{kind_id}")),
             cx,
@@ -819,7 +825,18 @@ fn build_form(
     let request = mode
         .request(kind_id, connection)
         .with_workspace(workspace_id);
-    crate::registry().build_connection_form(request, window, cx)
+    build_form_for_request(request, window, cx)
+}
+
+/// 按通用请求构造表单：领域注册表优先，扩展种类（中间件）交给应用壳宿主。
+fn build_form_for_request(
+    request: ConnectionFormRequest,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<AnyView> {
+    crate::registry()
+        .build_connection_form(request.clone(), window, cx)
+        .or_else(|| crate::host::extensions_host()?.build_connection_form(request, window, cx))
 }
 
 fn category_title(category: WizardCategory) -> SharedString {
@@ -901,6 +918,22 @@ fn visible_categories(kinds: &[ConnectionKindDescriptor]) -> Vec<WizardCategory>
         categories.push(WizardCategory::Terminal);
     }
     categories
+}
+
+/// 按 key 在全部可见类目里定位条目。
+///
+/// 伪条目只在自己的类目下生成：「安装扩展」不在「全部」里，只查「全部」会漏掉它，
+/// 点击「+」或按「下一步」就静默无反应。没有扩展管理器时这类入口不渲染，
+/// 也不应该能被定位到。
+fn find_entry(
+    kinds: &[ConnectionKindDescriptor],
+    key: &str,
+    extensions_available: bool,
+) -> Option<WizardEntry> {
+    visible_categories(kinds)
+        .into_iter()
+        .flat_map(|category| category_entries(kinds, category))
+        .find(|entry| entry.key() == key && (extensions_available || !entry.opens_extensions()))
 }
 
 /// 当前产品是否装配了数据库侧类型（决定数据库类目与「安装时序驱动」入口）。
@@ -1138,6 +1171,38 @@ mod tests {
         let declared = descriptor("ext:com.navop.foo", ConnectionKindGroup::Extension)
             .with_category("extensions");
         assert_eq!(WizardCategory::Middleware, kind_category(&declared));
+    }
+
+    #[test]
+    fn install_entry_is_found_outside_all_category() {
+        let kinds = data_kinds();
+        // 「中间件」为空时补安装入口，而它不属于「全部」：点击「+」/回车必须能找到。
+        assert!(matches!(
+            find_entry(&kinds, "@install-middleware", true),
+            Some(WizardEntry::Install(WizardCategory::Middleware))
+        ));
+        // 没有扩展管理器时该入口不渲染，也不应该被定位到。
+        assert!(find_entry(&kinds, "@install-middleware", false).is_none());
+        // 「更多连接」仍在「全部」里。
+        assert!(matches!(
+            find_entry(&kinds, "@more-connections", true),
+            Some(WizardEntry::More)
+        ));
+    }
+
+    #[test]
+    fn extension_kind_is_found_in_middleware_category() {
+        let mut kinds = data_kinds();
+        kinds.push(
+            descriptor(
+                "ext:com.navop.middleware.demo",
+                ConnectionKindGroup::Extension,
+            )
+            .with_label("Demo"),
+        );
+        let entry = find_entry(&kinds, "ext:com.navop.middleware.demo", true)
+            .expect("extension kind is reachable");
+        assert_eq!(WizardCategory::Middleware, entry.category());
     }
 
     fn shell_kinds() -> Vec<ConnectionKindDescriptor> {

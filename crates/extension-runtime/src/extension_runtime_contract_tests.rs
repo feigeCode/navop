@@ -1195,3 +1195,41 @@ fn catalog_toolbox_lists_apps_without_connections() {
         "有连接的 app 不应重复进工具箱: {ids:?}"
     );
 }
+
+#[test]
+fn catalog_toolbox_excludes_apps_with_sidebar_panels() {
+    // 侧栏面板只存在于终端 / 数据库连接里，页面依赖当前连接上下文（活动终端
+    // 会话、选中的库表）。工具箱是无连接入口，打开只会停在空态，因此带面板的
+    // app 不进工具箱；没有面板的独立 app 照旧列出。
+    use crate::extension::manifest::PanelContrib;
+
+    let mut panel_app = shell_manifest();
+    panel_app.contributes.shell_app = Some(shell_app("ui/panel.js"));
+    panel_app.contributes.panels.push(PanelContrib {
+        id: "desk".to_string(),
+        title: None,
+        icon: None,
+        anchor: "terminal-sidebar".to_string(),
+        order: 0,
+        when: None,
+    });
+
+    let mut standalone = shell_manifest();
+    standalone.id = "com.example.standalone".to_string();
+    standalone.contributes.shell_app = Some(shell_app("ui/standalone.js"));
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![panel_app, standalone]).unwrap();
+    let ids: Vec<&str> = catalog
+        .toolbox_apps()
+        .iter()
+        .map(|app| app.extension_id.as_str())
+        .collect();
+    assert!(
+        !ids.contains(&"com.example.tools"),
+        "带侧栏面板的 app 依赖终端 / 数据库连接，不应进工具箱: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"com.example.standalone"),
+        "无面板的独立 app 仍应进工具箱: {ids:?}"
+    );
+}

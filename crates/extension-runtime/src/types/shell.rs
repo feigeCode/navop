@@ -18,7 +18,7 @@ pub struct RegisteredShellAppContribution {
     pub icon_path: Option<PathBuf>,
     pub extension_root: PathBuf,
     pub entry_path: PathBuf,
-    /// 工具箱卡片分类（只有没有连接的 app 才进工具箱）。
+    /// 工具箱卡片分类（只有无连接、无面板的 app 才进工具箱）。
     pub category: Option<String>,
     pub keywords: Vec<String>,
     pub backends: BTreeMap<String, String>,

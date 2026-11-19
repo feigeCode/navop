@@ -148,7 +148,7 @@ pub struct ShellAppContrib {
     pub backends: BTreeMap<String, String>,
     #[serde(default)]
     pub modules: Vec<ShellHostModule>,
-    /// 工具箱卡片分组（没有连接的 app 才进工具箱）。
+    /// 工具箱卡片分组（无连接、无面板的 app 才进工具箱）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
