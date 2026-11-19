@@ -1756,11 +1756,11 @@ impl SftpView {
             };
 
         let focus_handle = cx.focus_handle();
-        let local_current_path = resolve_initial_local_directory(
-            &AppSettings::global(cx).transfer_default_local_directory,
-        )
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("/"));
+        // 使用 current() 读取设置：设置全局状态尚未安装时（例如组件测试）回退到默认值。
+        let configured_local_directory = AppSettings::current(cx).transfer_default_local_directory;
+        let local_current_path = resolve_initial_local_directory(&configured_local_directory)
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(|| PathBuf::from("/"));
 
         let local_panel = cx.new(|cx| {
             FileListPanel::new(
