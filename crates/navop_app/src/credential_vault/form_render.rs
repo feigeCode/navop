@@ -1,12 +1,9 @@
-use gpui::{
-    ClipboardItem, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
-};
+use gpui::{InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px};
 use gpui_component::{
-    ActiveTheme, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme, Sizable, Size,
+    button::Button,
     h_flex,
     input::{Input, Textarea},
-    notification::Notification,
     scroll::ScrollableElement,
     switch::Switch,
     tab::{Tab, TabBar},
