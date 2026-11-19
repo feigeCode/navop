@@ -643,3 +643,52 @@ fn connection_card_and_row_require_the_first_click_for_double_click_open() {
         );
     }
 }
+
+#[test]
+fn host_metrics_are_wired_to_card_list_and_tree_views() {
+    let host_metrics = include_str!("../host_metrics.rs");
+    let card = include_str!("../connection_card_content.rs");
+    let list = include_str!("../connection_list.rs");
+    let tree_rows = include_str!("../../persistent_connection_sidebar/rows.rs");
+
+    assert!(
+        card.contains("render_host_metrics_card"),
+        "卡片必须使用适配窄宽度的紧凑资源状态带"
+    );
+    assert!(
+        include_str!("../connection_card.rs").contains("rems(5.5)"),
+        "卡片必须为资源状态带预留高度，避免 overflow_hidden 裁切"
+    );
+    assert!(
+        list.contains("render_host_metrics_detail"),
+        "列表布局必须显示同一份资源占用进度条"
+    );
+    assert!(
+        tree_rows.contains("render_host_metrics_compact"),
+        "树形布局和默认导航布局左侧树必须显示紧凑资源仪表"
+    );
+    assert!(
+        host_metrics.contains("home_show_host_metrics"),
+        "所有布局共用的摘要必须尊重显示开关"
+    );
+    assert!(
+        host_metrics.contains("Progress::new"),
+        "资源占用应使用进度条表达，不能退回纯文字摘要"
+    );
+    assert!(
+        host_metrics.contains("Tooltip::new"),
+        "树形紧凑仪表必须能通过 tooltip 展开具体数值"
+    );
+    assert!(
+        host_metrics.contains("resolve_runtime_connection"),
+        "后台探测前必须解析钥匙串凭据，否则引用凭据的 SSH 连接永远采不到数据"
+    );
+    assert!(
+        host_metrics.contains("Tokio::spawn_result"),
+        "SSH 探测必须进入应用 Tokio runtime，不能直接放在 GPUI background executor"
+    );
+    assert!(
+        host_metrics.contains("refresh_host_metrics(cx)"),
+        "一个探测槽释放后必须继续排队剩余连接"
+    );
+}
