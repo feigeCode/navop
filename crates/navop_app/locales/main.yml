@@ -196,6 +196,14 @@ Home:
     en: "%{count} cores"
     zh-CN: "%{count} 核"
     zh-HK: "%{count} 核"
+  host_metrics_collecting:
+    en: "Collecting resource info…"
+    zh-CN: "正在采集资源信息…"
+    zh-HK: "正在採集資源資訊…"
+  host_metrics_unavailable:
+    en: "Resource info unavailable"
+    zh-CN: "资源信息不可用"
+    zh-HK: "資源資訊不可用"
   unassigned_connections:
     en: "Unassigned"
     zh-CN: "未分组"

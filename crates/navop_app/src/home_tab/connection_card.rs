@@ -33,6 +33,14 @@ impl HomePage {
         } else {
             connection_team_badge(conn.team_id.as_deref(), self.team_permissions.teams())
         };
+        let shows_host_metrics = self.shows_host_metrics_strip(&conn, cx);
+        let card_height = if shows_host_metrics {
+            5.5
+        } else if recent {
+            3.625
+        } else {
+            4.5
+        };
         // 同一连接会同时出现在最近区与普通分组，元素 ID 按展示区命名空间区分（redesign §6.2）。
         let card_id = if recent {
             "conn-card-recent"
@@ -47,8 +55,8 @@ impl HomePage {
             .justify_center()
             .id(card_id.clone())
             .w_full()
-            // 卡片底部需要容纳一行资源状态带；统一高度避免有/无快照时跳变。
-            .h(gpui::rems(5.5))
+            // 需要资源状态带时预留第二行；其他连接保持原紧凑高度。
+            .h(gpui::rems(card_height))
             .rounded(px(12.0))
             .bg(cx.theme().background)
             .px_3()

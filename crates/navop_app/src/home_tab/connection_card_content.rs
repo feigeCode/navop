@@ -12,7 +12,7 @@ impl HomePage {
         let name_tooltip: SharedString = display_name.clone().into();
         let connection_info = card_connection_info(conn);
         let host_metrics =
-            self.render_host_metrics_card(conn.id, &format!("{card_id}-host-metrics"), cx);
+            self.render_host_metrics_card(conn, &format!("{card_id}-host-metrics"), cx);
 
         let header = h_flex()
             .items_center()

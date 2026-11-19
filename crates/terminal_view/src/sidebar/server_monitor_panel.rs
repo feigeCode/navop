@@ -2315,8 +2315,16 @@ pub async fn probe_host_resource_usage(
     let session_id = format!("host-metrics-{}", Utc::now().timestamp_millis());
     let payload = collect_remote_stats(session_manager.clone(), &session_id).await;
     let parsed = payload.and_then(|payload| parse_server_stats(&payload));
-    session_manager.disconnect().await.ok();
     let stats = parsed?;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let next_cpu_snapshot = collect_cpu_snapshot(session_manager.clone())
+        .await
+        .ok()
+        .unwrap_or_default();
+    session_manager.disconnect().await.ok();
+    let cpu_percent = (stats.cpu_snapshots.iter().any(|item| item.name == "cpu")
+        && next_cpu_snapshot.iter().any(|item| item.name == "cpu"))
+    .then(|| sample_cpu_usage(&stats.cpu_snapshots, &next_cpu_snapshot).total_percent);
     let disk_total_kib = stats
         .disks
         .iter()
@@ -2344,12 +2352,37 @@ pub async fn probe_host_resource_usage(
                     .count();
                 (cores > 0).then_some(cores)
             }),
-        cpu_percent: stats.cpu_usage.as_ref().map(|sample| sample.total_percent),
+        cpu_percent,
         memory_total_kib: stats.memory.as_ref().map(|memory| memory.total),
         memory_percent: stats.memory.as_ref().map(|memory| memory.used_percent()),
         disk_total_kib,
         disk_percent: stats.disks.iter().map(|disk| disk.percent).reduce(f64::max),
     })
+}
+
+async fn collect_cpu_snapshot(session_manager: Arc<SshSessionManager>) -> Result<Vec<CpuSnapshot>> {
+    let output = exec_capture(
+        &session_manager,
+        "awk '/^cpu[0-9]* / { total = $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9 + $10 + $11; print $1, $2, $4, $5, total }' /proc/stat",
+    )
+    .await?;
+    Ok(parse_cpu_snapshot_output(&output))
+}
+
+fn parse_cpu_snapshot_output(output: &str) -> Vec<CpuSnapshot> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some(CpuSnapshot {
+                name: fields.next()?.to_string(),
+                load_user: fields.next()?.parse().ok()?,
+                load_system: fields.next()?.parse().ok()?,
+                load_idle: fields.next()?.parse().ok()?,
+                load_total: fields.next()?.parse().ok()?,
+            })
+        })
+        .collect()
 }
 
 /// 执行简单远端命令（不推送脚本），用于 legacy 清理等 best-effort 场景。
@@ -2476,8 +2509,9 @@ mod tests {
     use super::{
         AcceleratorVendor, CpuSnapshot, HistoryLimit, HostResourceUsage, MemoryStats,
         NetworkTotals, ProcessEntry, REMOTE_MONITOR_SCRIPT, build_collect_command,
-        build_legacy_cleanup_command, history_points, history_tick_margin, parse_server_stats,
-        push_history_point, sample_cpu_usage, sample_network_rates, split_sections,
+        build_legacy_cleanup_command, history_points, history_tick_margin,
+        parse_cpu_snapshot_output, parse_server_stats, push_history_point, sample_cpu_usage,
+        sample_network_rates, split_sections,
     };
 
     #[test]
@@ -2509,6 +2543,20 @@ mod tests {
             .summary(),
             None
         );
+    }
+
+    #[test]
+    fn host_metrics_cpu_snapshot_parser_reads_total_and_cores() {
+        let snapshots = parse_cpu_snapshot_output(
+            "cpu 100 40 860 1000\ncpu0 50 20 430 500\ncpu1 50 20 430 500\n",
+        );
+
+        assert_eq!(snapshots.len(), 3);
+        assert_eq!(snapshots[0].name, "cpu");
+        assert_eq!(snapshots[0].load_user, 100);
+        assert_eq!(snapshots[0].load_system, 40);
+        assert_eq!(snapshots[0].load_idle, 860);
+        assert_eq!(snapshots[0].load_total, 1000);
     }
 
     #[test]

@@ -46,13 +46,13 @@ impl HomePage {
         };
         let row_id = SharedString::from(format!("{row_id}-{}", conn_id.unwrap_or(0)));
         let host_metrics =
-            self.render_host_metrics_detail(conn.id, &format!("{row_id}-host-metrics"), cx);
+            self.render_host_metrics_detail(&conn, &format!("{row_id}-host-metrics"), cx);
 
         let row = h_flex()
             .id(row_id.clone())
             .w_full()
             .px_3p5()
-            .py_2p5()
+            .py_2()
             .rounded(px(10.0))
             .border_1()
             .border_color(cx.theme().border)
@@ -204,17 +204,25 @@ impl HomePage {
                             .child(actions),
                     )
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
+                        h_flex()
                             .w_full()
                             .min_w_0()
-                            .child(self.connection_info_text(&conn)),
-                    )
-                    .when_some(host_metrics, |this, metrics| this.child(metrics)),
+                            .flex_wrap()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_shrink(1.0)
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(self.connection_info_text(&conn)),
+                            )
+                            .when_some(host_metrics, |this, metrics| this.child(metrics)),
+                    ),
             );
         match conn_id {
             Some(id) => row

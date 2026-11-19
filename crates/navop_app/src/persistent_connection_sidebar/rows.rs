@@ -332,11 +332,13 @@ impl PersistentConnectionSidebar {
             .and_then(|connection| connection.id)
             .map(|id| self.ai_access_levels.get(&id).copied().unwrap_or_default())
             .and_then(|level| connection_ai_access_badge(level, cx));
-        let host_metrics_compact = home.read(cx).render_host_metrics_compact(
-            Some(id),
-            &format!("persistent-connection-metrics-{id}"),
-            cx,
-        );
+        let host_metrics_compact = connection.as_ref().and_then(|connection| {
+            home.read(cx).render_host_metrics_compact(
+                connection,
+                &format!("persistent-connection-metrics-{id}"),
+                cx,
+            )
+        });
         // 树只有一行可用；有资源快照时让更有决策价值的数据占用类型标签位置。
         let type_tag = (host_metrics_compact.is_none())
             .then(|| {

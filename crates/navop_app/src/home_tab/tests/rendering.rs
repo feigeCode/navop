@@ -655,13 +655,18 @@ fn host_metrics_are_wired_to_card_list_and_tree_views() {
         card.contains("render_host_metrics_card"),
         "卡片必须使用适配窄宽度的紧凑资源状态带"
     );
+    let card_layout = include_str!("../connection_card.rs");
     assert!(
-        include_str!("../connection_card.rs").contains("rems(5.5)"),
-        "卡片必须为资源状态带预留高度，避免 overflow_hidden 裁切"
+        card_layout.contains("shows_host_metrics") && card_layout.contains("5.5"),
+        "卡片必须仅在需要资源状态带时预留第二行高度"
     );
     assert!(
         list.contains("render_host_metrics_detail"),
-        "列表布局必须显示同一份资源占用进度条"
+        "列表布局必须显示同一份资源信息"
+    );
+    assert!(
+        list.contains(".flex_wrap()"),
+        "列表中的地址与资源标签应共用一行并在窄宽度下自然换行"
     );
     assert!(
         tree_rows.contains("render_host_metrics_compact"),

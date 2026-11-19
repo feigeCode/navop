@@ -16,7 +16,9 @@ use gpui_component::{
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::settings::AppSettings;
-use one_core::storage::{ConnectionRepository, ConnectionType, GlobalStorageState};
+use one_core::storage::{
+    ConnectionRepository, ConnectionType, GlobalStorageState, StoredConnection,
+};
 use rust_i18n::t;
 
 use super::HomePage;
@@ -31,6 +33,12 @@ const HOST_METRICS_MAX_IN_FLIGHT: usize = 2;
 pub(crate) struct HostMetricsEntry {
     usage: terminal_view::HostResourceUsage,
     sampled_at: Instant,
+}
+
+enum HostMetricsState {
+    Ready(terminal_view::HostResourceUsage),
+    Pending,
+    Unavailable,
 }
 
 #[derive(Default)]
@@ -174,46 +182,87 @@ impl HomePage {
     /// 卡片、列表共用的资源标签（没有缓存快照或设置关闭时返回 None）。
     pub(crate) fn render_host_metrics_detail(
         &self,
-        connection_id: Option<i64>,
+        connection: &StoredConnection,
         id_prefix: &str,
         cx: &App,
     ) -> Option<AnyElement> {
-        let usage = self.host_metrics_usage(connection_id, cx)?;
-        Some(render_host_metrics_detail(&usage, id_prefix, cx))
+        match self.host_metrics_state(connection, cx)? {
+            HostMetricsState::Ready(usage) => {
+                Some(render_host_metrics_detail(&usage, id_prefix, cx))
+            }
+            HostMetricsState::Pending => Some(render_host_metrics_status(
+                id_prefix,
+                t!("Home.host_metrics_collecting").to_string(),
+                cx,
+            )),
+            HostMetricsState::Unavailable => Some(render_host_metrics_status(
+                id_prefix,
+                t!("Home.host_metrics_unavailable").to_string(),
+                cx,
+            )),
+        }
     }
 
     /// 卡片宽度有限，只显示一行三项占用；系统和容量信息通过 tooltip 展开。
     pub(crate) fn render_host_metrics_card(
         &self,
-        connection_id: Option<i64>,
+        connection: &StoredConnection,
         id_prefix: &str,
         cx: &App,
     ) -> Option<AnyElement> {
-        let usage = self.host_metrics_usage(connection_id, cx)?;
-        Some(render_host_metrics_card(&usage, id_prefix, cx))
+        match self.host_metrics_state(connection, cx)? {
+            HostMetricsState::Ready(usage) => Some(render_host_metrics_card(&usage, id_prefix, cx)),
+            HostMetricsState::Pending => Some(render_host_metrics_card_status(
+                id_prefix,
+                t!("Home.host_metrics_collecting").to_string(),
+                cx,
+            )),
+            HostMetricsState::Unavailable => Some(render_host_metrics_card_status(
+                id_prefix,
+                t!("Home.host_metrics_unavailable").to_string(),
+                cx,
+            )),
+        }
     }
 
     /// 树行空间有限，用三条迷你进度条表示 CPU / 内存 / 磁盘，完整数值放 tooltip。
     pub(crate) fn render_host_metrics_compact(
         &self,
-        connection_id: Option<i64>,
+        connection: &StoredConnection,
         id_prefix: &str,
         cx: &App,
     ) -> Option<AnyElement> {
-        let usage = self.host_metrics_usage(connection_id, cx)?;
-        Some(render_host_metrics_compact(&usage, id_prefix, cx))
+        match self.host_metrics_state(connection, cx)? {
+            HostMetricsState::Ready(usage) => {
+                Some(render_host_metrics_compact(&usage, id_prefix, cx))
+            }
+            HostMetricsState::Pending | HostMetricsState::Unavailable => None,
+        }
     }
 
-    fn host_metrics_usage(
+    pub(crate) fn shows_host_metrics_strip(&self, connection: &StoredConnection, cx: &App) -> bool {
+        host_metrics_enabled(cx) && connection.connection_type == ConnectionType::SshSftp
+    }
+
+    fn host_metrics_state(
         &self,
-        connection_id: Option<i64>,
+        connection: &StoredConnection,
         cx: &App,
-    ) -> Option<terminal_view::HostResourceUsage> {
-        if !host_metrics_enabled(cx) {
+    ) -> Option<HostMetricsState> {
+        if !self.shows_host_metrics_strip(connection, cx) {
             return None;
         }
-        let connection_id = connection_id?;
-        Some(self.host_metrics.entries.get(&connection_id)?.usage.clone())
+        let connection_id = connection.id?;
+        if let Some(entry) = self.host_metrics.entries.get(&connection_id) {
+            return Some(HostMetricsState::Ready(entry.usage.clone()));
+        }
+        if self.host_metrics.in_flight.contains(&connection_id) {
+            return Some(HostMetricsState::Pending);
+        }
+        if self.host_metrics.last_attempt.contains_key(&connection_id) {
+            return Some(HostMetricsState::Unavailable);
+        }
+        Some(HostMetricsState::Pending)
     }
 }
 
@@ -257,7 +306,6 @@ fn render_host_metrics_detail(
 ) -> AnyElement {
     let metrics = host_metric_values(usage);
     h_flex()
-        .w_full()
         .min_w_0()
         .flex_wrap()
         .gap_1p5()
@@ -277,6 +325,48 @@ fn render_host_metrics_detail(
                 cx,
             )
         }))
+        .into_any_element()
+}
+
+fn render_host_metrics_status(id_prefix: &str, text: String, cx: &App) -> AnyElement {
+    h_flex()
+        .id(SharedString::from(format!("{id_prefix}-status")))
+        .flex_shrink_0()
+        .items_center()
+        .gap_1p5()
+        .px_2()
+        .py_0p5()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().muted)
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(text),
+        )
+        .into_any_element()
+}
+
+fn render_host_metrics_card_status(id_prefix: &str, text: String, cx: &App) -> AnyElement {
+    h_flex()
+        .id(SharedString::from(format!("{id_prefix}-card-status")))
+        .w_full()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_1()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().muted)
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(text),
+        )
         .into_any_element()
 }
 
