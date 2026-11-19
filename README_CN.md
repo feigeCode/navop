@@ -1,3 +1,14 @@
+## 赞助商
+
+<p align="center">
+  <a href="https://www.infistar.cc/register?aff=TKUN9HBM&amp;ref_source=link">
+    <img src="resources/sponsors/navop-infistar-zh.png" alt="Navop × Infistar.cc 无限星河｜一个 API Key，把 Claude、GPT、Gemini、Grok、DeepSeek 等模型接入 Navop" width="100%" />
+  </a>
+</p>
+
+Navop × Infistar.cc 无限星河｜一个 API Key，把 Claude、GPT、Gemini、Grok、DeepSeek 等模型接入 Navop，用于 SQL 生成和 AI 对话。低至官方 0.1 折，省 99%；官方渠道，每个模型都能验真。200+ 模型、16 个品牌；上千线路安全冗余自动切换。[通过 Navop 专属链接注册，领取人民币 5 元体验额度](https://www.infistar.cc/register?aff=TKUN9HBM&ref_source=link)。
+
+---
 
 <div align="center">
   <p><img src="resources/navop-icon.png" alt="Navop" width="120" /></p>
@@ -54,16 +65,6 @@
 
   <p><img src="app.png" alt="Navop 概览" width="820" /></p>
 </div>
-
-## 赞助商
-
-<p align="center">
-  <a href="https://www.infistar.cc/register?aff=TKUN9HBM&amp;ref_source=link">
-    <img src="resources/sponsors/navop-infistar-zh.png" alt="Navop × Infistar.cc 无限星河｜一个 API Key，把 Claude、GPT、Gemini、Grok、DeepSeek 等模型接入 Navop" width="100%" />
-  </a>
-</p>
-
-Navop × Infistar.cc 无限星河｜一个 API Key，把 Claude、GPT、Gemini、Grok、DeepSeek 等模型接入 Navop，用于 SQL 生成和 AI 对话。低至官方 0.1 折，省 99%；官方渠道，每个模型都能验真。200+ 模型、16 个品牌；上千线路安全冗余自动切换。[通过 Navop 专属链接注册，领取人民币 5 元体验额度](https://www.infistar.cc/register?aff=TKUN9HBM&ref_source=link)。
 
 ## Navop 是什么
 
