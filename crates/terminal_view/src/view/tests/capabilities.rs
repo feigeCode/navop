@@ -707,6 +707,46 @@ fn terminal_search_uses_an_independent_overlay_without_opening_settings() {
 }
 
 #[test]
+fn terminal_search_has_mouse_entries_and_accurate_trigger_help() {
+    let context_menu = include_str!("../terminal_render.rs");
+    assert!(
+        context_menu.contains("ContextMenu.search_with_shortcut")
+            && context_menu.contains("this.open_search(window, cx)"),
+        "终端右键菜单必须提供无需键盘的搜索入口"
+    );
+
+    let command_bar = include_str!("../command_bar/render.rs");
+    let command_bar_events = include_str!("../command_bar_events.rs");
+    assert!(
+        command_bar.contains("terminal-search-open")
+            && command_bar.matches("self.render_search_button(cx)").count() >= 2,
+        "命令栏展开和折叠状态都应显示搜索按钮"
+    );
+    assert!(
+        command_bar_events.contains("TerminalCommandBarEvent::OpenSearch => self.open_search"),
+        "搜索按钮必须打开同一个独立浮层"
+    );
+
+    let settings = include_str!("../../sidebar/settings_panel.rs");
+    assert!(
+        settings.contains("Settings.search_open_hint")
+            && settings.contains("Settings.search_shortcuts_hint"),
+        "设置中应说明鼠标入口与前后匹配按键"
+    );
+
+    let keybindings = include_str!("../keybindings.rs");
+    assert!(
+        keybindings.contains("pub(crate) fn terminal_search_shortcut_label")
+            && keybindings.contains("shortcuts_for("),
+        "入口提示必须读取用户当前快捷键，而不是硬编码默认键位"
+    );
+    assert!(
+        keybindings.contains("[TERMINAL_CONTEXT, TERMINAL_SEARCH_CONTEXT]"),
+        "搜索快捷键在输入框聚焦后仍应可用"
+    );
+}
+
+#[test]
 fn terminal_search_never_waits_for_the_parser_on_the_gpui_thread() {
     let source = include_str!("../sidebar_events.rs");
     let forward = function_region(

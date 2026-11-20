@@ -931,6 +931,39 @@ impl SettingsPanel {
             .into_any_element()
     }
 
+    /// 只说明搜索入口；搜索输入与匹配状态仍由终端独立浮层持有。
+    fn render_search_help_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.colors();
+        let border = colors.border;
+        let muted_fg = colors.muted_foreground;
+        let shortcut = crate::view::keybindings::terminal_search_shortcut_label(cx);
+
+        v_flex()
+            .gap_2()
+            .p_3()
+            .border_t_1()
+            .border_color(border)
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(muted_fg)
+                    .child(t!("Settings.search").to_uppercase()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted_fg)
+                    .child(t!("Settings.search_open_hint", shortcut = shortcut)),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted_fg)
+                    .child(t!("Settings.search_shortcuts_hint")),
+            )
+    }
+
     /// 渲染字体设置区域
     fn render_font_section(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         let colors = self.colors();
@@ -1966,6 +1999,7 @@ impl Render for SettingsPanel {
                             v_flex()
                                 .flex_shrink_0()
                                 .pb_4()
+                                .child(self.render_search_help_section(cx))
                                 .child(self.render_font_section(cx))
                                 .child(self.render_scrollback_section(cx))
                                 .child(self.render_cursor_section(cx))

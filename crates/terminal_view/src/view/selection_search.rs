@@ -80,7 +80,7 @@ impl TerminalView {
         );
     }
 
-    fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search_open = true;
         let focus_handle = self.search_input.read(cx).focus_handle(cx);
         focus_handle.focus(window, cx);

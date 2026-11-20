@@ -156,7 +156,7 @@ mod host_key_confirmation;
 mod init_config;
 mod initialization;
 mod input_handler;
-mod keybindings;
+pub(crate) mod keybindings;
 mod mouse_down;
 mod mouse_selection;
 mod paste_confirm_dialog;
@@ -201,7 +201,7 @@ use keybindings::{
     TERMINAL_CLEAR_SCREEN_SHORTCUT, TERMINAL_CONTEXT, TERMINAL_COPY_SHORTCUT,
     TERMINAL_PASTE_SHORTCUT, TERMINAL_SEARCH_CONTEXT, TERMINAL_SELECT_ALL_SHORTCUT,
     TERMINAL_TOGGLE_VI_MODE_SHORTCUT, is_terminal_action_shortcut, terminal_paste_defaults,
-    terminal_shortcut_label,
+    terminal_search_shortcut_label, terminal_shortcut_label,
 };
 pub use keybindings::{init, refresh_keybindings};
 pub use recording_playback_config::RecordingPlaybackViewConfig;

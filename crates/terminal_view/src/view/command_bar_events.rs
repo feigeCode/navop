@@ -46,6 +46,7 @@ impl TerminalView {
                 self.paste_text(command, window, cx);
             }
             TerminalCommandBarEvent::FocusTerminal => self.focus_terminal(window, cx),
+            TerminalCommandBarEvent::OpenSearch => self.open_search(window, cx),
             TerminalCommandBarEvent::StartRecording => self.request_recording_start(cx),
             TerminalCommandBarEvent::PauseRecording => self.request_recording_pause(cx),
             TerminalCommandBarEvent::ResumeRecording => self.request_recording_resume(cx),

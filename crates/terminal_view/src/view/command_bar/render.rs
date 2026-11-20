@@ -140,6 +140,7 @@ impl TerminalCommandBar {
             .gap_1()
             .items_center()
             .child(self.render_terminal_toggle_button(cx))
+            .child(self.render_search_button(cx))
             .child(self.render_quick_command_button(cx))
             .child(self.render_recording_button(cx))
             .into_any_element()
@@ -181,6 +182,30 @@ impl TerminalCommandBar {
             .into_any_element()
     }
 
+    fn render_search_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let shortcut = crate::view::keybindings::terminal_search_shortcut_label(cx);
+        let tooltip = if shortcut.is_empty() {
+            t!("Settings.search")
+        } else {
+            t!("ContextMenu.search_with_shortcut", shortcut = shortcut)
+        };
+        Button::new("terminal-search-open")
+            .icon(IconName::Search)
+            .label(t!("Settings.search"))
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .foreground(self.colors.foreground)
+                    .hover(self.colors.muted)
+                    .active(self.colors.muted),
+            )
+            .small()
+            .tooltip(tooltip)
+            .on_click(cx.listener(|_, _, _, cx| {
+                cx.emit(TerminalCommandBarEvent::OpenSearch);
+            }))
+            .into_any_element()
+    }
+
     fn render_quick_command_button(&self, cx: &mut Context<Self>) -> AnyElement {
         Button::new("terminal-command-quick")
             .icon(IconName::SquareTerminal)
@@ -211,6 +236,7 @@ impl TerminalCommandBar {
     fn render_expanded_actions(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .gap_1()
+            .child(self.render_search_button(cx))
             .child(self.render_quick_command_button(cx))
             .child(self.render_recording_button(cx))
             .into_any_element()
