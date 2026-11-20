@@ -4,8 +4,8 @@ use crate::upload_batch::{
 };
 use crate::{
     DirectoryConflictPolicy, FileEntry, PathMetadata, ProgressCallback, RemoteFileClient,
-    SftpClient, TransferCancelled, TransferProgress, is_valid_remote_entry_name,
-    validate_read_size,
+    SftpClient, TransferCancelled, TransferProgress, is_valid_local_file_name,
+    is_valid_remote_entry_name, validate_read_size,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -236,9 +236,11 @@ fn remote_download_root(remote_path: &str) -> &str {
     }
 }
 
-/// Convert an SFTP entry path into a relative local path made only from
-/// validated single-component names. `strip_prefix` is deliberately followed
-/// by a component check because it is lexical and does not resolve `..`.
+/// 把 SFTP 条目路径转换成「只由合法单层名字组成」的本机相对路径。
+///
+/// `strip_prefix` 是纯词法操作、不解析 `..`，所以切割后还要逐分量复核；
+/// 这里用 [`is_valid_local_file_name`] 而不是远程名字校验，因为 Windows 上
+/// `join("c:")` 会解析成盘符相对路径，落盘前必须拒绝这种形态。
 fn remote_download_relative_path(base_remote: &str, entry_path: &str) -> Result<PathBuf> {
     let relative = strip_remote_download_root(base_remote, entry_path)?;
     if relative.is_empty() {
@@ -247,7 +249,7 @@ fn remote_download_relative_path(base_remote: &str, entry_path: &str) -> Result<
 
     let mut safe_path = PathBuf::new();
     for component in relative.split('/') {
-        if component.is_empty() || !is_valid_remote_entry_name(component) {
+        if !is_valid_local_file_name(component) {
             return Err(anyhow!(
                 "Refusing unsafe remote entry path: {:?}",
                 entry_path
@@ -2459,11 +2461,15 @@ impl RusshSftpClient {
                 continue;
             }
             if !is_valid_remote_entry_name(&file_name) {
-                return Err(anyhow!(
-                    "Refusing unsafe SFTP directory entry name in {}: {:?}",
-                    path,
-                    file_name
-                ));
+                // 服务端可以返回 `../outside.txt`、`a/b` 这类非单层名字。
+                // 跳过该条目即可，不能让一个坏条目毁掉整个目录浏览
+                // （真正落盘前 `remote_download_relative_path` 会再校验）。
+                tracing::warn!(
+                    directory = path,
+                    entry = %file_name,
+                    "跳过无法作为单层远程路径的 SFTP 目录项"
+                );
+                continue;
             }
 
             let metadata = entry.metadata();
@@ -3149,11 +3155,14 @@ impl RemoteFileClient for RusshSftpClient {
             for entry in entries {
                 ensure_not_cancelled(&cancelled)?;
                 if !is_valid_remote_entry_name(&entry.name) {
-                    return Err(anyhow!(
-                        "Refusing unsafe SFTP directory entry name in {}: {:?}",
-                        current_dir,
-                        entry.name
-                    ));
+                    // `list_dir` 已经过滤过一遍，这里只是防御性复核：
+                    // 同样跳过而不是让整棵目录树的下载失败。
+                    tracing::warn!(
+                        directory = current_dir,
+                        entry = %entry.name,
+                        "跳过无法作为单层远程路径的 SFTP 目录项"
+                    );
+                    continue;
                 }
                 let full_path = if current_dir == "/" {
                     format!("/{}", entry.name)
@@ -4820,6 +4829,23 @@ mod tests {
             remote_download_relative_path("/root", "/other/file.txt").is_err(),
             "paths outside the selected remote root must be rejected"
         );
+        #[cfg(not(windows))]
+        assert!(
+            remote_download_relative_path("/root", "/root/c:").is_ok(),
+            "盘符形态的名字在 Linux 上是合法文件名，落盘相对路径仍可安全构造"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn remote_download_relative_path_rejects_windows_drive_prefixes() {
+        // Windows 上 `join("c:")` 会解析成盘符相对路径，必须挡在落盘之前。
+        for entry in ["/root/c:", "/root/c:notes.txt", "/root/C:notes.txt"] {
+            assert!(
+                remote_download_relative_path("/root", entry).is_err(),
+                "{entry:?} must be rejected before landing on a local path"
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -5021,6 +5047,10 @@ mod short_read_tests;
 #[cfg(test)]
 #[path = "russh_impl_directory_concurrency_tests.rs"]
 mod directory_concurrency_tests;
+
+#[cfg(test)]
+#[path = "russh_impl_listing_tests.rs"]
+mod listing_tests;
 
 /// 堡垒机直连下目录浏览的用户可读性保障：超时与「根目录受限」的解释。
 #[cfg(test)]

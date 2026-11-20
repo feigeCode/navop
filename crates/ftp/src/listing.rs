@@ -27,7 +27,8 @@ pub(super) enum ListLine {
 
 /// LIST 返回的名称只接受单层名称。
 ///
-/// 拒绝：空名、`.`、`..`、包含 `/`、`\`、NUL，以及平台路径前缀。
+/// 拒绝：空名、`.`、`..`、包含 `/`、`\`、NUL。判断与客户端平台无关：
+/// Linux 上的 `c:` 是合法文件名，列举阶段照常显示。
 pub(super) fn is_valid_remote_name(name: &str) -> bool {
     sftp::is_valid_remote_entry_name(name)
 }
@@ -289,6 +290,9 @@ mod tests {
         assert!(is_valid_remote_name("..."));
         assert!(is_valid_remote_name("a..b.txt"));
         assert!(is_valid_remote_name("中文.txt"));
+        // Linux 服务器上的盘符形态名字是合法文件名，Windows 客户端也要能列出来。
+        assert!(is_valid_remote_name("c:"));
+        assert!(is_valid_remote_name("c:file.txt"));
     }
 
     #[test]

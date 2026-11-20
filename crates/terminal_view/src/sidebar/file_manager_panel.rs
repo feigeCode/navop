@@ -1295,7 +1295,8 @@ fn download_targets_for_selection(
         .filter_map(|filtered_ix| {
             let real_ix = *filtered_indices.get(filtered_ix)?;
             let item = items.get(real_ix)?;
-            if !sftp::is_valid_remote_entry_name(&item.name) {
+            // 下载目标要拼成本地路径：用本机校验拦掉 Windows 盘符形态。
+            if !sftp::is_valid_local_file_name(&item.name) {
                 return None;
             }
             Some(DownloadTarget {
@@ -4339,7 +4340,8 @@ impl FileManagerPanel {
             .unwrap_or(&remote_path)
             .to_string();
         // 远程名随后会 join 到用户选的本地目录，必须用本机落盘校验。
-        if !sftp::is_valid_remote_entry_name(&remote_name) {
+        // 远程名随后会 join 到用户选的本地目录，必须用本机落盘校验。
+        if !sftp::is_valid_local_file_name(&remote_name) {
             window.push_notification(Notification::error(t!("FileManager.invalid_name")), cx);
             return;
         }
