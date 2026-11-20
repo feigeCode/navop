@@ -7,7 +7,7 @@
 use crate::history::{HistoryItem, RuntimeHistory};
 use crate::ids::{SessionId, SubAgentId, TurnId};
 use crate::planner::{Plan, StepStatus};
-use crate::resource::ResourceContext;
+use crate::resource::{ResourceContext, ResourceKind};
 use crate::runtime::active_turn::ActiveTurn;
 use crate::runtime::event::{RuntimeEvent, RuntimeEventSender};
 use crate::runtime::input_queue::{InputQueue, TurnInput, UserInput};
@@ -35,6 +35,27 @@ pub struct AcpSessionRef {
     pub session_id: String,
 }
 
+/// 会话首次落盘时定格的 SSH 主机归属。
+///
+/// 只保存稳定 ID 和当时的显示名；实时执行资源仍由 `ResourceContext` 管理，
+/// 切换当前连接不会改写历史归属。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionHost {
+    pub id: String,
+    pub name: String,
+}
+
+impl SessionHost {
+    /// 当前 SSH 主机优先；没有当前项时，仅在 SSH 候选唯一时关联，避免猜测。
+    pub fn from_resources(resources: &ResourceContext) -> Option<Self> {
+        let resource = resources.default_target_of_kind(&ResourceKind::Ssh)?;
+        Some(Self {
+            id: resource.id.as_str().to_owned(),
+            name: resource.label.clone(),
+        })
+    }
+}
+
 /// 会话的可持久化快照:足以重建一个 [`Session`] 全部对话状态的最小集合。
 ///
 /// 只包含可序列化的对话事实(标识、资源、历史、当前计划),**不含**运行时瞬态
@@ -59,6 +80,9 @@ pub struct SessionSnapshot {
     /// 旧快照没有该字段，反序列化为 `None`（侧栏归入「未分组」）。
     #[serde(default)]
     pub workspace_root: Option<String>,
+    /// 会话首次落盘时关联的 SSH 主机；旧快照保持未关联。
+    #[serde(default)]
+    pub host: Option<SessionHost>,
     /// 用户在输入框里**尚未发送**的文字（会话草稿）。
     ///
     /// 切换会话时由视图捕获/恢复；随快照落盘，重启后回到对应会话仍能看到。
@@ -157,9 +181,9 @@ impl Session {
             history,
             plan,
             system_instruction,
-            // 会话归属由持久化层在落盘时按「首存定格」规则补写，见
-            // ai_chat_view::persistence::save_session_with_workspace。
+            // 工作区与主机归属由外壳持久化层在落盘时按「首存定格」规则补写。
             workspace_root: None,
+            host: None,
             draft: self.draft(),
             context_tokens: self.context_tokens(),
             acp: self.acp_ref(),
@@ -742,6 +766,43 @@ mod tests {
         let (tx, _rx2) = tokio::sync::broadcast::channel(16);
         let restored = Session::restore(parsed, tx);
         assert_eq!(restored.draft().as_deref(), Some("未发送的文字"));
+    }
+
+    #[test]
+    fn host_association_prefers_current_ssh_and_rejects_ambiguity() {
+        let first = crate::resource::ResourceRef::new(
+            "host-1",
+            crate::resource::ResourceKind::Ssh,
+            "生产一机",
+        );
+        let second = crate::resource::ResourceRef::new(
+            "host-2",
+            crate::resource::ResourceKind::Ssh,
+            "生产二机",
+        );
+        let resources = ResourceContext::new()
+            .with_resource(first)
+            .with_resource(second.clone());
+        let host = SessionHost::from_resources(&resources).expect("当前 SSH 主机");
+        assert_eq!("host-1", host.id);
+        assert_eq!("生产一机", host.name);
+
+        let mut resources = resources;
+        resources.current = Some(second.id);
+        assert_eq!(
+            Some("host-2".to_owned()),
+            SessionHost::from_resources(&resources).map(|host| host.id)
+        );
+
+        resources.current = None;
+        assert!(SessionHost::from_resources(&resources).is_none());
+    }
+
+    #[test]
+    fn legacy_snapshot_without_host_field_deserializes_to_none() {
+        let json = r#"{"id":"sess_x","history":[]}"#;
+        let parsed: SessionSnapshot = serde_json::from_str(json).expect("旧快照应可反序列化");
+        assert_eq!(parsed.host, None);
     }
 
     #[test]

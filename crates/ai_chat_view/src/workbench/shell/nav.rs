@@ -488,8 +488,11 @@ impl WorkbenchShell {
         let element_id = SharedString::from(format!("workbench-session-{}", summary.id));
         let archive_panel = panel.clone();
         let archive_uid = id.clone();
-        // 会话名过长会截断，完整名放 tooltip。
-        let row_tooltip = summary.name.to_string();
+        // 会话名和主机名过长会截断，完整信息放 tooltip。
+        let row_tooltip = match summary.host.as_ref() {
+            Some(host) => format!("{} · {}", summary.name, host.name),
+            None => summary.name.to_string(),
+        };
         // 有草稿的会话在名字后面点一个点：切走以后还能看出哪条剩着没发出去的东西。
         // 先算成元素再挂上去——`.when` 里现读 `cx` 会和行上其它闭包抢同一个可变借用。
         let draft_dot = panel
@@ -497,7 +500,7 @@ impl WorkbenchShell {
             .session_has_draft(&id, cx)
             .then(|| crate::session_sidebar::draft_dot(&id, cx));
 
-        // Finch 式单行会话条目：名称居左，归档按钮与相对时间居右。
+        // 名称与固定主机归属居左，归档按钮与相对时间居右。
         h_flex()
             .id(element_id)
             .group("session-row")
@@ -513,13 +516,31 @@ impl WorkbenchShell {
             .when(selected, |this| this.bg(theme.panel_hover))
             .hover(move |style| style.bg(hover))
             .child(
-                div()
+                v_flex()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .child(summary.name.clone()),
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .w_full()
+                            .truncate()
+                            .text_sm()
+                            .text_color(theme.foreground)
+                            .child(summary.name.clone()),
+                    )
+                    .when_some(
+                        summary.host.as_ref().map(|host| host.name.clone()),
+                        |this, host_name| {
+                            this.child(
+                                div()
+                                    .w_full()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(host_name),
+                            )
+                        },
+                    ),
             )
             .when_some(draft_dot, |this, dot| this.child(dot))
             // 平时隐藏，hover 行时浮现；换用 Archive 图标（Delete 是删除语义）。

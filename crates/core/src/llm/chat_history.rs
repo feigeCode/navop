@@ -21,11 +21,11 @@ pub struct AgentSession {
 
 /// 侧栏会话列表需要的一行，**不含** `snapshot_json` 本体。
 ///
-/// 列表只用得到快照里的两个顶层字段（工作区归属、外部 agent 来源）。把整列
-/// `snapshot_json` 读上来、再在调用侧反序列化，代价与快照体积成正比（实测本机
+/// 列表只用得到快照里的三个顶层字段（工作区归属、主机归属、外部 agent 来源）。
+/// 把整列 `snapshot_json` 读上来、再在调用侧反序列化，代价与快照体积成正比（实测本机
 /// 未归档 356 行合计 76.8MB、单条最大 19.2MB；debug 下光反序列化就要 1.6s），
 /// 而列表刷新跑在 UI 线程上且触发频繁（切会话 / 每轮结束 / 连接就绪都会跑）。
-/// 因此这两个字段下推到 SQL 层用 `json_extract` 提取：快照本体不再进入进程内存。
+/// 因此这些字段下推到 SQL 层用 `json_extract` 提取：快照本体不再进入进程内存。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSessionSummaryRow {
     pub id: i64,
@@ -38,6 +38,9 @@ pub struct AgentSessionSummaryRow {
     pub workspace_root: Option<String>,
     /// 快照里的 `acp.agent_id`（这段会话由外部 agent 承载）。判定同上。
     pub acp_agent_id: Option<String>,
+    /// 首次落盘时定格的 SSH 主机 ID 与显示名。
+    pub host_id: Option<String>,
+    pub host_name: Option<String>,
 }
 
 /// 正文命中的一条会话。
@@ -454,7 +457,7 @@ impl AgentSessionRepository {
 
     /// 列出摘要行（侧栏用），**不读** `snapshot_json` 本体。
     ///
-    /// 过滤与排序与 [`Self::list_by_archived`] 完全一致，只是把来自快照的两个字段
+    /// 过滤与排序与 [`Self::list_by_archived`] 完全一致，只是把来自快照的摘要字段
     /// 下推到 SQL 层提取。调用侧因此不必把几十 MB 的快照 JSON 搬进内存、更不必逐行
     /// 反序列化。
     ///
@@ -479,7 +482,11 @@ impl AgentSessionRepository {
                    CASE WHEN json_valid(snapshot_json)
                         THEN json_extract(snapshot_json, '$.workspace_root') END AS workspace_root,
                    CASE WHEN json_valid(snapshot_json)
-                        THEN json_extract(snapshot_json, '$.acp.agent_id') END AS acp_agent_id
+                        THEN json_extract(snapshot_json, '$.acp.agent_id') END AS acp_agent_id,
+                   CASE WHEN json_valid(snapshot_json)
+                        THEN json_extract(snapshot_json, '$.host.id') END AS host_id,
+                   CASE WHEN json_valid(snapshot_json)
+                        THEN json_extract(snapshot_json, '$.host.name') END AS host_name
                  FROM chat_sessions
                  WHERE archived = ?1
                  ORDER BY updated_at DESC",
@@ -495,6 +502,8 @@ impl AgentSessionRepository {
                     updated_at: row.get("updated_at")?,
                     workspace_root: row.get("workspace_root")?,
                     acp_agent_id: row.get("acp_agent_id")?,
+                    host_id: row.get("host_id")?,
+                    host_name: row.get("host_name")?,
                 })
             })?;
             let mut results = Vec::new();

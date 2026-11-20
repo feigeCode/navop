@@ -3,6 +3,7 @@
 //! 与具体业务的会话存储完全解耦:调用方把自己的会话映射成 [`SessionSummary`] 即可。
 //! 折叠 / 展开、点击交互等编排由上层视图(`ChatView`)负责,本模块只提供「长什么样」。
 
+use agent_runtime::SessionHost;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Div, FontWeight, Hsla, InteractiveElement, ParentElement, SharedString, Styled, div, px,
@@ -22,6 +23,8 @@ pub struct SessionSummary {
     pub updated_at: i64,
     /// 会话归属的工作区根目录。`None` 表示旧数据 / 未分组。
     pub workspace_root: Option<String>,
+    /// 首次落盘时关联的 SSH 主机；旧会话保持 `None`。
+    pub host: Option<SessionHost>,
     /// 会话由外部 agent（ACP）承载时的来源短标识（如 `codex`）。
     ///
     /// `None` = 本地会话。行上标出来源，用户才知道点它会去连外部 agent，
@@ -57,6 +60,7 @@ impl SessionSummary {
             name: name.into(),
             updated_at,
             workspace_root: None,
+            host: None,
             external_agent: None,
         }
     }
@@ -64,6 +68,12 @@ impl SessionSummary {
     /// 附加工作区归属(链式)。
     pub fn with_workspace_root(mut self, root: Option<String>) -> Self {
         self.workspace_root = root;
+        self
+    }
+
+    /// 附加首次落盘时定格的 SSH 主机归属。
+    pub fn with_host(mut self, host: Option<SessionHost>) -> Self {
+        self.host = host;
         self
     }
 
@@ -136,21 +146,30 @@ pub fn session_row_with_style(
                     .when(has_draft, |this| this.child(draft_dot(&session.id, cx)))
                     .child(
                         div()
+                            .w_full()
+                            .truncate()
                             .text_xs()
                             .text_color(if is_current {
                                 style.selected_foreground.opacity(0.72)
                             } else {
                                 style.muted_foreground
                             })
-                            .child(match session.external_agent.as_ref() {
-                                Some(agent) => {
-                                    format!("{} · {}", agent, format_timestamp(session.updated_at))
-                                }
-                                None => format_timestamp(session.updated_at),
-                            }),
+                            .child(session_metadata(session)),
                     ),
             ),
     )
+}
+
+fn session_metadata(session: &SessionSummary) -> String {
+    let mut parts = Vec::new();
+    if let Some(host) = &session.host {
+        parts.push(host.name.clone());
+    }
+    if let Some(agent) = &session.external_agent {
+        parts.push(agent.to_string());
+    }
+    parts.push(format_timestamp(session.updated_at));
+    parts.join(" · ")
 }
 
 /// 当前 Unix 秒。
@@ -422,7 +441,7 @@ pub fn format_timestamp(timestamp: i64) -> String {
     relative_time_label(relative_time_unit(now_unix().saturating_sub(timestamp)))
 }
 
-/// 按查询串过滤会话：对名称与 id 做大小写不敏感的子串匹配。
+/// 按查询串过滤会话：对名称、会话 id、主机名与主机 id 做大小写不敏感的子串匹配。
 ///
 /// 空（或全空白）查询原样返回全部。
 pub fn filter_sessions<'a>(
@@ -438,6 +457,10 @@ pub fn filter_sessions<'a>(
         .filter(|summary| {
             summary.name.to_lowercase().contains(&query)
                 || summary.id.to_lowercase().contains(&query)
+                || summary.host.as_ref().is_some_and(|host| {
+                    host.name.to_lowercase().contains(&query)
+                        || host.id.to_lowercase().contains(&query)
+                })
         })
         .collect()
 }
@@ -556,6 +579,21 @@ mod group_tests {
         // CJK。
         assert_eq!(1, filter_sessions(&sessions, "巡检").len());
         assert!(filter_sessions(&sessions, "nope").is_empty());
+    }
+
+    #[test]
+    fn filter_matches_host_name_and_id() {
+        let sessions = vec![
+            SessionSummary::new("a", "检查负载", 100).with_host(Some(agent_runtime::SessionHost {
+                id: "ssh-42".into(),
+                name: "生产 API 主机".into(),
+            })),
+            SessionSummary::new("b", "本地整理", 200),
+        ];
+
+        assert_eq!(1, filter_sessions(&sessions, "API 主机").len());
+        assert_eq!(1, filter_sessions(&sessions, "SSH-42").len());
+        assert!(filter_sessions(&sessions, "测试主机").is_empty());
     }
 
     #[test]

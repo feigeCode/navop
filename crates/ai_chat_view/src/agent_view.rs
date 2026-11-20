@@ -18,8 +18,8 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_runtime::{
     AgentResourceScope, HistoryItem, ResourceCatalog, ResourceContext, ResourceId, ResourceKind,
-    ResourceRef, Runtime, RuntimeEvent, RuntimeEventReceiver, SessionId, TaskKind, ToolCallId,
-    ToolExecutionMode, ToolRegistry, TurnId, UserInput,
+    ResourceRef, Runtime, RuntimeEvent, RuntimeEventReceiver, SessionHost, SessionId, TaskKind,
+    ToolCallId, ToolExecutionMode, ToolRegistry, TurnId, UserInput,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -1373,6 +1373,13 @@ pub struct AgentChatView {
     sessions: Vec<SessionSummary>,
     /// 会话 id → 归属工作区。创建/载入时定格，落盘时随快照写出。
     session_roots: HashMap<String, String>,
+    /// 会话 id → 首次落盘时的 SSH 主机归属。
+    ///
+    /// 键存在表示这是新建或已明确登记归属的会话；`None` 表示新会话暂时没有
+    /// 唯一主机，可在首次落盘时补定。旧快照没有 host 时不登记键，避免误挂当前主机。
+    session_hosts: HashMap<String, Option<SessionHost>>,
+    /// 新会话首次真正落盘后，主机（包括「无明确主机」）都不再变化。
+    finalized_session_hosts: HashSet<String>,
     /// 尚未完全由持久化历史覆盖的实时会话摘要（当前会话和后台运行会话）。
     live_sessions: Vec<SessionSummary>,
     /// 非当前会话的实时转录，切换回来时可继续看到流式进度。
@@ -1484,13 +1491,6 @@ pub struct AgentChatView {
     drafted_sessions: HashSet<String>,
     /// 排队中的草稿防抖保存；再输入一次会把它顶掉重排（旧任务随 drop 取消）。
     draft_save_task: Option<Task<()>>,
-    /// 业务资源那一批 `@` 提及项（连接、SSH 主机…）。
-    ///
-    /// 工作区文件是**后到**的（目录遍历在后台跑），所以这一批要留一份：
-    /// 换根重新收集时要跟文件那份重新合并，而不是把业务资源丢在路上。
-    resource_mentions: Vec<MentionItem>,
-    /// 后台的工作区文件遍历任务；换根会把它顶掉（旧任务随 drop 取消）。
-    workspace_mentions_task: Option<Task<()>>,
     /// 侧边栏是否显示「已归档」会话(否则显示活跃会话)。
     show_archived: bool,
     /// 侧边栏视图(窄面板)模式:头部走新建对话 / 历史记录紧凑布局,不常驻会话列表。
@@ -1836,11 +1836,15 @@ impl AgentChatView {
         transcript.set_resource_context(&resources);
 
         // 活跃列表立即展示当前实时会话；持久化历史和后台任务随后统一合并。
-        let live_sessions = vec![SessionSummary::new(
-            current_session.clone(),
-            current_agent_task_title(),
-            now_secs(),
-        )];
+        let initial_host = SessionHost::from_resources(&resources);
+        let live_sessions = vec![
+            SessionSummary::new(
+                current_session.clone(),
+                current_agent_task_title(),
+                now_secs(),
+            )
+            .with_host(initial_host.clone()),
+        ];
         let running_sessions = HashSet::new();
         let sessions = merge_live_session_summaries(
             persistence::list_summaries(cx),
@@ -1857,8 +1861,10 @@ impl AgentChatView {
             current_session.clone(),
             workspace_root.to_string_lossy().into_owned(),
         )]);
+        // 实时列表先显示当前主机，但空白会话直到首次落盘才定格归属。
+        let initial_session_hosts = HashMap::from([(current_session.clone(), None)]);
 
-        let mut new_view = Self {
+        let new_view = Self {
             runtime,
             session_id,
             resources,
@@ -1914,8 +1920,6 @@ impl AgentChatView {
             // 启动时从库里取一次：上次没发出去的草稿要在列表上标出来。
             drafted_sessions: persistence::drafted_session_uids(cx),
             draft_save_task: None,
-            resource_mentions: base_mentions.clone(),
-            workspace_mentions_task: None,
             show_archived: false,
             sidebar_mode,
             show_sidebar_header,
@@ -1964,6 +1968,8 @@ impl AgentChatView {
             reasoning_effort_override: None,
             is_running: false,
             session_roots: initial_session_roots,
+            session_hosts: initial_session_hosts,
+            finalized_session_hosts: HashSet::new(),
             system_instruction: seed_system_instruction,
             system_instruction_from_settings,
             theme,
@@ -1978,8 +1984,6 @@ impl AgentChatView {
         if new_view.system_instruction.is_some() {
             new_view.apply_system_instruction_to_current_session();
         }
-        // `@` 里的工作区文件：起手收集一次（后台跑，见方法说明）。
-        new_view.refresh_workspace_mentions(cx);
         new_view
     }
 
@@ -2738,6 +2742,10 @@ impl AgentChatView {
                             .as_deref()
                             .and_then(crate::command_palette::workspace_label)
                     }),
+                search_terms: session
+                    .host
+                    .as_ref()
+                    .map_or_else(Vec::new, |host| vec![host.name.clone(), host.id.clone()]),
             })
             .collect();
 
@@ -5056,8 +5064,6 @@ impl AgentChatView {
         self.workspace_root = root.clone();
         // 项目级 skills 跟随工作区；选择集合只保留仍然存在的路径。
         self.skills.reload_for_workspace(&root);
-        // `@` 里的文件也要换：引用的是**当前**工作区里的东西。
-        self.refresh_workspace_mentions(cx);
         self.sync_session_skills();
         // 换工作区会丢弃旧连接；连接前的模型选择也不再适用于新 agent 会话。
         self.pending_acp_model = None;
@@ -5951,6 +5957,7 @@ impl AgentChatView {
             self.session_id.to_string(),
             self.workspace_root.to_string_lossy().into_owned(),
         );
+        self.session_hosts.insert(self.session_id.to_string(), None);
         if self.system_instruction_from_settings {
             // 新会话跟随设置的最新值（含清空）；外部显式指令保持不变。
             self.system_instruction = AppSettings::current(cx)
@@ -6058,6 +6065,10 @@ impl AgentChatView {
         let Some(session) = self.runtime.session(&session_id) else {
             return;
         };
+        if session.history_snapshot().items().is_empty() {
+            self.record_local_usage_sample(uid, &session, cx);
+            return;
+        }
         // 归属定格：优先创建/载入时记录的工作区；缺失（旧数据在本次升级后
         // 首次落盘）才用当前工作区补。
         let workspace_root = self
@@ -6065,9 +6076,21 @@ impl AgentChatView {
             .get(uid)
             .cloned()
             .unwrap_or_else(|| self.workspace_root.to_string_lossy().into_owned());
-        if let Some((title, updated_at)) =
-            persistence::save_session_with_workspace(cx, &session, Some(&workspace_root))
-        {
+        let host = self.session_hosts.get(uid).cloned().flatten().or_else(|| {
+            (self.session_hosts.contains_key(uid) && !self.finalized_session_hosts.contains(uid))
+                .then(|| SessionHost::from_resources(&self.resources))
+                .flatten()
+        });
+        if let Some((title, updated_at)) = persistence::save_session_with_context(
+            cx,
+            &session,
+            Some(&workspace_root),
+            host.clone(),
+        ) {
+            if self.session_hosts.contains_key(uid) {
+                self.session_hosts.insert(uid.to_string(), host);
+                self.finalized_session_hosts.insert(uid.to_string());
+            }
             self.upsert_live_summary(uid.to_string(), title, updated_at);
         }
         self.record_local_usage_sample(uid, &session, cx);
@@ -6098,12 +6121,31 @@ impl AgentChatView {
         persistence::record_usage_sample(cx, uid, used, window, model.as_deref());
     }
 
+    /// 新会话首次落盘时可补定唯一 SSH 主机；旧会话没有登记就不从当前资源推断。
+    pub(super) fn session_host_for_save(&mut self, uid: &str) -> Option<SessionHost> {
+        let registered = self.session_hosts.get(uid)?.clone();
+        if self.finalized_session_hosts.contains(uid) {
+            return registered;
+        }
+        let host = SessionHost::from_resources(&self.resources);
+        self.session_hosts.insert(uid.to_string(), host.clone());
+        self.finalized_session_hosts.insert(uid.to_string());
+        host
+    }
+
     fn upsert_live_summary(&mut self, uid: String, title: String, updated_at: i64) {
         self.live_sessions.retain(|summary| summary.id != uid);
         let workspace_root = self.session_roots.get(&uid).cloned();
+        let host = self.session_hosts.get(&uid).cloned().flatten().or_else(|| {
+            (self.session_hosts.contains_key(&uid) && !self.finalized_session_hosts.contains(&uid))
+                .then(|| SessionHost::from_resources(&self.resources))
+                .flatten()
+        });
         self.live_sessions.insert(
             0,
-            SessionSummary::new(uid, title, updated_at).with_workspace_root(workspace_root),
+            SessionSummary::new(uid, title, updated_at)
+                .with_workspace_root(workspace_root)
+                .with_host(host),
         );
     }
 
@@ -6649,6 +6691,10 @@ impl AgentChatView {
             if let Some(root) = snapshot.workspace_root.clone() {
                 self.session_roots.insert(uid.to_string(), root);
             }
+            if let Some(host) = snapshot.host.clone() {
+                self.session_hosts.insert(uid.to_string(), Some(host));
+                self.finalized_session_hosts.insert(uid.to_string());
+            }
             let restored = self.runtime.restore_session(snapshot);
             restored.set_resources(self.resources.clone());
             restored
@@ -7003,9 +7049,9 @@ impl AgentChatView {
             self.skills.items(),
             self.local_context_tokens(),
         );
-        // 业务资源换了：留一份给工作区文件重新合并用（文件那份不用重扫，根没动）。
-        self.resource_mentions = mentions;
-        self.refresh_workspace_mentions(cx);
+        // `@` 只列连接资源；工作区文件走附件选择器，不混入连接补全。
+        self.input
+            .update(cx, |input, cx| input.set_mentions(mentions, cx));
         // 同 `sync_resource_targets`：目标选择器只喂 One agent 那份，上下文按后端送。
         self.input.update(cx, |input, cx| {
             input.set_target_options(target_options, cx);
@@ -7017,28 +7063,6 @@ impl AgentChatView {
             self.request_scroll_to_bottom();
         }
         cx.notify();
-    }
-
-    /// 重新收集 `@` 里的工作区文件，并与业务资源合并推给输入框。
-    ///
-    /// 目录遍历放后台：工作区可能有几万个文件，把它压在首帧或换根那一帧里，
-    /// 用户会看到面板卡一下再出现。代价是补全菜单里文件**稍后**才出现——
-    /// 键入 `@` 花的几百毫秒通常足够遍历跑完。
-    pub(crate) fn refresh_workspace_mentions(&mut self, cx: &mut Context<Self>) {
-        let root = self.workspace_root.clone();
-        let base = self.resource_mentions.clone();
-        let input = self.input.clone();
-        self.workspace_mentions_task = Some(cx.spawn(async move |_this, cx| {
-            let files = cx
-                .background_executor()
-                .spawn(
-                    async move { crate::workspace_files::collect_workspace_files_default(&root) },
-                )
-                .await;
-            let mut all = base;
-            all.extend(files);
-            input.update(cx, |input, cx| input.set_mentions(all, cx));
-        }));
     }
 
     /// 注册代码块操作。
@@ -13612,6 +13636,7 @@ mod tests {
                     system_instruction: None,
                     skills: agent_runtime::SkillContext::new(),
                     workspace_root: None,
+                    host: None,
                     draft: None,
                     context_tokens: None,
                     acp: None,
@@ -13671,6 +13696,61 @@ mod tests {
             view.new_session(cx);
             assert_eq!(blank, view.current_session, "应当复用被留在身后的白纸");
             assert_eq!(None, view.draft_session, "草稿被消费后要清掉");
+        });
+    }
+
+    #[gpui::test]
+    fn reused_blank_session_freezes_the_current_host_on_first_save(cx: &mut TestAppContext) {
+        use agent_runtime::{ResourceId, ResourceKind, ResourceRef};
+
+        init_test_ui(cx);
+        let resources = ResourceContext {
+            current: Some(ResourceId::new("ssh-a")),
+            resources: vec![ResourceRef::new(
+                ResourceId::new("ssh-a"),
+                ResourceKind::Ssh,
+                "主机 A",
+            )],
+        };
+        let config = AgentChatViewConfig::new(test_runtime("m"), resources, Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, window, cx| {
+            let first = view.current_session.clone();
+            view.runtime
+                .session(&SessionId::from_string(first.clone()))
+                .expect("first session is live")
+                .record_user_input("已有会话");
+
+            view.new_session(cx);
+            let blank = view.current_session.clone();
+            view.apply_pending_input_draft(window, cx);
+            view.switch_session(&first, cx);
+            assert_eq!(Some(blank.clone()), view.draft_session);
+
+            view.resources = ResourceContext {
+                current: Some(ResourceId::new("ssh-b")),
+                resources: vec![ResourceRef::new(
+                    ResourceId::new("ssh-b"),
+                    ResourceKind::Ssh,
+                    "主机 B",
+                )],
+            };
+            view.new_session(cx);
+            assert_eq!(blank, view.current_session);
+            view.runtime
+                .session(&SessionId::from_string(blank.clone()))
+                .expect("reused session is live")
+                .record_user_input("在主机 B 上的首条消息");
+
+            assert_eq!(
+                Some("ssh-b"),
+                view.session_host_for_save(&blank)
+                    .map(|host| host.id)
+                    .as_deref(),
+                "白纸在主机 B 下复用时，首条消息不能仍记到创建时的主机 A"
+            );
         });
     }
 
@@ -13852,6 +13932,7 @@ mod tests {
             system_instruction: None,
             skills: agent_runtime::SkillContext::new(),
             workspace_root: None,
+            host: None,
             draft: None,
             context_tokens: None,
             acp: Some(agent_runtime::AcpSessionRef {
@@ -17092,6 +17173,32 @@ mod tests {
     }
 
     #[test]
+    fn live_summaries_never_change_persisted_host_association() {
+        let original = agent_runtime::SessionHost {
+            id: "ssh-1".into(),
+            name: "原主机".into(),
+        };
+        let current = agent_runtime::SessionHost {
+            id: "ssh-2".into(),
+            name: "当前主机".into(),
+        };
+        let persisted = vec![
+            SessionSummary::new("selected", "选中任务", 10).with_host(Some(original.clone())),
+            SessionSummary::new("legacy", "旧任务", 9),
+        ];
+        let live = vec![
+            SessionSummary::new("selected", "选中任务", 11).with_host(Some(current.clone())),
+            SessionSummary::new("legacy", "旧任务", 10).with_host(Some(current)),
+        ];
+
+        let merged =
+            merge_live_session_summaries(persisted, &live, "selected", &HashSet::new(), false);
+
+        assert_eq!(Some(original), merged[0].host, "已有关联合理应保持原主机");
+        assert_eq!(None, merged[1].host, "旧会话不能实时挂到当前主机");
+    }
+
+    #[test]
     fn archived_sidebar_does_not_mix_in_live_workbench_tasks() {
         let archived = vec![SessionSummary::new("archived", "归档任务", 10)];
         let live = vec![SessionSummary::new("current", "当前任务", 30)];
@@ -17110,6 +17217,36 @@ mod tests {
         // 后台轮次方案：两侧切换都不再强停；ACP 的新建/切换也不取消在飞轮次。
         assert!(!should_stop_task_before_session_switch(Backend::Local));
         assert!(!should_stop_task_before_session_switch(Backend::Acp));
+    }
+
+    #[gpui::test]
+    fn command_palette_matches_history_host_name_and_id(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, _cx| {
+            view.sessions.push(
+                SessionSummary::new("host-history", "数据库巡检", 1).with_host(Some(SessionHost {
+                    id: "ssh-42".into(),
+                    name: "生产 API 主机".into(),
+                })),
+            );
+            for query in ["API 主机", "SSH-42"] {
+                let items = view.palette_items();
+                assert!(
+                    crate::command_palette::visible_items(&items, query)
+                        .iter()
+                        .any(|item| item.action
+                            == crate::command_palette::PaletteAction::OpenSession(
+                                "host-history".into()
+                            )),
+                    "命令面板应能按 {query} 找到历史任务"
+                );
+            }
+        });
     }
 
     /// 启动时那张初始会话也要记住自己的工作区。
@@ -17131,6 +17268,103 @@ mod tests {
                     .map(String::as_str),
                 Some("/tmp/navop-test-ws-a"),
                 "初始会话必须记住它的工作区，否则它在侧栏里会先显示成「未分组」"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn initial_session_freezes_host_on_first_save_and_legacy_sessions_stay_unassigned(
+        cx: &mut TestAppContext,
+    ) {
+        use agent_runtime::{ResourceId, ResourceKind, ResourceRef};
+
+        init_test_ui(cx);
+        let resources = ResourceContext {
+            current: Some(ResourceId::new("ssh-1")),
+            resources: vec![ResourceRef::new(
+                ResourceId::new("ssh-1"),
+                ResourceKind::Ssh,
+                "原主机",
+            )],
+        };
+        let config = AgentChatViewConfig::new(test_runtime("m"), resources, vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, _window, _cx| {
+            let uid = view.current_session.clone();
+            assert_eq!(
+                Some("原主机"),
+                view.sessions[0]
+                    .host
+                    .as_ref()
+                    .map(|host| host.name.as_str()),
+                "初始会话在首次落盘前也应显示主机归属"
+            );
+            view.resources = ResourceContext {
+                current: Some(ResourceId::new("ssh-2")),
+                resources: vec![ResourceRef::new(
+                    ResourceId::new("ssh-2"),
+                    ResourceKind::Ssh,
+                    "当前另一台主机",
+                )],
+            };
+            assert_eq!(
+                Some("ssh-2"),
+                view.session_host_for_save(&uid)
+                    .map(|host| host.id)
+                    .as_deref(),
+                "空白会话在首次落盘时应定格当时的主机"
+            );
+            view.resources = ResourceContext {
+                current: Some(ResourceId::new("ssh-1")),
+                resources: vec![ResourceRef::new(
+                    ResourceId::new("ssh-1"),
+                    ResourceKind::Ssh,
+                    "原主机",
+                )],
+            };
+            assert_eq!(
+                Some("ssh-2"),
+                view.session_host_for_save(&uid)
+                    .map(|host| host.id)
+                    .as_deref(),
+                "首次落盘后，当前连接变化不得改写已定格归属"
+            );
+            assert_eq!(
+                None,
+                view.session_host_for_save("legacy-without-host"),
+                "没有登记主机的旧会话不能从当前资源补归属"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn unassigned_new_session_does_not_gain_a_host_after_first_save(cx: &mut TestAppContext) {
+        use agent_runtime::{ResourceId, ResourceKind, ResourceRef};
+
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, _cx| {
+            let uid = view.current_session.clone();
+            assert_eq!(None, view.session_host_for_save(&uid));
+
+            view.resources = ResourceContext {
+                current: Some(ResourceId::new("ssh-late")),
+                resources: vec![ResourceRef::new(
+                    ResourceId::new("ssh-late"),
+                    ResourceKind::Ssh,
+                    "后来选择的主机",
+                )],
+            };
+            assert_eq!(
+                None,
+                view.session_host_for_save(&uid),
+                "首次落盘没有明确主机时，也不能在后续保存中误挂到另一台主机"
             );
         });
     }
@@ -17222,7 +17456,7 @@ mod tests {
         );
     }
 
-    /// `@` 菜单里除了业务资源还要有工作区文件，且遍历在后台跑完才并进来。
+    /// `@` 只列连接资源；工作区文件走附件，不应混进连接补全列表。
     #[gpui::test]
     fn gpui_workspace_files_join_the_mention_menu(cx: &mut TestAppContext) {
         init_test_ui(cx);
@@ -17256,8 +17490,8 @@ mod tests {
 
         let labels = view.read_with(cx, |view, cx| view.input.read(cx).mention_labels());
         assert!(
-            labels.iter().any(|label| label == "src/main.rs"),
-            "工作区文件该出现在 `@` 菜单里，实际 {labels:?}"
+            !labels.iter().any(|label| label == "src/main.rs"),
+            "工作区文件不应出现在 `@` 连接菜单里，实际 {labels:?}"
         );
         assert!(
             labels.iter().any(|label| label == "prod-db"),
@@ -17297,6 +17531,7 @@ mod tests {
             system_instruction: None,
             skills: agent_runtime::SkillContext::new(),
             workspace_root: None,
+            host: None,
             draft: None,
             context_tokens: None,
             acp: None,
@@ -17486,7 +17721,9 @@ mod tests {
     /// 就改写它，用户看到的就是「无分组的自己跑到分组下面去了」。
     #[gpui::test]
     fn opening_a_legacy_session_without_a_workspace_does_not_assign_one(cx: &mut TestAppContext) {
-        use agent_runtime::{HistoryItem, SessionId, SessionSnapshot};
+        use agent_runtime::{
+            HistoryItem, ResourceId, ResourceKind, ResourceRef, SessionId, SessionSnapshot,
+        };
         use one_core::llm::chat_history::AgentSessionRepository;
         use one_core::storage::GlobalStorageState;
 
@@ -17507,6 +17744,7 @@ mod tests {
             system_instruction: None,
             skills: agent_runtime::SkillContext::new(),
             workspace_root: None,
+            host: None,
             draft: None,
             context_tokens: None,
             acp: None,
@@ -17521,7 +17759,15 @@ mod tests {
             .expect("写入一条无归属旧会话");
         cx.update(|cx| cx.set_global(GlobalStorageState { storage }));
 
-        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+        let resources = ResourceContext {
+            current: Some(ResourceId::new("ssh-current")),
+            resources: vec![ResourceRef::new(
+                ResourceId::new("ssh-current"),
+                ResourceKind::Ssh,
+                "当前主机",
+            )],
+        };
+        let config = AgentChatViewConfig::new(test_runtime("m"), resources, vec![])
             .with_workspace_root(std::path::PathBuf::from("/tmp/navop-test-ws-a"));
         let (view, cx) =
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
@@ -17537,6 +17783,18 @@ mod tests {
                 None,
                 view.session_roots.get(legacy_uid).map(String::as_str),
                 "点开旧会话只是看一眼，不该凭空给它定一个工作区归属"
+            );
+            assert_eq!(
+                None,
+                view.session_host_for_save(legacy_uid),
+                "旧会话也不能因为当前选中了 SSH 就补一个主机归属"
+            );
+            assert!(
+                crate::persistence::load_snapshot(cx, legacy_uid)
+                    .expect("旧会话仍可读取")
+                    .host
+                    .is_none(),
+                "查看旧会话不得把当前主机写回快照"
             );
         });
     }
