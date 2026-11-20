@@ -51,7 +51,7 @@ test("release packaging uses the navop executable on every platform", () => {
   assert.doesNotMatch(bundle, /generate-macos-icon\.sh/);
   assert.match(bundle, /Error: Icon file not found/);
   assert.match(plist, /<key>CFBundleExecutable<\/key>\s*<string>navop<\/string>/);
-  assert.match(desktop, /^Exec=navop %F$/m);
+  assert.match(desktop, /^Exec=navop %U$/m);
   assert.match(desktop, /^Icon=navop$/m);
   assert.match(desktop, /^StartupWMClass=navop$/m);
 });
@@ -125,6 +125,33 @@ test("installers register database, Markdown, and terminal recording file associ
   assert.match(release, /\/usr\/share\/mime\/packages\/navop\.xml/);
   assert.match(release, /update-mime-database \/usr\/share\/mime/);
   assert.match(release, /update-desktop-database \/usr\/share\/applications/);
+});
+
+test("installers register the jms:// JumpServer deep link", () => {
+  const plist = read("resources/macos/Info.plist");
+  const desktop = read("resources/linux/navop.desktop");
+  const wix = read("installer/windows/navop.wxs");
+
+  assert.match(plist, /<key>CFBundleURLTypes<\/key>/);
+  assert.match(
+    plist,
+    /<key>CFBundleURLSchemes<\/key>\s*<array><string>jms<\/string><\/array>/,
+  );
+  assert.match(plist, /<key>CFBundleTypeRole<\/key>\s*<string>Viewer<\/string>/);
+
+  assert.match(desktop, /^Exec=navop %U$/m);
+  assert.match(desktop, /^MimeType=.*x-scheme-handler\/jms;/m);
+
+  assert.match(wix, /<RegistryKey Root="HKCU" Key="Software\\Classes\\jms">/);
+  assert.match(wix, /<RegistryValue Name="URL Protocol" Type="string" Value="" \/>/);
+  assert.match(
+    wix,
+    /Value="&quot;\[INSTALLFOLDER\]navop\.exe&quot; &quot;%1&quot;"/,
+  );
+
+  // 独立产品（shell/data）不接管 jms://，避免抢占全量产品的深链接。
+  assert.doesNotMatch(read("resources/linux/navop-shell.desktop"), /jms/);
+  assert.doesNotMatch(read("resources/linux/navop-data.desktop"), /jms/);
 });
 
 test("renamed Linux packages replace legacy onetcli installations", () => {

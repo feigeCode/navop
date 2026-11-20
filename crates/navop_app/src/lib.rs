@@ -33,6 +33,7 @@ mod file_association;
 mod file_open;
 mod home;
 mod home_tab;
+mod jump_deeplink;
 mod license;
 #[cfg(feature = "shell")]
 mod local_terminal_profiles;
@@ -575,7 +576,10 @@ where
         }
         // 只有正式安装态才注册宿主文件关联；便携版与 debug 开发构建不应改写系统关联。
         // 独立产品不接管任何扩展名（`file_associations` 为空），文件关联始终归全量产品。
-        if one_core::app_paths::is_installed() && !product.identity().file_associations.is_empty() {
+        let identity = product.identity();
+        if one_core::app_paths::is_installed()
+            && (!identity.file_associations.is_empty() || !identity.url_schemes.is_empty())
+        {
             file_association::schedule_registration(cx);
         }
         notes::init(cx);
@@ -732,7 +736,7 @@ where
                         match request {
                             AppOpenRequest::ActivateAndOpenPaths(paths) => {
                                 for path in paths {
-                                    let input = file_open::FileOpenInput::Path(path);
+                                    let input = file_open::input_from_startup_argument(path);
                                     file_open::open_input(input, window, cx);
                                 }
                             }

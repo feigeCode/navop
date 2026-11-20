@@ -13,8 +13,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const ASSOCIATION_SCHEMA_VERSION: u32 = 2;
-const REGISTRATION_STAMP_FILE: &str = "file-association-registration-v2";
+const ASSOCIATION_SCHEMA_VERSION: u32 = 3;
+const REGISTRATION_STAMP_FILE: &str = "file-association-registration-v3";
 /// 反向域名 `app_id` 里不参与 ProgID 的根段：`com.navop.shell` → `NavopShell`。
 const REVERSE_DNS_ROOT: &str = "com";
 /// Linux 注册文件名里追加的扩展名。
@@ -140,14 +140,16 @@ pub fn associations_for(identity: &AppIdentity) -> Vec<AssociationSpec> {
     specs
 }
 
-/// 注册当前产品的文件关联；没有扩展名的产品直接跳过。
+/// 注册当前产品的文件关联与 URL 协议；两者都没声明的产品直接跳过。
 pub fn schedule_registration(cx: &mut App) {
     let Some(identity) = crate::identity() else {
         tracing::debug!("application identity is not configured; skipping file associations");
         return;
     };
-    if associations_for(identity).is_empty() {
-        tracing::debug!("product declares no file associations; skipping registration");
+    if !claims_any_registration(identity) {
+        tracing::debug!(
+            "product declares no file associations or URL schemes; skipping registration"
+        );
         return;
     }
     cx.background_spawn(async move {
@@ -182,8 +184,13 @@ fn prog_id_prefix(identity: &AppIdentity) -> String {
     prefix
 }
 
+/// 产品是否声明了任何需要写进系统的关联（扩展名或 URL scheme）。
+fn claims_any_registration(identity: &AppIdentity) -> bool {
+    !associations_for(identity).is_empty() || !identity.url_schemes.is_empty()
+}
+
 fn ensure_registered(identity: &'static AppIdentity) -> Result<()> {
-    if associations_for(identity).is_empty() {
+    if !claims_any_registration(identity) {
         return Ok(());
     }
     let executable = std::env::current_exe().context("resolve current executable")?;
@@ -242,6 +249,7 @@ struct WindowsPlanContext {
     open_command: String,
     default_icon: String,
     application_key: String,
+    url_protocol_description: String,
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -254,6 +262,7 @@ fn windows_plan_context(executable: &Path, identity: &AppIdentity) -> WindowsPla
             r"HKCU\Software\Classes\Applications\{}{}",
             identity.binary_name, WINDOWS_EXECUTABLE_SUFFIX
         ),
+        url_protocol_description: format!("URL:{} protocol", identity.display_name),
     }
 }
 
@@ -264,9 +273,9 @@ const WINDOWS_EXECUTABLE_SUFFIX: &str = ".exe";
 fn windows_registry_plan(executable: &Path, identity: &AppIdentity) -> Vec<RegistryCommand> {
     let context = windows_plan_context(executable, identity);
     let specs = associations_for(identity);
-    // 没有声明扩展名的产品不注册任何东西：只写 `Applications` 键既没人用，
-    // 又会在注册表里留下一个永远无法打开文件的项。
-    if specs.is_empty() {
+    // 既没有扩展名也没有 URL scheme 的产品不注册任何东西：只写 `Applications`
+    // 键既没人用，又会在注册表里留下一个永远无法打开文件的项。
+    if specs.is_empty() && identity.url_schemes.is_empty() {
         return Vec::new();
     }
     let mut commands = Vec::new();
@@ -274,8 +283,50 @@ fn windows_registry_plan(executable: &Path, identity: &AppIdentity) -> Vec<Regis
     for spec in &specs {
         append_windows_association_commands(&mut commands, &context, spec);
     }
-    append_windows_application_commands(&mut commands, &context, &specs);
+    if !specs.is_empty() {
+        append_windows_application_commands(&mut commands, &context, &specs);
+    }
+    for scheme in identity.url_schemes {
+        append_windows_url_protocol_commands(&mut commands, &context, scheme);
+    }
     commands
+}
+
+/// `jms://` 这类深链接依赖的 URL Protocol 注册：`Software\Classes\<scheme>`
+/// 下的默认值、空的 `URL Protocol`、`DefaultIcon` 与 `shell\open\command`。
+#[cfg(any(target_os = "windows", test))]
+fn append_windows_url_protocol_commands(
+    commands: &mut Vec<RegistryCommand>,
+    context: &WindowsPlanContext,
+    scheme: &str,
+) {
+    let base = format!(r"HKCU\Software\Classes\{scheme}");
+    for (key, value_name, data) in [
+        (base.clone(), None, context.url_protocol_description.clone()),
+        (
+            base.clone(),
+            Some("URL Protocol".to_string()),
+            String::new(),
+        ),
+        (
+            format!(r"{base}\DefaultIcon"),
+            None,
+            context.default_icon.clone(),
+        ),
+        (
+            format!(r"{base}\shell\open\command"),
+            None,
+            context.open_command.clone(),
+        ),
+    ] {
+        commands.push(RegistryCommand {
+            key,
+            value_name,
+            value_type: "REG_SZ",
+            data,
+            policy: RegistryWritePolicy::Always,
+        });
+    }
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -459,19 +510,27 @@ fn render_linux_desktop(executable: &Path, identity: &AppIdentity) -> String {
     let quoted = desktop_exec_quote(executable);
     let name = identity.display_name;
     let binary = identity.binary_name;
+    let mime_types = linux_default_mime_types(identity);
     LINUX_DESKTOP_TEMPLATE
         .lines()
-        .map(|line| {
+        .filter_map(|line| {
             if line.starts_with("Exec=") {
-                format!("Exec={quoted} %F")
+                // `%U` 才能把 `jms://` 与 `file://` 这类 URL 传给应用；`%F` 只给路径。
+                Some(format!("Exec={quoted} %U"))
             } else if line.starts_with("Name=") {
-                format!("Name={name}")
+                Some(format!("Name={name}"))
             } else if line.starts_with("Icon=") {
-                format!("Icon={binary}")
+                Some(format!("Icon={binary}"))
             } else if line.starts_with("StartupWMClass=") {
-                format!("StartupWMClass={binary}")
+                Some(format!("StartupWMClass={binary}"))
+            } else if line.starts_with("MimeType=") {
+                if mime_types.is_empty() {
+                    None
+                } else {
+                    Some(format!("MimeType={};", mime_types.join(";")))
+                }
             } else {
-                line.to_string()
+                Some(line.to_string())
             }
         })
         .collect::<Vec<_>>()
@@ -495,14 +554,21 @@ fn desktop_exec_quote(executable: &Path) -> String {
     format!("\"{escaped}\"")
 }
 
+/// 产品需要设为默认的 MIME 类型：文件关联的 MIME 加上每个 URL scheme 对应的
+/// `x-scheme-handler/<scheme>`。
 #[cfg(any(target_os = "linux", test))]
-fn linux_default_mime_types(identity: &AppIdentity) -> Vec<&'static str> {
-    identity
+fn linux_default_mime_types(identity: &AppIdentity) -> Vec<String> {
+    let mut mime_types = identity
         .file_associations
         .iter()
         .filter_map(|declared| association_kind(declared))
         .flat_map(|kind| kind.mime_types.iter().copied())
-        .collect()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    for scheme in identity.url_schemes {
+        mime_types.push(format!("x-scheme-handler/{scheme}"));
+    }
+    mime_types
 }
 
 #[cfg(target_os = "linux")]
@@ -522,7 +588,7 @@ fn ensure_linux_registered(executable: &Path, identity: &AppIdentity) -> Result<
     if !stamp_current {
         let desktop_name = format!("{}{LINUX_DESKTOP_SUFFIX}", identity.binary_name);
         for mime_type in linux_default_mime_types(identity) {
-            ensure_linux_default_if_missing(mime_type, &desktop_name)?;
+            ensure_linux_default_if_missing(&mime_type, &desktop_name)?;
         }
     }
     save_registration_stamp(executable, identity)
@@ -679,6 +745,9 @@ mod tests {
         assert!(associations_for(&AppIdentity::SHELL).is_empty());
         assert!(associations_for(&AppIdentity::DATA).is_empty());
         assert!(linux_default_mime_types(&AppIdentity::SHELL).is_empty());
+        assert_eq!(["jms"], AppIdentity::FULL.url_schemes);
+        assert!(AppIdentity::SHELL.url_schemes.is_empty());
+        assert!(AppIdentity::DATA.url_schemes.is_empty());
     }
 
     #[test]
@@ -713,6 +782,8 @@ mod tests {
         }
         assert!(rendered.contains(r#""C:\Program Files\Navop\navop.exe" "%1""#));
         assert!(rendered.contains(r"Applications\navop.exe"));
+        assert!(rendered.contains(r"Software\Classes\jms"));
+        assert!(rendered.contains("URL Protocol"));
         assert!(!rendered.contains("UserChoice"));
         assert!(!rendered.contains(".partial"));
         for (extension, prog_id) in [
@@ -764,7 +835,7 @@ mod tests {
         assert!(
             files
                 .desktop_contents
-                .contains(r#"Exec="/opt/Navop 100%%/navop" %F"#)
+                .contains(r#"Exec="/opt/Navop 100%%/navop" %U"#)
         );
         assert!(files.desktop_contents.contains("Name=Navop"));
         assert!(
@@ -773,6 +844,7 @@ mod tests {
                 .contains("MimeType=application/vnd.sqlite3")
         );
         assert!(files.desktop_contents.contains("application/x-asciicast"));
+        assert!(files.desktop_contents.contains("x-scheme-handler/jms;"));
         assert!(files.mime_contents.contains("<glob pattern=\"*.duckdb\"/>"));
         assert!(files.mime_contents.contains("<glob pattern=\"*.md\"/>"));
         assert!(files.mime_contents.contains("<glob pattern=\"*.cast\"/>"));
@@ -794,6 +866,7 @@ mod tests {
                 "application/vnd.duckdb",
                 "text/markdown",
                 "application/x-asciicast",
+                "x-scheme-handler/jms",
             ],
             linux_default_mime_types(&AppIdentity::FULL)
         );
@@ -826,12 +899,13 @@ mod tests {
             vec!["application/x-asciicast"],
             linux_default_mime_types(&custom)
         );
+        assert!(!files.desktop_contents.contains("x-scheme-handler/"));
     }
 
     #[test]
-    fn terminal_recording_associations_bump_the_registration_schema() {
-        assert_eq!(2, ASSOCIATION_SCHEMA_VERSION);
-        assert_eq!("file-association-registration-v2", REGISTRATION_STAMP_FILE);
+    fn registration_schema_covers_url_schemes() {
+        assert_eq!(3, ASSOCIATION_SCHEMA_VERSION);
+        assert_eq!("file-association-registration-v3", REGISTRATION_STAMP_FILE);
     }
 
     #[test]

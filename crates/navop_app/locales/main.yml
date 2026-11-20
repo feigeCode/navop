@@ -62,6 +62,10 @@ Common:
     en: "Unable to open file: %{error}"
     zh-CN: "无法打开文件：%{error}"
     zh-HK: "無法開啟檔案：%{error}"
+  jump_deeplink_failed:
+    en: "Unable to open the JumpServer link: %{error}"
+    zh-CN: "无法打开 JumpServer 链接：%{error}"
+    zh-HK: "無法開啟 JumpServer 連結：%{error}"
   storage_unavailable:
     en: Application storage is unavailable
     zh-CN: 应用存储不可用

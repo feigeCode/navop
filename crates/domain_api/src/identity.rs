@@ -19,6 +19,8 @@ pub struct AppIdentity {
     pub mcp_legacy_app_name: Option<&'static str>,
     pub mcp_update_channel: &'static str,
     pub file_associations: &'static [&'static str],
+    /// 由本产品接管的 URL scheme（`jms://` 之类），只有声明了才会注册。
+    pub url_schemes: &'static [&'static str],
 }
 
 impl AppIdentity {
@@ -39,6 +41,7 @@ impl AppIdentity {
         mcp_legacy_app_name: Some("onetcli"),
         mcp_update_channel: "stable",
         file_associations: &["db", "duckdb", "md", "cast"],
+        url_schemes: &["jms"],
     };
 
     pub const SHELL: Self = Self {
@@ -57,6 +60,7 @@ impl AppIdentity {
         mcp_legacy_app_name: None,
         mcp_update_channel: "shell",
         file_associations: &[],
+        url_schemes: &[],
     };
 
     pub const DATA: Self = Self {
@@ -75,6 +79,7 @@ impl AppIdentity {
         mcp_legacy_app_name: None,
         mcp_update_channel: "data",
         file_associations: &[],
+        url_schemes: &[],
     };
 }
 
