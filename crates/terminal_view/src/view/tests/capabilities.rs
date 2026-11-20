@@ -717,10 +717,9 @@ fn terminal_search_has_mouse_entries_and_accurate_trigger_help() {
 
     let sidebar = include_str!("../../sidebar/mod.rs");
     assert!(
-        sidebar.contains("terminal-toolbar-search")
-            && sidebar.contains("self.render_search_button(item_size, &snapshot.colors, cx)")
-            && sidebar.contains("view.open_search(window, cx)"),
-        "右上角工具区必须提供搜索按钮，并打开同一个独立浮层"
+        !sidebar.contains("terminal-toolbar-search")
+            && !sidebar.contains("self.render_search_button(item_size, &snapshot.colors, cx)"),
+        "侧边工具栏不再保留搜索按钮，避免重复入口"
     );
 
     let command_bar = include_str!("../command_bar/render.rs");
