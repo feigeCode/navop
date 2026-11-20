@@ -18,8 +18,8 @@ use gpui::{App, Window};
 use gpui_component::{WindowExt as _, notification::Notification};
 use one_core::settings::AppSettings;
 use one_core::storage::{
-    ConnectionType, PreferredOpenMode, SshAuthMethod, SshParams, StoredConnection,
-    StoredTerminalEncoding, StoredTerminalType,
+    PreferredOpenMode, SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding,
+    StoredTerminalType,
 };
 use one_core::tab_container::TabOpenMode;
 use percent_encoding::percent_decode_str;
@@ -49,10 +49,6 @@ impl ConnectionScheme {
             Self::Ssh => "ssh",
             Self::Sftp => "sftp",
         }
-    }
-
-    fn connection_type(self) -> ConnectionType {
-        ConnectionType::SshSftp
     }
 
     fn default_port(self) -> u16 {
@@ -366,7 +362,10 @@ mod tests {
         let connection = connection_from_link(&link);
         assert_eq!(connection.id, None);
         assert!(!connection.sync_enabled);
-        assert_eq!(connection.connection_type, ConnectionType::SshSftp);
+        assert_eq!(
+            connection.connection_type,
+            one_core::storage::ConnectionType::SshSftp
+        );
         assert_eq!(connection.name, "alice@example.com:2222");
 
         let params: SshParams =

@@ -12,6 +12,7 @@ actions!(
         ClearScreen,
         SearchForward,
         SearchBackward,
+        CloseTerminalSearch,
         ToggleViMode,
         ViModeStartSelection,
         IncreaseFont,

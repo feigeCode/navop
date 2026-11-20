@@ -8,6 +8,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dialog::{DialogButtonProps, DialogFooter};
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarMode};
@@ -174,6 +175,7 @@ mod render_surface;
 mod resize_event_handler;
 mod scroll;
 mod scroll_keys;
+mod search_bar;
 mod selection_autoscroll;
 mod selection_search;
 mod session_log_config;
@@ -197,8 +199,9 @@ use helpers::*;
 use init_config::TerminalViewInit;
 use keybindings::{
     TERMINAL_CLEAR_SCREEN_SHORTCUT, TERMINAL_CONTEXT, TERMINAL_COPY_SHORTCUT,
-    TERMINAL_PASTE_SHORTCUT, TERMINAL_SELECT_ALL_SHORTCUT, TERMINAL_TOGGLE_VI_MODE_SHORTCUT,
-    is_terminal_action_shortcut, terminal_paste_defaults, terminal_shortcut_label,
+    TERMINAL_PASTE_SHORTCUT, TERMINAL_SEARCH_CONTEXT, TERMINAL_SELECT_ALL_SHORTCUT,
+    TERMINAL_TOGGLE_VI_MODE_SHORTCUT, is_terminal_action_shortcut, terminal_paste_defaults,
+    terminal_shortcut_label,
 };
 pub use keybindings::{init, refresh_keybindings};
 pub use recording_playback_config::RecordingPlaybackViewConfig;
@@ -266,6 +269,9 @@ pub struct TerminalView {
     pending_render_cache_reset: bool,
     block_selection: Option<BlockSelection>,
     addon_manager: AddonManager,
+    /// 独立于设置侧栏的终端搜索浮层。
+    search_input: Entity<InputState>,
+    search_open: bool,
 
     _subscriptions: Vec<Subscription>,
 

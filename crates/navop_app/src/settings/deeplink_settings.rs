@@ -4,7 +4,7 @@
 //! 注册会改变双击/点击链接时的默认行为，所以默认全部关闭，只在用户显式勾选后
 //! 才写入系统关联（macOS 的 scheme 声明是静态的，由应用层再按此设置放行）。
 
-use gpui::{App, IntoElement, ParentElement, SharedString, Styled};
+use gpui::App;
 use gpui_component::setting::{SettingField, SettingGroup, SettingItem};
 use one_core::settings::AppSettings;
 use rust_i18n::t;

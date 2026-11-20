@@ -46,6 +46,9 @@ impl TerminalView {
             .flex_col()
             .overflow_hidden()
             .child(self.render_terminal_core(state, cx))
+            .when(self.search_open, |this| {
+                this.child(self.render_terminal_search_bar(cx))
+            })
             .when(show_scrollbar, |this| {
                 this.child(self.render_terminal_scrollbar())
             })

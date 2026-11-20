@@ -27,6 +27,8 @@ impl TerminalView {
                 .step(0.001)
                 .default_value(0.0)
         });
+        let search_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("Settings.search_placeholder")));
 
         // 获取初始颜色
         let colors = terminal.read(cx).term().lock().colors().clone();
@@ -178,6 +180,26 @@ impl TerminalView {
         let terminal_subscription = cx.subscribe_in(&terminal, window, Self::handle_terminal_event);
         let command_bar_subscription =
             cx.subscribe_in(&command_bar, window, Self::handle_command_bar_event);
+        let search_input_for_events = search_input.clone();
+        let search_subscription = cx.subscribe_in(
+            &search_input,
+            window,
+            move |this, _state, event: &InputEvent, _window, cx| match event {
+                InputEvent::Change => {
+                    let pattern = search_input_for_events.read(cx).value().to_string();
+                    let _ = this.set_search_pattern(&pattern);
+                    cx.notify();
+                }
+                InputEvent::PressEnter { secondary, .. } => {
+                    if *secondary {
+                        this.search_backward_internal(cx);
+                    } else {
+                        this.search_forward_internal(cx);
+                    }
+                }
+                _ => {}
+            },
+        );
         let recording_playback_slider_subscription = cx.subscribe_in(
             &recording_playback_slider,
             window,
@@ -216,6 +238,7 @@ impl TerminalView {
         subscriptions.push(sidebar_subscription);
         subscriptions.push(terminal_subscription);
         subscriptions.push(command_bar_subscription);
+        subscriptions.push(search_subscription);
         subscriptions.push(recording_playback_slider_subscription);
         if let Some(subscription) = workspace_editor_subscription {
             subscriptions.push(subscription);
@@ -293,6 +316,8 @@ impl TerminalView {
             pending_render_cache_reset: false,
             block_selection: None,
             addon_manager: Self::create_addon_manager(),
+            search_input,
+            search_open: false,
             _subscriptions: subscriptions,
             mouse_position: None,
             render_cache: RenderCache::new(DEFAULT_ROWS, DEFAULT_COLS, colors),

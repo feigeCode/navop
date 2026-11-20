@@ -729,12 +729,6 @@ impl TerminalToolDockState {
 pub enum TerminalSidebarEvent {
     /// 面板切换
     PanelChanged(Option<SidebarPanel>),
-    /// 搜索模式变化
-    SearchPatternChanged(String),
-    /// 搜索前一个
-    SearchPrevious,
-    /// 搜索下一个
-    SearchNext,
     /// 字体大小变更
     FontSizeChanged(f32),
     /// 字体变更
@@ -1282,15 +1276,6 @@ impl TerminalSidebar {
             |this, _, event: &settings_panel::SettingsPanelEvent, cx| match event {
                 settings_panel::SettingsPanelEvent::Close => {
                     this.close_tool(SidebarPanel::Settings, cx);
-                }
-                settings_panel::SettingsPanelEvent::SearchPatternChanged(pattern) => {
-                    cx.emit(TerminalSidebarEvent::SearchPatternChanged(pattern.clone()));
-                }
-                settings_panel::SettingsPanelEvent::SearchPrevious => {
-                    cx.emit(TerminalSidebarEvent::SearchPrevious);
-                }
-                settings_panel::SettingsPanelEvent::SearchNext => {
-                    cx.emit(TerminalSidebarEvent::SearchNext);
                 }
                 settings_panel::SettingsPanelEvent::FontSizeChanged(size) => {
                     cx.emit(TerminalSidebarEvent::FontSizeChanged(*size));
@@ -2116,18 +2101,6 @@ impl TerminalSidebar {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_custom_highlights(rules, cx);
         });
-    }
-
-    /// 更新搜索输入框的值
-    pub fn set_search_value(&self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings_panel.update(cx, |panel, cx| {
-            panel.set_search_value(value, window, cx);
-        });
-    }
-
-    /// 获取搜索输入框的值
-    pub fn search_value(&self, cx: &App) -> String {
-        self.settings_panel.read(cx).search_value(cx)
     }
 
     /// 询问 AI

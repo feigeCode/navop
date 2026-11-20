@@ -60,14 +60,6 @@ impl TerminalView {
             self.sidebar.update(cx, |sidebar, cx| {
                 sidebar.set_active_panel(None, cx);
             });
-            // 清除搜索
-            self.sidebar.update(cx, |sidebar, cx| {
-                sidebar.set_search_value("", window, cx);
-            });
-            if let Some(search) = self.addon_manager.get_as_mut::<SearchAddon>("search") {
-                search.clear();
-            }
-            self.invalidate_terminal_searches();
             cx.notify();
             return;
         }
@@ -88,39 +80,61 @@ impl TerminalView {
         );
     }
 
+    fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_open = true;
+        let focus_handle = self.search_input.read(cx).focus_handle(cx);
+        focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn close_terminal_search(
+        &mut self,
+        _: &CloseTerminalSearch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_search(window, cx);
+    }
+
+    pub(super) fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.search_open {
+            return;
+        }
+        self.search_open = false;
+        let search_input = self.search_input.clone();
+        search_input.update(cx, |input, cx| input.set_value("", window, cx));
+        if let Some(search) = self.addon_manager.get_as_mut::<SearchAddon>("search") {
+            search.clear();
+        }
+        self.invalidate_terminal_searches();
+        // 浮层卸载前把焦点还给终端，避免后续快捷键和终端输入丢失。
+        self.focus_terminal(window, cx);
+        cx.notify();
+    }
+
     pub(super) fn search_forward(
         &mut self,
         _: &SearchForward,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // 如果侧边栏设置面板未激活，则激活它
-        if self.sidebar.read(cx).active_panel() != Some(SidebarPanel::Settings) {
-            self.sidebar.update(cx, |sidebar, cx| {
-                sidebar.set_active_panel(Some(SidebarPanel::Settings), cx);
-            });
-            cx.notify();
+        if !self.search_open {
+            self.open_search(window, cx);
             return;
         }
-        // 执行向前搜索
         self.search_forward_internal(cx);
     }
 
     pub(super) fn search_backward(
         &mut self,
         _: &SearchBackward,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // 如果侧边栏设置面板未激活，则激活它
-        if self.sidebar.read(cx).active_panel() != Some(SidebarPanel::Settings) {
-            self.sidebar.update(cx, |sidebar, cx| {
-                sidebar.set_active_panel(Some(SidebarPanel::Settings), cx);
-            });
-            cx.notify();
+        if !self.search_open {
+            self.open_search(window, cx);
             return;
         }
-        // 执行向后搜索
         self.search_backward_internal(cx);
     }
 

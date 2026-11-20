@@ -660,6 +660,53 @@ fn terminal_key_and_selection_actions_never_wait_for_the_parser() {
 }
 
 #[test]
+fn terminal_search_uses_an_independent_overlay_without_opening_settings() {
+    let selection = include_str!("../selection_search.rs");
+    for action in [
+        "pub(super) fn search_forward",
+        "pub(super) fn search_backward",
+    ] {
+        let region = function_region(selection, action, "\n    pub ");
+        assert!(
+            region.contains("self.open_search(window, cx)"),
+            "搜索快捷键必须打开独立搜索浮层"
+        );
+        assert!(
+            !region.contains("SidebarPanel::Settings"),
+            "搜索快捷键不得展开设置侧栏"
+        );
+    }
+
+    let close = function_region(selection, "pub(super) fn close_search", "\n    pub ");
+    assert!(
+        close.contains("self.search_open = false")
+            && close.contains("input.set_value(\"\", window, cx)")
+            && close.contains("search.clear()")
+            && close.contains("self.invalidate_terminal_searches()")
+            && close.contains("self.focus_terminal(window, cx)"),
+        "关闭搜索必须清理匹配、取消旧任务并恢复终端焦点"
+    );
+
+    let surface = include_str!("../render_surface.rs");
+    assert!(
+        surface.contains(".when(self.search_open")
+            && surface.contains("render_terminal_search_bar"),
+        "搜索浮层应挂在终端视口内"
+    );
+    let search_bar = include_str!("../search_bar.rs");
+    assert!(
+        search_bar.contains(".absolute()") && search_bar.contains(".occlude()"),
+        "搜索框必须是覆盖层，不能挤动终端画布"
+    );
+
+    let settings = include_str!("../../sidebar/settings_panel.rs");
+    assert!(
+        !settings.contains("render_search_section") && !settings.contains("search_input_state"),
+        "设置面板不得保留另一套不同步的搜索框"
+    );
+}
+
+#[test]
 fn terminal_search_never_waits_for_the_parser_on_the_gpui_thread() {
     let source = include_str!("../sidebar_events.rs");
     let forward = function_region(

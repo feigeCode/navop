@@ -4,8 +4,6 @@
 //! `AppIdentity::file_associations` 决定。URL scheme 还要叠加用户开关：
 //! `jms://` 始终注册，`ssh://`/`sftp://` 等通用 scheme 只有用户启用后才写进系统。
 
-pub use app_kit::file_association::*;
-
 /// 按当前设置重新注册关联（设置里切换协议开关后调用）。
 pub(crate) fn schedule_registration(cx: &mut gpui::App) {
     if !one_core::app_paths::is_installed() {

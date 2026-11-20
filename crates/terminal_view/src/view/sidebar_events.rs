@@ -207,16 +207,6 @@ impl TerminalView {
                 cx.emit(TabContentEvent::StateChanged);
                 cx.notify();
             }
-            TerminalSidebarEvent::SearchPatternChanged(pattern) => {
-                let _ = self.set_search_pattern(pattern);
-                cx.notify();
-            }
-            TerminalSidebarEvent::SearchPrevious => {
-                self.search_backward_internal(cx);
-            }
-            TerminalSidebarEvent::SearchNext => {
-                self.search_forward_internal(cx);
-            }
             TerminalSidebarEvent::FontSizeChanged(size) => {
                 self.set_font_size(*size, cx);
             }

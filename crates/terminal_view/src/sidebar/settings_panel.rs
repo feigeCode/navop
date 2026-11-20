@@ -1,6 +1,6 @@
 //! 终端设置面板
 //!
-//! 提供搜索、字体设置和主题切换功能
+//! 提供字体设置和主题切换功能
 
 use gpui::FontWeight;
 use gpui::prelude::FluentBuilder;
@@ -123,12 +123,6 @@ fn terminal_font_options(
 pub enum SettingsPanelEvent {
     /// 关闭面板
     Close,
-    /// 搜索模式变化
-    SearchPatternChanged(String),
-    /// 搜索前一个
-    SearchPrevious,
-    /// 搜索下一个
-    SearchNext,
     /// 字体大小变更
     FontSizeChanged(f32),
     /// 字体变更
@@ -175,8 +169,6 @@ pub enum SettingsPanelEvent {
 
 /// 设置面板组件
 pub struct SettingsPanel {
-    /// 搜索输入框状态
-    search_input_state: Entity<InputState>,
     /// 字体大小输入框状态
     font_size_input_state: Entity<InputState>,
     /// 滚屏历史行数输入框状态
@@ -256,9 +248,6 @@ impl SettingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search_input_state =
-            cx.new(|cx| InputState::new(window, cx).placeholder(t!("Settings.search_placeholder")));
-
         // 字体大小输入框
         let font_size = f32::from(initial_font_size);
         let font_size_input_state = cx.new(|cx| InputState::new(window, cx).placeholder("13"));
@@ -311,27 +300,6 @@ impl SettingsPanel {
             cx.new(|cx| SelectState::new(fonts, selected_index, window, cx).searchable(true));
 
         let mut subscriptions = Vec::new();
-
-        // 订阅搜索输入事件
-        let input_entity = search_input_state.clone();
-        subscriptions.push(cx.subscribe_in(
-            &search_input_state,
-            window,
-            move |_this, _state, event, _window, cx| match event {
-                InputEvent::Change => {
-                    let value = input_entity.read(cx).value().to_string();
-                    cx.emit(SettingsPanelEvent::SearchPatternChanged(value));
-                }
-                InputEvent::PressEnter { secondary, .. } => {
-                    if *secondary {
-                        cx.emit(SettingsPanelEvent::SearchPrevious);
-                    } else {
-                        cx.emit(SettingsPanelEvent::SearchNext);
-                    }
-                }
-                _ => {}
-            },
-        ));
 
         // 订阅字体大小输入事件
         let font_size_entity = font_size_input_state.clone();
@@ -450,7 +418,6 @@ impl SettingsPanel {
         ));
 
         Self {
-            search_input_state,
             font_size_input_state,
             scrollback_lines_input_state,
             font_select_state,
@@ -895,19 +862,6 @@ impl SettingsPanel {
         });
     }
 
-    /// 获取搜索值
-    pub fn search_value(&self, cx: &App) -> String {
-        self.search_input_state.read(cx).value().to_string()
-    }
-
-    /// 设置搜索值
-    pub fn set_search_value(&self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let value = value.to_string();
-        self.search_input_state.update(cx, |state, cx| {
-            state.set_value(&value, window, cx);
-        });
-    }
-
     /// 设置主题（用户点击主题时调用）
     fn set_theme(&mut self, theme: TerminalTheme, cx: &mut Context<Self>) {
         self.current_theme = theme.clone();
@@ -917,53 +871,6 @@ impl SettingsPanel {
 
     fn colors(&self) -> TerminalColors {
         self.current_theme.colors()
-    }
-
-    /// 渲染搜索区域
-    fn render_search_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = self.colors();
-        let muted_fg = colors.muted_foreground;
-
-        v_flex().gap_3().p_3().child(
-            v_flex()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(muted_fg)
-                        .child(t!("Settings.search").to_uppercase()),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(Input::new(&self.search_input_state).small().w_full())
-                        .child(
-                            Button::new("search-prev")
-                                .icon(IconName::ChevronUp)
-                                .ghost()
-                                .small()
-                                .on_click(cx.listener(|_this, _, _window, cx| {
-                                    cx.emit(SettingsPanelEvent::SearchPrevious);
-                                })),
-                        )
-                        .child(
-                            Button::new("search-next")
-                                .icon(IconName::ChevronDown)
-                                .ghost()
-                                .small()
-                                .on_click(cx.listener(|_this, _, _window, cx| {
-                                    cx.emit(SettingsPanelEvent::SearchNext);
-                                })),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(muted_fg)
-                        .child(t!("Settings.search_shortcuts_hint")),
-                ),
-        )
     }
 
     /// 渲染主题项
@@ -2059,7 +1966,6 @@ impl Render for SettingsPanel {
                             v_flex()
                                 .flex_shrink_0()
                                 .pb_4()
-                                .child(self.render_search_section(cx))
                                 .child(self.render_font_section(cx))
                                 .child(self.render_scrollback_section(cx))
                                 .child(self.render_cursor_section(cx))
