@@ -88,13 +88,13 @@ fn is_symlink(mode: Option<u32>) -> bool {
     mode.is_some_and(|mode| mode & 0o170000 == 0o120000)
 }
 
-fn make_executable(path: &Path) -> Result<(), X11ComponentError> {
+fn make_executable(_path: &Path) -> Result<(), X11ComponentError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        let mut permissions = std::fs::metadata(path).map_err(io_error)?.permissions();
+        let mut permissions = std::fs::metadata(_path).map_err(io_error)?.permissions();
         permissions.set_mode(0o700);
-        std::fs::set_permissions(path, permissions).map_err(io_error)?;
+        std::fs::set_permissions(_path, permissions).map_err(io_error)?;
     }
     Ok(())
 }
