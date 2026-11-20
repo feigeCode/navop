@@ -2847,12 +2847,12 @@ fn release_only_pull_requests_skip_the_platform_matrix() {
         "  classify:",
         "  test:",
         &[
-            "if: ${{ github.event_name == 'pull_request' }}",
             "release_only: ${{ steps.check.outputs.release_only }}",
             "- uses: actions/checkout@v7",
             "fetch-depth: 0",
             "BASE_SHA: ${{ github.event.pull_request.base.sha }}",
             "python3 script/release_pr.py check",
+            "echo \"release_only=false\" >> \"$GITHUB_OUTPUT\"",
         ],
     );
     assert_contains_all(
