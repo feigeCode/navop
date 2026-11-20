@@ -10,9 +10,10 @@ use connection_form::team::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, AsyncApp, ClipboardEntry, Context, Div, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, img, px, relative,
+    App, AppContext, AsyncApp, ClickEvent, ClipboardEntry, Context, Div, Entity, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, img,
+    px, relative,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt,
@@ -33,11 +34,11 @@ use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
+use one_core::settings::{AppSettings, X11ServerMode, configured_mode};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    BastionTarget, FtpParams,
-    JumpMode as StorageJumpMode, JumpServerConfig, PreferredOpenMode, ProxyConfig,
-    ProxyType as StorageProxyType, RemoteFileParams,
+    BastionTarget, FtpParams, JumpMode as StorageJumpMode, JumpServerConfig, PreferredOpenMode,
+    ProxyConfig, ProxyType as StorageProxyType, RemoteFileParams,
     RemoteFileProtocol as StoredRemoteFileProtocol, SSH_ICON_IDS, SftpAccount, SshAccountExpect,
     SshAgentForwardKey, SshAuthMethod, SshElevationExpect, SshParams, StoredConnection,
     StoredTerminalEncoding, StoredTerminalType, Workspace, ssh_os_icon,
@@ -64,6 +65,7 @@ use crate::ssh_form_mfa::{
     CapturedMfaRequest, FormMfaPrompt, FormMfaRequest, JumpServerMfaResponder,
     OtpAutoAnswerResponder, form_mfa_request_from_keyboard_interactive, is_jump_mfa_required_error,
 };
+use crate::x11_status::{X11ConnectionState, probe_connection_x11};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SshFormPostSaveAction {
@@ -397,6 +399,9 @@ pub struct SshFormWindow {
     is_testing: bool,
     is_uninstalling_shell_integration: bool,
     test_result: Option<Result<Option<String>, String>>,
+    /// 本次测试连接实际协商出的 X11 状态，不依赖日志文本。
+    x11_test_status: Option<X11ConnectionState>,
+    x11_switch_message: Option<String>,
     shell_integration_uninstall_result: Option<Result<(), String>>,
     on_saved: Option<SshFormSavedCallback>,
     save_action: SaveAction,
@@ -1535,6 +1540,8 @@ impl SshFormWindow {
             is_testing: false,
             is_uninstalling_shell_integration: false,
             test_result: None,
+            x11_test_status: None,
+            x11_switch_message: None,
             shell_integration_uninstall_result: None,
             on_saved,
             save_action: SaveAction::Close,
@@ -2157,10 +2164,13 @@ impl SshFormWindow {
         cx: &mut Context<Self>,
     ) {
         self.is_testing = true;
+        self.x11_test_status = None;
+        self.x11_switch_message = None;
         let target_host = params.host.clone();
         let mut config = self.build_ssh_connect_config(&params);
         config.host_key_verifier = host_key_verifier.clone();
         let x11_requested = config.x11_forwarding;
+        let x11_mode = configured_mode();
         let jump_mfa_capture = CapturedMfaRequest::default();
         let jump_mfa_responses = self.collect_jump_mfa_responses(cx, &signature);
         let jump_password = config
@@ -2198,12 +2208,16 @@ impl SshFormWindow {
             let spawn_result = Tokio::spawn_result(cx, async move {
                 let mut client = RusshClient::connect(config).await?;
                 let os_id = detect_remote_os_id(&mut client).await;
-                let x11_available = client.x11_forwarding().is_some();
+                let x11_probe = probe_connection_x11(&mut client).await;
                 client.disconnect().await?;
-                Ok::<(Option<String>, bool), anyhow::Error>((os_id, x11_available))
+                Ok::<_, anyhow::Error>((os_id, x11_probe))
             })
             .await;
 
+            let x11_state = match &spawn_result {
+                Ok((_, probe)) => X11ConnectionState::from_test(x11_requested, x11_mode, probe),
+                _ => None,
+            };
             let jump_mfa_request = match &spawn_result {
                 Err(error) if is_jump_mfa_required_error(error.as_ref()) => jump_mfa_capture.take(),
                 _ => None,
@@ -2214,12 +2228,12 @@ impl SshFormWindow {
             };
             let (test_result, x11_unavailable): (Result<Option<String>, String>, bool) =
                 match spawn_result {
-                    Ok((os_id, x11_available)) => (
+                    Ok((os_id, x11_probe)) => (
                         Ok(os_id),
                         connection_test_needs_xquartz_warning(
                             cfg!(target_os = "macos"),
                             x11_requested,
-                            x11_available,
+                            x11_probe.accepted(),
                         ),
                     ),
                     Err(error) => (Err(format_connection_error(&error, &target_host)), false),
@@ -2255,6 +2269,9 @@ impl SshFormWindow {
                             test_result.as_ref().ok().map(|_| signature.clone());
                         if let Ok(os_id) = &test_result {
                             this.detected_os_id = os_id.clone();
+                        }
+                        if let Some(x11_state) = x11_state {
+                            this.x11_test_status = Some(x11_state);
                         }
                         this.test_result = Some(test_result);
                     }
@@ -3456,12 +3473,10 @@ impl SshFormWindow {
                         self.render_form_input(&self.jump_username_input),
                     ))
                 })
-                .child(
-                    self.render_form_row(
-                        &t!("SSH.jump_auth_method"),
-                        Select::new(&self.jump_auth_method_select).w_full(),
-                    ),
-                )
+                .child(self.render_form_row(
+                    &t!("SSH.jump_auth_method"),
+                    Select::new(&self.jump_auth_method_select).w_full(),
+                ))
                 .when(
                     jump_credential_is_manual && jump_auth_method == AuthMethodSelection::Password,
                     |this| {
@@ -4122,6 +4137,81 @@ fn mfa_prompt_label(prompt: &str) -> String {
     }
 }
 
+impl SshFormWindow {
+    fn switch_x11_to_external(
+        &mut self,
+        _: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        AppSettings::update_and_save(cx, |settings| {
+            settings.x11_server_mode = X11ServerMode::External;
+        });
+        self.x11_switch_message = Some(t!("SSH.x11_switching_external").to_string());
+        cx.notify();
+        let task = Tokio::spawn_result(cx, async move {
+            Ok(x11_component::resolve_server(X11ServerMode::External).await)
+        });
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let status = match task.await {
+                Ok(resolution) => resolution.status,
+                Err(error) => one_core::settings::X11ForwardingStatus::Disabled {
+                    reason: error.to_string(),
+                },
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let Some(state) = this.x11_test_status.as_mut() {
+                    state.apply_external_resolution(status);
+                }
+                this.x11_switch_message = None;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn render_x11_status(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let state = self.x11_test_status.as_ref()?;
+        let disabled = matches!(
+            state.status,
+            one_core::settings::X11ForwardingStatus::Disabled { .. }
+        );
+        let color = if disabled {
+            cx.theme().danger
+        } else {
+            cx.theme().success
+        };
+        let switch_button = state.should_offer_external().then(|| {
+            Button::new("ssh-x11-use-external")
+                .label(t!("SSH.x11_switch_external").to_string())
+                .small()
+                .on_click(cx.listener(Self::switch_x11_to_external))
+        });
+        Some(
+            v_flex()
+                .mx_6()
+                .pb_2()
+                .gap_1()
+                .child(div().text_sm().text_color(color).child(state.label()))
+                .children(
+                    state
+                        .guidance_keys()
+                        .iter()
+                        .map(|key| div().child(t!(*key).to_string())),
+                )
+                .when(cfg!(target_os = "macos"), |this| {
+                    this.child(t!("SSH.x11_macos_xquartz_guidance").to_string())
+                })
+                .when_some(switch_button, |this, button| this.child(button))
+                .when_some(self.x11_switch_message.clone(), |this, message| {
+                    this.child(div().text_color(cx.theme().muted_foreground).child(message))
+                })
+                .text_xs()
+                .into_any_element(),
+        )
+    }
+}
+
 impl Focusable for SshFormWindow {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -4135,6 +4225,7 @@ impl Render for SshFormWindow {
         let is_busy = is_testing || is_uninstalling_shell_integration;
         let active_tab = self.active_tab;
 
+        let x11_status_element = self.render_x11_status(cx);
         let test_result_element = match &self.test_result {
             Some(Ok(os_id)) => Some(
                 h_flex()
@@ -4247,6 +4338,7 @@ impl Render for SshFormWindow {
             .when_some(test_result_element, |this, elem| {
                 this.child(h_flex().justify_center().pb_2().child(elem))
             })
+            .when_some(x11_status_element, |this, elem| this.child(elem))
             .when_some(uninstall_result_element, |this, elem| {
                 this.child(div().w_full().min_w_0().px_6().pb_2().child(elem))
             })
@@ -4365,9 +4457,9 @@ mod tests {
     use one_core::settings::AppSettings;
     use one_core::storage::{
         BastionTarget, BastionUserFormat, ConnectionType, CredentialReference, FtpParams,
-        JumpMode as StorageJumpMode, JumpServerConfig, PreferredOpenMode,
-        RemoteFileParams, RemoteFileProtocol as StoredRemoteFileProtocol, SftpAccount,
-        SshAuthMethod, SshElevationExpect, SshParams, StoredConnection, StoredTerminalEncoding,
+        JumpMode as StorageJumpMode, JumpServerConfig, PreferredOpenMode, RemoteFileParams,
+        RemoteFileProtocol as StoredRemoteFileProtocol, SftpAccount, SshAuthMethod,
+        SshElevationExpect, SshParams, StoredConnection, StoredTerminalEncoding,
         StoredTerminalType,
     };
     use rust_i18n::t;
@@ -6030,9 +6122,7 @@ mod tests {
 
     /// 堡垒机直连：基础信息就是堡垒机登录信息，保存时由它派生 jump_server。
     #[gpui::test]
-    fn ssh_form_bastion_direct_derives_jump_config_from_basic_info(
-        cx: &mut TestAppContext,
-    ) {
+    fn ssh_form_bastion_direct_derives_jump_config_from_basic_info(cx: &mut TestAppContext) {
         cx.update(|cx| {
             cx.set_global(AppSettings::default());
             gpui_component::init(cx);

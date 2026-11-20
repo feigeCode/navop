@@ -547,6 +547,8 @@ pub struct SshBackend {
     exec_ids: Arc<AtomicU64>,
     performance_metrics: Arc<TerminalPerformanceMetrics>,
     transfer_cancellation: ActiveTransferCancellation,
+    /// 本终端会话的 X11 请求结果；不写入共享 SSH transport。
+    x11_status: Option<ssh::X11ForwardingStatus>,
 }
 
 pub struct SshBackendConnect {
@@ -793,6 +795,11 @@ impl SshBackend {
             disable_shell_integration,
         )
         .await
+        .map(
+            |(client, channel, shell_integration_requested, _x11_status)| {
+                (client, channel, shell_integration_requested)
+            },
+        )
     }
 
     pub async fn connect(request: SshBackendConnect) -> anyhow::Result<Self> {
@@ -849,14 +856,15 @@ impl SshBackend {
             );
         }
         let setup_started_at = Instant::now();
-        let (client, mut channel, shell_integration_requested) = Self::establish_channel(
-            &session_manager,
-            &pty_config,
-            connection_id,
-            disable_shell_integration,
-        )
-        .await
-        .map_err(add_connect_error_context)?;
+        let (client, mut channel, shell_integration_requested, x11_status) =
+            Self::establish_channel(
+                &session_manager,
+                &pty_config,
+                connection_id,
+                disable_shell_integration,
+            )
+            .await
+            .map_err(add_connect_error_context)?;
         tracing::debug!(
             target: "terminal.ssh.setup",
             connection_id,
@@ -1569,6 +1577,7 @@ impl SshBackend {
             exec_ids,
             performance_metrics,
             transfer_cancellation,
+            x11_status,
         })
     }
 
@@ -1584,6 +1593,7 @@ impl SshBackend {
         Arc<tokio::sync::Mutex<ssh::RusshClient>>,
         ssh::RusshChannel,
         bool,
+        Option<ssh::X11ForwardingStatus>,
     )> {
         Self::establish_channel_with_manager(
             session_manager.as_ref(),
@@ -1603,6 +1613,7 @@ impl SshBackend {
         Arc<tokio::sync::Mutex<M::Client>>,
         <M::Client as SshClient>::Channel,
         bool,
+        Option<ssh::X11ForwardingStatus>,
     )> {
         let mut attempt = 0usize;
         let mut plain_channel_only = disable_shell_integration;
@@ -1638,7 +1649,9 @@ impl SshBackend {
                 } else {
                     Self::prepare_plain_ssh_channel(&mut *guard, pty_config)
                         .await
-                        .map(|channel| (channel, shell_integration_requested))
+                        .map(|(channel, x11_status)| {
+                            (channel, shell_integration_requested, x11_status)
+                        })
                 }
             };
 
@@ -1649,8 +1662,8 @@ impl SshBackend {
             // 报 Disconnected」的竞态来源。此类错误因此与 channel open 被拒同等处理：失效
             // 该 transport generation，并用单个裸交互 channel 重连一次（重连时跳过探测）。
             match result {
-                Ok((channel, shell_integration_requested)) => {
-                    return Ok((client, channel, shell_integration_requested));
+                Ok((channel, shell_integration_requested, x11_status)) => {
+                    return Ok((client, channel, shell_integration_requested, x11_status));
                 }
                 Err(err)
                     if attempt < DEGRADED_RECONNECT_BACKOFFS.len()
@@ -1684,10 +1697,10 @@ impl SshBackend {
     async fn prepare_plain_ssh_channel<C: SshClient>(
         client: &mut C,
         pty_config: &PtyConfig,
-    ) -> anyhow::Result<C::Channel> {
+    ) -> anyhow::Result<(C::Channel, Option<ssh::X11ForwardingStatus>)> {
         let mut channel = client.open_channel().await?;
-        Self::start_interactive_shell(client, &mut channel, pty_config).await?;
-        Ok(channel)
+        let x11_status = Self::start_interactive_shell(client, &mut channel, pty_config).await?;
+        Ok((channel, x11_status))
     }
 
     /// 通过独立 exec channel 只读探测登录 shell 是否支持运行时注入。
@@ -1837,28 +1850,45 @@ impl SshBackend {
         client: &C,
         channel: &mut C::Channel,
         pty_config: &PtyConfig,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<ssh::X11ForwardingStatus>> {
         channel.request_pty(pty_config).await?;
-        Self::maybe_request_x11_forwarding(client, channel).await;
+        let x11_status = Self::maybe_request_x11_forwarding(client, channel).await;
         Self::maybe_request_agent_forwarding(client, channel).await;
         channel.request_shell().await?;
-        Ok(())
+        Ok(x11_status)
     }
 
     /// 连接启用了 X11 转发时在 pty 之后、shell 之前发送 x11-req。
-    /// 服务端拒绝（如 sshd 未开 X11Forwarding）只告警降级，不影响终端使用。
-    async fn maybe_request_x11_forwarding<C: SshClient>(client: &C, channel: &mut C::Channel) {
+    /// 服务端拒绝只降级当前会话，并把检查项暴露给会话信息面板。
+    async fn maybe_request_x11_forwarding<C: SshClient>(
+        client: &C,
+        channel: &mut C::Channel,
+    ) -> Option<ssh::X11ForwardingStatus> {
         let Some(proxy) = client.x11_forwarding() else {
-            return;
+            return client.x11_status();
         };
         let request = proxy.issue_request(false);
-        if let Err(error) = channel.request_x11_forwarding(&request).await {
-            proxy.retract_request(&request);
-            tracing::warn!(
-                target: "terminal.ssh.x11",
-                error = %error,
-                "服务端拒绝 X11 转发请求，本会话停用 X11 转发"
-            );
+        match channel.request_x11_forwarding(&request).await {
+            Ok(()) => client.x11_status(),
+            Err(error) => {
+                let remote_rejected = error.downcast_ref::<ssh::X11RequestRejected>().is_some();
+                proxy.retract_request(&request);
+                let status = x11_request_error_status(&error);
+                if remote_rejected {
+                    tracing::warn!(
+                        target: "terminal.ssh.x11",
+                        error = %error,
+                        "服务端拒绝 X11 转发请求，本会话停用 X11 转发"
+                    );
+                } else {
+                    tracing::warn!(
+                        target: "terminal.ssh.x11",
+                        error = %error,
+                        "X11 转发请求发送或等待响应失败，本会话停用 X11 转发"
+                    );
+                }
+                Some(status)
+            }
         }
     }
 
@@ -1878,6 +1908,25 @@ impl SshBackend {
     }
 }
 
+fn x11_request_error_status(error: &anyhow::Error) -> ssh::X11ForwardingStatus {
+    if error.downcast_ref::<ssh::X11RequestRejected>().is_some() {
+        return x11_rejection_status(error);
+    }
+    let reason = format!(
+        "X11 转发请求未完成（本地发送失败、等待响应超时或通道提前关闭）：{error:#}。\
+         这不是远端 CHANNEL_FAILURE；请检查连接后重试。"
+    );
+    ssh::X11ForwardingStatus::Disabled { reason }
+}
+
+fn x11_rejection_status(error: &anyhow::Error) -> ssh::X11ForwardingStatus {
+    let reason = format!(
+        "远端拒绝了 x11-req：{error:#}。请检查 sshd_config 的 X11Forwarding yes、\
+         X11DisplayOffset 与 xauth；本应用使用 trusted (-Y)，不要用不支持 SECURITY 扩展的 ssh -X 代替。"
+    );
+    ssh::X11ForwardingStatus::Disabled { reason }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1891,6 +1940,155 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tokio::time::sleep;
     use tokio_util::sync::CancellationToken;
+
+    fn backend_with_x11_status(x11_status: Option<ssh::X11ForwardingStatus>) -> SshBackend {
+        let (command_tx, _command_rx) = unbounded_channel();
+        SshBackend {
+            command_tx,
+            exec_ids: Arc::new(AtomicU64::new(1)),
+            performance_metrics: Arc::new(TerminalPerformanceMetrics::enabled()),
+            transfer_cancellation: ActiveTransferCancellation::default(),
+            x11_status,
+        }
+    }
+
+    #[test]
+    fn x11_rejection_status_contains_remote_and_trusted_checks() {
+        let status = x11_rejection_status(&anyhow!("administratively prohibited"));
+        let ssh::X11ForwardingStatus::Disabled { reason } = status else {
+            panic!("x11-req 拒绝必须进入可见停用状态");
+        };
+        assert!(reason.contains("X11Forwarding yes"));
+        assert!(reason.contains("trusted"));
+        assert!(reason.contains("administratively prohibited"));
+    }
+
+    #[tokio::test]
+    async fn x11_rejection_is_scoped_to_the_requesting_session() {
+        let (mut channel, state) = MockChannel::new([], false);
+        state.lock().unwrap().x11_remote_rejection = true;
+        let proxy = ssh::X11Proxy::for_endpoint(
+            ssh::ServerEndpoint::Inet {
+                host: "127.0.0.1".to_string(),
+                port: 6137,
+            },
+            ssh::MagicCookie::generate(),
+        );
+        let ready = ssh::X11ForwardingStatus::External {
+            server: "test X server".to_string(),
+        };
+        let client = MockClient {
+            x11_proxy: Some(proxy),
+            x11_status: Some(ready.clone()),
+            ..MockClient::new([])
+        };
+
+        let status = SshBackend::maybe_request_x11_forwarding(&client, &mut channel)
+            .await
+            .expect("拒绝原因必须返回给当前会话");
+        let ssh::X11ForwardingStatus::Disabled { reason } = status else {
+            panic!("x11-req 拒绝必须停用当前会话的 X11 状态");
+        };
+        assert!(reason.contains("x11-req"));
+        assert_eq!(client.x11_status(), Some(ready));
+    }
+
+    #[tokio::test]
+    async fn x11_transport_error_is_not_reported_as_remote_rejection() {
+        let (mut channel, state) = MockChannel::new([], false);
+        state.lock().unwrap().x11_error = Some("local send failed".to_string());
+        let proxy = ssh::X11Proxy::for_endpoint(
+            ssh::ServerEndpoint::Inet {
+                host: "127.0.0.1".to_string(),
+                port: 6137,
+            },
+            ssh::MagicCookie::generate(),
+        );
+        let ready = ssh::X11ForwardingStatus::External {
+            server: "test X server".to_string(),
+        };
+        let client = MockClient {
+            x11_proxy: Some(proxy),
+            x11_status: Some(ready.clone()),
+            ..MockClient::new([])
+        };
+
+        let status = SshBackend::maybe_request_x11_forwarding(&client, &mut channel)
+            .await
+            .expect("本地错误必须返回给当前会话");
+        let ssh::X11ForwardingStatus::Disabled { reason } = status else {
+            panic!("X11 请求失败必须进入可见停用状态");
+        };
+        assert!(reason.contains("local send failed"));
+        assert!(!reason.contains("远端拒绝"));
+        assert!(!reason.contains("sshd_config"));
+        assert_eq!(client.x11_status(), Some(ready));
+    }
+
+    #[tokio::test]
+    async fn successful_request_uses_transport_resolved_x11_status() {
+        let (mut channel, _) = MockChannel::new([], false);
+        let proxy = ssh::X11Proxy::for_endpoint(
+            ssh::ServerEndpoint::Inet {
+                host: "127.0.0.1".to_string(),
+                port: 6137,
+            },
+            ssh::MagicCookie::generate(),
+        );
+        let ready = ssh::X11ForwardingStatus::External {
+            server: "test X server".to_string(),
+        };
+        let client = MockClient {
+            x11_proxy: Some(proxy),
+            x11_status: Some(ready.clone()),
+            ..MockClient::new([])
+        };
+
+        let status = SshBackend::maybe_request_x11_forwarding(&client, &mut channel).await;
+
+        assert_eq!(status, Some(ready));
+    }
+
+    #[tokio::test]
+    async fn shared_client_x11_results_are_isolated_per_backend() {
+        let (mut rejected_channel, rejected_state) = MockChannel::new([], false);
+        rejected_state.lock().unwrap().x11_remote_rejection = true;
+        let (mut accepted_channel, _) = MockChannel::new([], false);
+        let ready = ssh::X11ForwardingStatus::External {
+            server: "shared X server".to_string(),
+        };
+        let client = MockClient {
+            x11_proxy: Some(ssh::X11Proxy::for_endpoint(
+                ssh::ServerEndpoint::Inet {
+                    host: "127.0.0.1".to_string(),
+                    port: 6137,
+                },
+                ssh::MagicCookie::generate(),
+            )),
+            x11_status: Some(ready.clone()),
+            ..MockClient::new([])
+        };
+
+        let rejected = SshBackend::maybe_request_x11_forwarding(&client, &mut rejected_channel)
+            .await
+            .expect("tab A 必须保留自己的拒绝状态");
+        let accepted = SshBackend::maybe_request_x11_forwarding(&client, &mut accepted_channel)
+            .await
+            .expect("tab B 必须保留自己的成功状态");
+        let backend_a = backend_with_x11_status(Some(rejected));
+        let backend_b = backend_with_x11_status(Some(accepted));
+
+        assert!(matches!(
+            TerminalBackend::x11_status(&backend_a),
+            Some(ssh::X11ForwardingStatus::Disabled { .. })
+        ));
+        assert_eq!(TerminalBackend::x11_status(&backend_b), Some(ready.clone()));
+        assert_eq!(
+            client.x11_status(),
+            Some(ready),
+            "任一页签的请求结果都不能改写共享 transport 的已解析状态"
+        );
+    }
 
     #[tokio::test]
     async fn zmodem_probe_flush_arms_only_for_plain_asterisk_prefixes() {
@@ -2002,6 +2200,7 @@ mod tests {
             exec_ids: Arc::new(AtomicU64::new(1)),
             performance_metrics: metrics.clone(),
             transfer_cancellation: ActiveTransferCancellation::default(),
+            x11_status: None,
         };
 
         TerminalBackend::write(&backend, b"direct".to_vec());
@@ -2047,6 +2246,8 @@ mod tests {
         exec_consumes_session: bool,
         recv_delay: Option<Duration>,
         send_data_error: bool,
+        x11_error: Option<String>,
+        x11_remote_rejection: bool,
     }
 
     struct MockChannel {
@@ -2072,6 +2273,8 @@ mod tests {
                 exec_consumes_session,
                 recv_delay,
                 send_data_error: false,
+                x11_error: None,
+                x11_remote_rejection: false,
             }));
             (
                 Self {
@@ -2129,6 +2332,17 @@ mod tests {
             }
         }
 
+        async fn request_x11_forwarding(&mut self, _request: &ssh::ForwardRequest) -> Result<()> {
+            let state = self.state.lock().expect("mock channel state should lock");
+            if state.x11_remote_rejection {
+                return Err(anyhow::Error::new(ssh::X11RequestRejected));
+            }
+            match state.x11_error.clone() {
+                Some(error) => Err(anyhow!(error)),
+                None => Ok(()),
+            }
+        }
+
         async fn resize_pty(&mut self, _width: u32, _height: u32) -> Result<()> {
             Ok(())
         }
@@ -2169,6 +2383,8 @@ mod tests {
         open_error: Option<&'static str>,
         disconnect_on_open_error: bool,
         connected: bool,
+        x11_proxy: Option<ssh::X11Proxy>,
+        x11_status: Option<ssh::X11ForwardingStatus>,
     }
 
     impl MockClient {
@@ -2178,6 +2394,8 @@ mod tests {
                 open_error: None,
                 disconnect_on_open_error: false,
                 connected: true,
+                x11_proxy: None,
+                x11_status: None,
             }
         }
 
@@ -2190,6 +2408,8 @@ mod tests {
                 open_error: Some(open_error),
                 disconnect_on_open_error: false,
                 connected: true,
+                x11_proxy: None,
+                x11_status: None,
             }
         }
 
@@ -2204,6 +2424,8 @@ mod tests {
                 open_error: Some(open_error),
                 disconnect_on_open_error: true,
                 connected: true,
+                x11_proxy: None,
+                x11_status: None,
             }
         }
     }
@@ -2238,6 +2460,14 @@ mod tests {
 
         fn is_connected(&self) -> bool {
             self.connected
+        }
+
+        fn x11_forwarding(&self) -> Option<&ssh::X11Proxy> {
+            self.x11_proxy.as_ref()
+        }
+
+        fn x11_status(&self) -> Option<ssh::X11ForwardingStatus> {
+            self.x11_status.clone()
         }
     }
 
@@ -2518,7 +2748,7 @@ mod tests {
         let second_client = MockClient::new([fallback_channel]);
         let manager = MockSessionManager::new([first_client, second_client]);
 
-        let (_client, _channel, shell_integration_requested) =
+        let (_client, _channel, shell_integration_requested, _x11_status) =
             SshBackend::establish_channel_with_manager(
                 &manager,
                 &PtyConfig::default(),
@@ -2567,7 +2797,7 @@ mod tests {
         let second_client = MockClient::new([fallback_channel]);
         let manager = MockSessionManager::new([first_client, second_client]);
 
-        let (_client, _channel, shell_integration_requested) =
+        let (_client, _channel, shell_integration_requested, _x11_status) =
             SshBackend::establish_channel_with_manager(
                 &manager,
                 &PtyConfig::default(),
@@ -2608,7 +2838,7 @@ mod tests {
         let second_client = MockClient::new([fallback_channel]);
         let manager = MockSessionManager::new([first_client, second_client]);
 
-        let (_client, _channel, shell_integration_requested) =
+        let (_client, _channel, shell_integration_requested, _x11_status) =
             SshBackend::establish_channel_with_manager(
                 &manager,
                 &PtyConfig::default(),
@@ -2652,7 +2882,7 @@ mod tests {
         let second_client = MockClient::new([fallback_channel]);
         let manager = MockSessionManager::new([first_client, second_client]);
 
-        let (_client, _channel, shell_integration_requested) =
+        let (_client, _channel, shell_integration_requested, _x11_status) =
             SshBackend::establish_channel_with_manager(
                 &manager,
                 &PtyConfig::default(),
@@ -2690,7 +2920,7 @@ mod tests {
         let third_client = MockClient::new([interactive_channel]);
         let manager = MockSessionManager::new([first_client, second_client, third_client]);
 
-        let (_client, _channel, shell_integration_requested) =
+        let (_client, _channel, shell_integration_requested, _x11_status) =
             SshBackend::establish_channel_with_manager(
                 &manager,
                 &PtyConfig::default(),
@@ -2763,7 +2993,7 @@ mod tests {
         let manager =
             MockSessionManager::new([MockClient::new([probe_channel, interactive_channel])]);
 
-        let (_client, _channel, shell_integration_requested) =
+        let (_client, _channel, shell_integration_requested, _x11_status) =
             SshBackend::establish_channel_with_manager(
                 &manager,
                 &PtyConfig::default(),
@@ -2799,7 +3029,7 @@ mod tests {
         let manager =
             MockSessionManager::new([MockClient::new([probe_channel, interactive_channel])]);
 
-        let (_client, _channel, shell_integration_requested) =
+        let (_client, _channel, shell_integration_requested, _x11_status) =
             SshBackend::establish_channel_with_manager(
                 &manager,
                 &PtyConfig::default(),
@@ -3051,6 +3281,7 @@ mod tests {
             exec_ids: Arc::new(AtomicU64::new(1)),
             performance_metrics: Arc::new(TerminalPerformanceMetrics::enabled()),
             transfer_cancellation: transfer_cancellation.clone(),
+            x11_status: None,
         };
 
         let first = transfer_cancellation.begin();
@@ -3254,6 +3485,10 @@ impl TerminalBackend for SshBackend {
 
     fn transfer_cancel_handle(&self) -> Option<TerminalTransferCancelHandle> {
         self.transfer_cancellation.cancel_handle()
+    }
+
+    fn x11_status(&self) -> Option<ssh::X11ForwardingStatus> {
+        self.x11_status.clone()
     }
 
     fn cancel_transfer(&self) -> bool {

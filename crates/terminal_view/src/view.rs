@@ -188,6 +188,7 @@ mod terminal_render;
 mod text_input;
 mod tool_dock;
 mod vi_input;
+mod x11_status;
 mod zmodem_picker;
 
 use actions::*;

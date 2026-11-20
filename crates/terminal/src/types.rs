@@ -247,6 +247,11 @@ pub trait TerminalBackend: Send {
         None
     }
 
+    /// 当前终端会话的 X11 状态；非 SSH backend 默认没有该状态。
+    fn x11_status(&self) -> Option<ssh::X11ForwardingStatus> {
+        None
+    }
+
     /// Request cancellation of the currently active ZMODEM transfer.
     ///
     /// The backend only acknowledges that the request was delivered. The actual

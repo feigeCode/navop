@@ -2781,6 +2781,20 @@ TerminalRecording:
     zh-CN: 选择录制目录失败
     zh-HK: 選擇錄製目錄失敗
 
+TerminalX11:
+  external:
+    en: "External X server: %{server}"
+    zh-CN: "外部 X server：%{server}"
+    zh-HK: "外部 X server：%{server}"
+  embedded:
+    en: "Embedded X server: %{version}"
+    zh-CN: "内置 X server：%{version}"
+    zh-HK: "內置 X server：%{version}"
+  disabled:
+    en: "Disabled: %{reason}"
+    zh-CN: "已停用：%{reason}"
+    zh-HK: "已停用：%{reason}"
+
 TerminalSessionLog:
   tab_title:
     en: "Log · %{name}"

@@ -63,6 +63,11 @@ impl fmt::Debug for X11Proxy {
 }
 
 impl X11Proxy {
+    /// 为组件管理的本机 X server 创建代理，继续沿用 fake cookie 委托链路。
+    pub fn for_endpoint(endpoint: ServerEndpoint, local: MagicCookie) -> Self {
+        Self::new(endpoint, 0, local)
+    }
+
     pub(crate) fn new(endpoint: ServerEndpoint, screen: u32, local: MagicCookie) -> Self {
         Self::with_auth(endpoint, screen, LocalAuth::Cookie(local))
     }
@@ -151,6 +156,21 @@ mod tests {
             0,
             MagicCookie::from_slice(&[0x5a; 16]).unwrap(),
         )
+    }
+
+    #[test]
+    fn endpoint_constructor_preserves_cookie_delegation() {
+        let endpoint = ServerEndpoint::Inet {
+            host: "127.0.0.1".into(),
+            port: 6137,
+        };
+        let cookie = MagicCookie::from_slice(&[0x37; 16]).unwrap();
+        let proxy = X11Proxy::for_endpoint(endpoint.clone(), cookie.clone());
+
+        assert_eq!(proxy.endpoint(), &endpoint);
+        let request = proxy.issue_request(false);
+        let fake = MagicCookie::from_hex(request.cookie_hex()).unwrap();
+        assert_eq!(proxy.state.exchange(&fake), Some(LocalAuth::Cookie(cookie)));
     }
 
     #[test]

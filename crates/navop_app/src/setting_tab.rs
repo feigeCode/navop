@@ -22,6 +22,7 @@ use crate::settings::tool_exposure_settings::{
 };
 use crate::settings::update_channel::{beta_exit_notice_item, update_channel_item};
 use crate::settings::update_mirror::update_mirror_item;
+use crate::settings::x11_settings::x11_setting_group;
 use crate::update;
 use font_kit::{file_type::FileType, font::Font};
 use gpui::http_client::{AsyncBody, Method, Request};
@@ -1345,6 +1346,7 @@ impl SettingsPanel {
                             &default_settings.remote_file_editor,
                             cx,
                         ));
+                        groups.push(x11_setting_group(default_settings.x11_server_mode));
                     }
                     groups.push(connection_display_setting_group());
                     groups.push(

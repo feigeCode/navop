@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "components": {
+    "x11-server": {
+      "channel": "stable",
+      "pinned_for_navop": ">=0.23.4, <0.24.0",
+      "rollout_percent": 100,
+      "artifacts": {
+        "windows-x86_64": {
+          "version": "1.9.0-navop.1",
+          "url": "https://github.com/feigeCode/yserver/releases/download/navop-v1.9.0-1/yserver-1.9.0-navop.1-windows-x86_64.zip",
+          "sha256": "631521cd48acd625e2e7310132b38cbb706e816323413e3417f84122b73fd92a",
+          "signature": "4GInhRO+Dtk815ZoaAGhjqpO2F57/VaLHHOVQv7bsCAKMpISLMXFLrg7gzmCK6lGtUtYIm0laJhvHDw3XPmWDg==",
+          "min_vulkan": "1.3.0",
+          "format": "zip",
+          "executable_path": "yserver-1.9.0-windows-x86_64/yserver.exe"
+        },
+        "windows-aarch64": {
+          "version": "1.9.0-navop.1",
+          "url": "https://github.com/feigeCode/yserver/releases/download/navop-v1.9.0-1/yserver-1.9.0-navop.1-windows-arm64.zip",
+          "sha256": "767a495f6648dc4e10d3d4dce63349d72433383db765f9d0225d378ffff36096",
+          "signature": "aNOXBfU3rchX+oBcGvIcucEhsYUoU2HfoOanniPKq49i1tQMt7UKGboDoBHeQLFOu6OWQgZG7WKoeLUD/5KuBg==",
+          "min_vulkan": "1.3.0",
+          "format": "zip",
+          "executable_path": "yserver-1.9.0-windows-aarch64/yserver.exe"
+        }
+      }
+    }
+  }
+}

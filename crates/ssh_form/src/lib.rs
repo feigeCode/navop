@@ -4,5 +4,6 @@ pub mod host_key_dialog;
 pub mod otp_qr;
 pub mod ssh_form_mfa;
 pub mod ssh_form_window;
+mod x11_status;
 
 pub use ssh_form_window::{SshFormPostSaveAction, SshFormWindow, SshFormWindowConfig};

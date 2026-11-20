@@ -45,6 +45,7 @@ util.workspace = true
 process-util.workspace = true
 rust-i18n.workspace = true
 sys-locale.workspace = true
+x11_component.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

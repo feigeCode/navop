@@ -11,6 +11,14 @@ use crate::proxy::LocalAuth;
 use crate::setup::{ClientHello, HEADER_LEN};
 use crate::{MagicCookie, ServerEndpoint, X11Error};
 
+const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+struct RelayOptions<'a> {
+    endpoint: &'a ServerEndpoint,
+    exchange: &'a dyn CookieExchange,
+    setup_timeout: std::time::Duration,
+}
+
 #[derive(Debug, Error)]
 pub enum BridgeError {
     #[error(transparent)]
@@ -48,10 +56,45 @@ where
 }
 
 async fn relay_inner<S>(
-    mut channel: S,
+    channel: S,
     endpoint: &ServerEndpoint,
     exchange: &dyn CookieExchange,
 ) -> Result<(), BridgeError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let options = RelayOptions {
+        endpoint,
+        exchange,
+        setup_timeout: SETUP_TIMEOUT,
+    };
+    relay_inner_with_options(channel, &options).await
+}
+
+async fn relay_inner_with_options<S>(
+    channel: S,
+    options: &RelayOptions<'_>,
+) -> Result<(), BridgeError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let (mut channel, mut server) =
+        tokio::time::timeout(options.setup_timeout, setup(channel, options))
+            .await
+            .map_err(|_| {
+                BridgeError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "X11 setup timed out",
+                ))
+            })??;
+    tokio::io::copy_bidirectional(&mut channel, &mut server).await?;
+    Ok(())
+}
+
+async fn setup<S>(
+    mut channel: S,
+    options: &RelayOptions<'_>,
+) -> Result<(S, Box<dyn AsyncReadWrite>), BridgeError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -68,7 +111,7 @@ where
 
     // 2. 校验 fake cookie；失败则回一个 setup 失败应答再关闭。
     let presented = hello.presented_cookie()?;
-    let Some(local) = exchange.exchange(&presented) else {
+    let Some(local) = options.exchange.exchange(&presented) else {
         reject(&mut channel, &hello).await;
         return Err(X11Error::CookieRejected.into());
     };
@@ -79,10 +122,9 @@ where
         #[cfg(any(target_os = "windows", test))]
         LocalAuth::None => hello.encode_with_auth("", &[]),
     };
-    let mut server = open(endpoint).await?;
+    let mut server = open(options.endpoint).await?;
     server.write_all(&rewritten).await?;
-    tokio::io::copy_bidirectional(&mut channel, &mut server).await?;
-    Ok(())
+    Ok((channel, server))
 }
 
 async fn reject<S>(channel: &mut S, hello: &ClientHello)
@@ -221,6 +263,33 @@ mod tests {
 
         server_task.await.unwrap();
         relay_result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_setup_times_out_before_relay() {
+        let endpoint = ServerEndpoint::Inet {
+            host: "127.0.0.1".into(),
+            port: 1,
+        };
+        let (_client, channel) = duplex(8192);
+        let exchange = |_: &MagicCookie| None;
+        let options = RelayOptions {
+            endpoint: &endpoint,
+            exchange: &exchange,
+            setup_timeout: std::time::Duration::from_millis(20),
+        };
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            relay_inner_with_options(channel, &options),
+        )
+        .await
+        .expect("不出示 setup 字节的通道也必须在总超时后退出");
+
+        assert!(matches!(
+            result,
+            Err(BridgeError::Io(error)) if error.kind() == std::io::ErrorKind::TimedOut
+        ));
     }
 
     #[tokio::test]

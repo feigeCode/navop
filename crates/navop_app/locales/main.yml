@@ -2994,6 +2994,105 @@ Settings:
         zh-CN: 手动排序（拖拽调整）
         zh-HK: 手動排序（拖曳調整）
 
+    # X11 转发服务设置
+    X11:
+      group_title:
+        en: X11 Forwarding
+        zh-CN: X11 转发
+        zh-HK: X11 轉發
+      mode:
+        en: X11 Server Mode
+        zh-CN: X11 服务模式
+        zh-HK: X11 服務模式
+      mode_desc:
+        en: Applies to new SSH sessions. Existing sessions keep their current server and must be reconnected to use the new mode.
+        zh-CN: 对新 SSH 会话生效；现有会话保持当前服务，必须重新连接后才会使用新模式。
+        zh-HK: 對新 SSH 工作階段生效；現有工作階段保持目前服務，必須重新連線後才會使用新模式。
+      mode_auto:
+        en: Auto (select an available server)
+        zh-CN: 自动（选择可用服务）
+        zh-HK: 自動（選擇可用服務）
+      mode_external:
+        en: External X server
+        zh-CN: 外部 X server
+        zh-HK: 外部 X server
+      mode_embedded:
+        en: Built-in yserver (Vulkan)
+        zh-CN: 内置 yserver（Vulkan）
+        zh-HK: 內置 yserver（Vulkan）
+      status:
+        en: Current Status
+        zh-CN: 当前状态
+        zh-HK: 目前狀態
+      status_desc:
+        en: Shows the actual X11 service selected by the component layer, not a log-derived state.
+        zh-CN: 显示组件层实际选择的 X11 服务，不从日志推断状态。
+        zh-HK: 顯示組件層實際選擇的 X11 服務，不從日誌推斷狀態。
+      status_external:
+        en: "X11 forwarding: local %{server}"
+        zh-CN: "X11 转发：本机 %{server}"
+        zh-HK: "X11 轉發：本機 %{server}"
+      status_embedded:
+        en: "X11 forwarding: built-in yserver %{version} (Vulkan)"
+        zh-CN: "X11 转发：内置 yserver %{version}（Vulkan）"
+        zh-HK: "X11 轉發：內置 yserver %{version}（Vulkan）"
+      status_disabled:
+        en: "X11 forwarding: disabled (%{reason})"
+        zh-CN: "X11 转发：已停用（%{reason}）"
+        zh-HK: "X11 轉發：已停用（%{reason}）"
+      installed_version:
+        en: "Built-in version: %{version}"
+        zh-CN: "内置版本：%{version}"
+        zh-HK: "內置版本：%{version}"
+      not_installed:
+        en: not installed
+        zh-CN: 未安装
+        zh-HK: 未安裝
+      redownload:
+        en: Repair / Reinstall
+        zh-CN: 修复 / 重新安装
+        zh-HK: 修復 / 重新安裝
+      downloading:
+        en: Preparing…
+        zh-CN: 正在准备…
+        zh-HK: 正在準備…
+      download_success:
+        en: "Built-in yserver %{version} is ready. Reconnect SSH to use it."
+        zh-CN: "内置 yserver %{version} 已就绪，请重新连接 SSH 后使用。"
+        zh-HK: "內置 yserver %{version} 已就緒，請重新連線 SSH 後使用。"
+      download_failed_retry:
+        en: "Could not prepare the built-in component; please retry. %{reason}"
+        zh-CN: "内置组件准备失败，可重试。%{reason}"
+        zh-HK: "內置元件準備失敗，可重試。%{reason}"
+      signature_failed_support:
+        en: "Component signature verification failed; stop using this package and contact support. %{reason}"
+        zh-CN: "组件验签失败，请停止使用此安装包并联系支持。%{reason}"
+        zh-HK: "元件驗簽失敗，請停止使用此安裝套件並聯絡支援。%{reason}"
+      vulkan_unavailable_use_external:
+        en: "Vulkan support is insufficient; switch to an external X server. %{reason}"
+        zh-CN: "Vulkan 支持不足，请改用外部 X server。%{reason}"
+        zh-HK: "Vulkan 支援不足，請改用外部 X server。%{reason}"
+      handshake_failed_fallback:
+        en: "The built-in server handshake failed; use Auto to fall back to an external server or select External. %{reason}"
+        zh-CN: "内置服务握手失败；请用 Auto 降级到外部服务，或切换到 External。%{reason}"
+        zh-HK: "內置服務握手失敗；請用 Auto 降級到外部服務，或切換至 External。%{reason}"
+      remote_display_restarted:
+        en: "The display service was restarted; close old X11 windows and reconnect. Reason: %{reason}"
+        zh-CN: "显示服务已重启；请关闭旧 X11 窗口并重新连接。原因：%{reason}"
+        zh-HK: "顯示服務已重新啟動；請關閉舊 X11 視窗並重新連線。原因：%{reason}"
+      remote_forwarding_disabled_checklist:
+        en: Check remote sshd_config for X11Forwarding yes, install xauth, then reconnect.
+        zh-CN: 请检查远端 sshd_config 的 X11Forwarding yes、安装 xauth，然后重新连接。
+        zh-HK: 請檢查遠端 sshd_config 的 X11Forwarding yes、安裝 xauth，然後重新連線。
+      untrusted_ssh_x_security:
+        en: "Untrusted ssh -X is limited by the X11 SECURITY timeout; use trusted ssh -Y when required."
+        zh-CN: "untrusted ssh -X 会受 X11 SECURITY 超时限制；需要可信转发时请使用 ssh -Y。"
+        zh-HK: "untrusted ssh -X 會受 X11 SECURITY 逾時限制；需要可信轉發時請使用 ssh -Y。"
+      macos_xquartz_guidance:
+        en: "On macOS, install and start XQuartz for External mode, then log out and back in if DISPLAY is unavailable."
+        zh-CN: "macOS 使用 External 时需安装并启动 XQuartz；若 DISPLAY 不可用，请注销后重新登录。"
+        zh-HK: "macOS 使用 External 時需安裝並啟動 XQuartz；若 DISPLAY 不可用，請登出後重新登入。"
+
     # 文件传输设置
     FileTransfer:
       group_title:
