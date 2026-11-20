@@ -815,6 +815,37 @@ fn ssh_config_with_runtime_credentials(
         .as_ref()
         .and_then(|jump| password_from_ssh_auth(&jump.auth));
     let target_password = password_from_ssh_auth(&config.ssh_config.auth);
+
+    // 堡垒机直连（BastionDirect）模式下目标认证被跳过，实际认证的是堡垒机会话：
+    // 运行时输入的密码必须同时注入 jump.auth，否则「连接时输入密码」在该模式下
+    // 永远拿到空密码。
+    if let (Some(password), Some(jump)) = (
+        credentials.password.as_deref(),
+        config.ssh_config.jump_server.as_mut(),
+    ) {
+        if jump.bastion_login_username().is_some() {
+            match &mut jump.auth {
+                SshAuth::Password(configured) => {
+                    if configured.is_empty() {
+                        *configured = password.to_string();
+                    }
+                }
+                // 组合认证里的密码因素同样补齐（与目标侧语义一致）。
+                SshAuth::Chain(steps) => {
+                    if let Some(configured) = steps.iter_mut().find_map(|step| match step {
+                        SshAuth::Password(configured) => Some(configured),
+                        _ => None,
+                    }) {
+                        if configured.is_empty() {
+                            *configured = password.to_string();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     let responder = TerminalMfaResponder::new(event_tx, jump_password, target_password)
         .with_otp(base_config.otp.clone());
     config.ssh_config.keyboard_interactive_responder = keyboard_interactive_enabled
@@ -3373,10 +3404,18 @@ impl Terminal {
         }
 
         let key = identity.connection_key().clone();
+        let acquire_connect_config = config.ssh_config.clone();
         cx.spawn(async move |this, cx| {
-            let source = match service.acquire(&key, config.ssh_config.clone()).await {
-                Ok(lease) => ManagerSource::Shared(lease),
-                Err(_) => ManagerSource::Local, // acquire 失败：本地 manager 兜底
+            // acquire 内部会 tokio::spawn（reaper/创建飞行），必须在 Tokio runtime
+            // 上下文里调用；GPUI executor 上没有 reactor，直接 await 会 panic。
+            let acquire_task = Tokio::spawn(cx, async move {
+                service
+                    .acquire(&key, acquire_connect_config)
+                    .await
+            });
+            let source = match acquire_task.await {
+                Ok(Ok(lease)) => ManagerSource::Shared(lease),
+                Ok(Err(_)) | Err(_) => ManagerSource::Local, // acquire 失败：本地 manager 兜底
             };
             let _ = this.update(cx, |terminal, cx| {
                 if !terminal.is_current_connection_generation(generation) {
