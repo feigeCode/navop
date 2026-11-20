@@ -12,11 +12,13 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use one_core::storage::models::{
+    BastionUserFormat as StorageBastionUserFormat, JumpMode as StorageJumpMode,
+    JumpServerConfig as StorageJumpServerConfig, ProxyConfig as StorageProxyConfig,
     ProxyType as StorageProxyType, SshAuthMethod, SshParams, StoredConnection,
 };
 use ssh::{
-    AgentIdentity, HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType,
-    SshAuth, SshConnectConfig,
+    AgentIdentity, BastionUserFormat, HostKeyVerifier, JumpMode, JumpServerConnectConfig,
+    ProxyConnectConfig, ProxyType, SshAuth, SshConnectConfig,
 };
 
 /// 已保存连接解析出的 SSH 目标。
@@ -63,22 +65,8 @@ pub fn resolve_ssh_target(connection: &StoredConnection) -> Result<ResolvedSshTa
         timeout: params.connect_timeout.map(Duration::from_secs),
         keepalive_interval: params.keepalive_interval.map(Duration::from_secs),
         keepalive_max: params.keepalive_max,
-        jump_server: params.jump_server.map(|jump| JumpServerConnectConfig {
-            host: jump.host,
-            port: jump.port,
-            username: jump.username,
-            auth: ssh_auth(jump.auth_method),
-        }),
-        proxy: params.proxy.map(|proxy| ProxyConnectConfig {
-            proxy_type: match proxy.proxy_type {
-                StorageProxyType::Socks5 => ProxyType::Socks5,
-                StorageProxyType::Http => ProxyType::Http,
-            },
-            host: proxy.host,
-            port: proxy.port,
-            username: proxy.username,
-            password: proxy.password,
-        }),
+        jump_server: params.jump_server.as_ref().map(jump_connect_config),
+        proxy: params.proxy.as_ref().map(proxy_connect_config),
         keyboard_interactive_responder: None,
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
@@ -139,6 +127,55 @@ pub fn ssh_auth(method: SshAuthMethod) -> SshAuth {
         SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
         SshAuthMethod::None => SshAuth::None,
         SshAuthMethod::Chain(steps) => SshAuth::Chain(steps.into_iter().map(ssh_auth).collect()),
+    }
+}
+
+/// 存储的跳板机配置 → 连接层跳板机配置（统一映射入口）。
+///
+/// 历史上 terminal / runtime_sftp / port_forwarding / ssh_form 各自维护一份
+/// 等价映射，bastion 字段加入后必须五处同步；统一到本函数后新增字段只需
+/// 改这里，各构造点显式传入 MFA 响应器即可。
+pub fn jump_connect_config(jump: &StorageJumpServerConfig) -> JumpServerConnectConfig {
+    JumpServerConnectConfig {
+        host: jump.host.clone(),
+        port: jump.port,
+        username: jump.username.clone(),
+        auth: ssh_auth(jump.auth_method.clone()),
+        mode: match jump.mode {
+            StorageJumpMode::ProxyJump => JumpMode::ProxyJump,
+            StorageJumpMode::BastionDirect => JumpMode::BastionDirect,
+        },
+        bastion_asset: jump
+            .bastion
+            .as_ref()
+            .map(|target| target.asset.clone())
+            .unwrap_or_default(),
+        bastion_account: jump
+            .bastion
+            .as_ref()
+            .map(|target| target.account.clone())
+            .unwrap_or_default(),
+        bastion_user_format: jump
+            .bastion
+            .as_ref()
+            .map(|target| match target.user_format {
+                StorageBastionUserFormat::JumpServer => BastionUserFormat::JumpServer,
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// 存储的代理配置 → 连接层代理配置。
+pub fn proxy_connect_config(proxy: &StorageProxyConfig) -> ProxyConnectConfig {
+    ProxyConnectConfig {
+        proxy_type: match proxy.proxy_type {
+            StorageProxyType::Socks5 => ProxyType::Socks5,
+            StorageProxyType::Http => ProxyType::Http,
+        },
+        host: proxy.host.clone(),
+        port: proxy.port,
+        username: proxy.username.clone(),
+        password: proxy.password.clone(),
     }
 }
 

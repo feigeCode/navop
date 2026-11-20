@@ -25,8 +25,8 @@ pub use model::{
 pub use provider::{RusshSftpTransferProvider, SftpTransferProvider};
 pub use scheduler::MAX_CONCURRENT_TRANSFERS_PER_CONNECTION;
 pub use ssh_config::{
-    ResolvedSshTarget, resolve_ssh_target, sftp_initial_directory, sftp_initial_directory_of,
-    ssh_auth, ssh_config_for,
+    ResolvedSshTarget, jump_connect_config, proxy_connect_config, resolve_ssh_target,
+    sftp_initial_directory, sftp_initial_directory_of, ssh_auth, ssh_config_for,
 };
 
 #[cfg(test)]

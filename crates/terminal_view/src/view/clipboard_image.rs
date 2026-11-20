@@ -51,12 +51,14 @@ impl TerminalView {
         if !self.is_live_ssh_terminal(cx) {
             return;
         }
-        let remote_path = remote_clipboard_image_path(image.format, current_timestamp_millis());
-        let bytes = image.bytes;
         let window_handle = window.window_handle();
         let task = Tokio::spawn(cx, async move {
+            // macOS 剪贴板图片是 TIFF，远端 CLI 通常读不了；先统一转成 PNG
+            // 再决定远端文件名，保证扩展名与实际字节一致。
+            let image = remote_image_preview::normalize_clipboard_image(image);
+            let remote_path = remote_clipboard_image_path(image.format, current_timestamp_millis());
             let mut client = RusshSftpClient::connect(ssh_config).await?;
-            client.write_file(&remote_path, &bytes).await?;
+            client.write_file(&remote_path, &image.bytes).await?;
             Ok::<_, anyhow::Error>(remote_path)
         });
 

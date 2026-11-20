@@ -23,8 +23,6 @@ use std::time::{Duration, SystemTime};
 use suppaftp::FtpError;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::listing::is_valid_remote_name;
-
 /// 数据连接读取分块大小。
 const CHUNK_SIZE: usize = 256 * 1024;
 
@@ -87,17 +85,18 @@ pub(super) fn temp_path(path: &str) -> String {
     )
 }
 
-/// 校验远端相对路径：每个分量都必须是"单层名称"。
+/// 校验远端相对路径：每个分量都必须能安全拼成本地路径。
 ///
 /// LIST 名称来自可能被攻陷的服务端；拒绝 `..`、`.`、空分量、
-/// 包含 `\` 或 NUL 的分量，防止拼接出逃逸目标目录的路径。
+/// 包含 `\` 或 NUL 的分量，以及 Windows 上会被当成盘符前缀的分量
+/// （`c:` 会让 `join` 丢掉基路径），防止拼接出逃逸目标目录的路径。
 pub(super) fn validate_relative_path(relative: &str) -> Result<Vec<&str>> {
     let components: Vec<&str> = relative.split('/').collect();
     if components.is_empty() {
         return Err(anyhow!("Refusing empty remote entry path"));
     }
     for component in &components {
-        if !is_valid_remote_name(component) {
+        if !sftp::is_valid_local_file_name(component) {
             return Err(anyhow!("Refusing unsafe remote entry name: {relative:?}"));
         }
     }
@@ -1119,6 +1118,15 @@ mod tests {
         assert!(validate_relative_path("").is_err());
         assert!(validate_relative_path("sub//file").is_err());
         assert!(validate_relative_path(".").is_err());
+    }
+
+    #[test]
+    fn validate_relative_path_follows_local_platform_rules() {
+        // `c:` 是 Linux 上的合法文件名；只有 Windows 会把 `join` 解析成盘符路径。
+        #[cfg(not(windows))]
+        assert!(validate_relative_path("c:").is_ok());
+        #[cfg(windows)]
+        assert!(validate_relative_path("c:").is_err());
     }
 
     #[test]

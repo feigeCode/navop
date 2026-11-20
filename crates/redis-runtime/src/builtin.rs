@@ -9,7 +9,8 @@ use redis_client::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis_client::{AsyncCommands, Client, RedisResult};
 use rust_i18n::t;
 use ssh::{
-    HostKeyVerifier, LocalPortForwardTunnel, SshAuth, SshConnectConfig, start_local_port_forward,
+    BastionUserFormat, HostKeyVerifier, JumpMode, JumpServerConnectConfig,
+    LocalPortForwardTunnel, SshAuth, SshConnectConfig, start_local_port_forward,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -78,6 +79,40 @@ fn required_ssh_value(value: &str, key: &str) -> Result<String, RedisError> {
     }
 
     Ok(value.to_string())
+}
+
+/// 隧道继承的跳板配置 → 连接层配置（引用 SSH 连接带跳板时隧道也走跳板）。
+fn tunnel_jump_connect_config(
+    tunnel_config: &one_core::storage::RedisSshTunnelConfig,
+) -> Option<JumpServerConnectConfig> {
+    let jump = tunnel_config.jump.as_ref()?;
+    let auth = match jump.auth_type.trim().to_ascii_lowercase().as_str() {
+        "agent" => SshAuth::Agent,
+        "private_key" => SshAuth::PrivateKey {
+            key_path: jump.private_key_path.clone().unwrap_or_default(),
+            passphrase: jump.private_key_passphrase.clone(),
+            certificate_path: None,
+        },
+        "private_key_content" => SshAuth::PrivateKeyContent {
+            private_key: jump.private_key_content.clone().unwrap_or_default(),
+            passphrase: jump.private_key_passphrase.clone(),
+            certificate_path: None,
+        },
+        _ => SshAuth::Password(jump.password.clone().unwrap_or_default()),
+    };
+    Some(JumpServerConnectConfig {
+        host: jump.host.clone(),
+        port: jump.port,
+        username: jump.username.clone(),
+        auth,
+        mode: match jump.mode {
+            connection_tunnel::TunnelJumpMode::ProxyJump => JumpMode::ProxyJump,
+            connection_tunnel::TunnelJumpMode::BastionDirect => JumpMode::BastionDirect,
+        },
+        bastion_asset: jump.bastion_asset.clone().unwrap_or_default(),
+        bastion_account: jump.bastion_account.clone().unwrap_or_default(),
+        bastion_user_format: BastionUserFormat::JumpServer,
+    })
 }
 
 fn build_ssh_auth(
@@ -454,7 +489,7 @@ impl RedisConnectionImpl {
             timeout: Some(Duration::from_secs(timeout_secs)),
             keepalive_interval: None,
             keepalive_max: None,
-            jump_server: None,
+            jump_server: tunnel_jump_connect_config(tunnel_config),
             proxy: None,
             keyboard_interactive_responder: None,
             host_key_verifier: HostKeyVerifier::default(),

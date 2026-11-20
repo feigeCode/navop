@@ -12,6 +12,7 @@ futures = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 one-core = { workspace = true }
+sftp_transfer = { workspace = true }
 gpui = { workspace = true }
 ssh = { workspace = true }
 process-util = { workspace = true }

@@ -134,6 +134,23 @@ impl TerminalPublicMcpRegistration {
             terminal.external_control_handle(),
             terminal.external_input_handle(),
         );
+        self.ensure_remote_ops_registered(terminal);
+    }
+
+    /// manager 就绪后补注册 remote_ops。
+    ///
+    /// 需要运行时凭据的连接在视图构造时 manager 尚为 `None`；
+    /// `SshCredentialChanged`/`Wakeup` 事件驱动的 refresh 是天然补注册窗口。
+    /// registry 的注册是覆盖语义，重复调用幂等。
+    fn ensure_remote_ops_registered(&self, terminal: &Terminal) {
+        if let Some(session_manager) = terminal.ssh_session_manager() {
+            let remote_ops = crate::public_mcp_remote_ops::SshRemoteOpsHandle::with_shared_state(
+                session_manager.clone(),
+                self.state.clone(),
+                self.registry.command_store().clone(),
+            );
+            self.registry.register_remote_ops(remote_ops);
+        }
     }
 
     fn refresh_parts(

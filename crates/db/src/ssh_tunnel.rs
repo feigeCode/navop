@@ -103,7 +103,16 @@ fn tunnel_config_from_db_config(config: &DbConnectionConfig) -> Option<SshTunnel
         target_host: optional_string_param(config, SSH_TARGET_HOST),
         target_port: optional_u16_param(config, SSH_TARGET_PORT),
         timeout: config.get_param_as::<u64>(SSH_TIMEOUT),
+        jump: optional_jump_param(config),
+        proxy: None,
     })
+}
+
+/// extra_params 里的 `ssh_jump_config`（JSON 序列化的 TunnelJumpConfig）。
+/// 由 `apply_referenced_ssh_tunnel` 在引用 SSH 连接时写入。
+fn optional_jump_param(config: &DbConnectionConfig) -> Option<connection_tunnel::TunnelJumpConfig> {
+    let encoded = optional_string_param(config, "ssh_jump_config")?;
+    serde_json::from_str(&encoded).ok()
 }
 
 fn string_param(config: &DbConnectionConfig, key: &str) -> String {

@@ -217,11 +217,15 @@ async fn directory_download_overlaps_small_files_and_keeps_progress_monotonic() 
 }
 
 #[tokio::test]
-async fn directory_download_rejects_server_names_that_escape_the_local_root() {
-    let files = vec![(
-        "../outside.txt".to_string(),
-        b"malicious remote content".to_vec(),
-    )];
+async fn directory_download_skips_server_names_that_escape_the_local_root() {
+    // 坏条目只跳过：整目录下载不能因为它失败，也不能把它落到本地。
+    let files = vec![
+        (
+            "../outside.txt".to_string(),
+            b"malicious remote content".to_vec(),
+        ),
+        ("ok.txt".to_string(), b"legitimate remote content".to_vec()),
+    ];
     let (metadata_server, _) = FakeDirectoryServer::new(files.clone());
     let (metadata_client, metadata_server_stream) = tokio::io::duplex(1024 * 1024);
     russh_sftp::server::run(metadata_server_stream, metadata_server).await;
@@ -255,13 +259,25 @@ async fn directory_download_rejects_server_names_that_escape_the_local_root() {
         )
         .await;
 
-    assert!(
-        result.is_err(),
-        "a server-controlled parent component must abort the download"
-    );
+    result.expect("坏条目必须被跳过，而不是让整个目录下载失败");
     assert_eq!(
         b"original local content".as_slice(),
         std::fs::read(&outside).expect("outside sentinel must still exist"),
         "the download must never write outside the selected local directory"
+    );
+    assert_eq!(
+        b"legitimate remote content".as_slice(),
+        std::fs::read(chosen.join("ok.txt")).expect("legitimate entries must still download"),
+        "跳过坏条目不能影响其它文件"
+    );
+    let landed: Vec<String> = std::fs::read_dir(&chosen)
+        .expect("read chosen directory")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(
+        vec!["ok.txt".to_string()],
+        landed,
+        "malicious entries must never be materialized"
     );
 }

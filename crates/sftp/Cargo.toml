@@ -24,4 +24,6 @@ zeroize = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 tempfile = "3"
+rand = "0.10"

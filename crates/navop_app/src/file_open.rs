@@ -19,6 +19,29 @@ pub(crate) enum FileOpenInput {
     Url(String),
 }
 
+/// 把启动参数（ARGV 里的路径或 URL）转成 `FileOpenInput`。
+///
+/// Windows/macOS 传本地路径；Linux 桌面文件的 `%U` 会把 URL 传进来，既可能是
+/// `file://` 本地文件，也可能是 `jms://`、`ssh://`、`sftp://` 深链接。
+pub(crate) fn input_from_startup_argument(argument: PathBuf) -> FileOpenInput {
+    let Some(raw) = argument.to_str() else {
+        return FileOpenInput::Path(argument);
+    };
+    if crate::jump_deeplink::is_jump_deeplink(raw)
+        || crate::connection_deeplink::scheme_of(raw).is_some()
+    {
+        return FileOpenInput::Url(raw.to_string());
+    }
+    if raw.len() > "file://".len()
+        && raw.is_char_boundary("file://".len())
+        && raw[.."file://".len()].eq_ignore_ascii_case("file://")
+        && let Ok(path) = local_path_from_file_url(raw)
+    {
+        return FileOpenInput::Path(path);
+    }
+    FileOpenInput::Path(argument)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum OpenFileKind {
     Database(DatabaseType),
@@ -71,6 +94,18 @@ fn show_file_open_error(error: &anyhow::Error, window: &mut Window, cx: &mut App
 }
 
 fn try_open_input(input: FileOpenInput, window: &mut Window, cx: &mut App) -> Result<()> {
+    if let FileOpenInput::Url(url) = &input {
+        if crate::jump_deeplink::is_jump_deeplink(url) {
+            // JumpServer 深链接不指向本地文件，直接建立临时 SSH 会话。
+            crate::jump_deeplink::open_jump_deeplink(url, window, cx);
+            return Ok(());
+        }
+        if crate::connection_deeplink::scheme_of(url).is_some() {
+            // ssh:// / sftp:// 同理会话化，是否允许由设置决定。
+            crate::connection_deeplink::open_connection_deeplink(url, window, cx);
+            return Ok(());
+        }
+    }
     let path = match &input {
         FileOpenInput::Path(path) => Some(path.clone()),
         FileOpenInput::Url(url) => local_path_from_file_url(url).ok(),
@@ -356,6 +391,46 @@ mod tests {
         assert_eq!(None, classify_supported_path(Path::new("cast")));
         assert_eq!(None, classify_supported_path(Path::new("notes.txt")));
         assert_eq!(None, classify_supported_path(Path::new("script.sql")));
+    }
+
+    #[test]
+    fn startup_arguments_route_jms_urls_and_file_urls() {
+        let link = "jms://eyJwcm90b2NvbCI6InNzaCJ9";
+        match input_from_startup_argument(PathBuf::from(link)) {
+            FileOpenInput::Url(url) => assert_eq!(url, link),
+            other => panic!("jms:// 应识别为 URL: {other:?}"),
+        }
+        // 大小写不敏感
+        match input_from_startup_argument(PathBuf::from("JMS://abc")) {
+            FileOpenInput::Url(url) => assert_eq!(url, "JMS://abc"),
+            other => panic!("JMS:// 应识别为 URL: {other:?}"),
+        }
+
+        // 通用连接链接同样走 URL 分支（是否放行由设置决定）。
+        for link in ["ssh://alice@example.com:2222", "sftp://example.com/var/log"] {
+            match input_from_startup_argument(PathBuf::from(link)) {
+                FileOpenInput::Url(url) => assert_eq!(url, link),
+                other => panic!("{link} 应识别为 URL: {other:?}"),
+            }
+        }
+        // 其它 scheme 仍按路径处理，不误触发连接。
+        match input_from_startup_argument(PathBuf::from("https://example.com")) {
+            FileOpenInput::Path(path) => assert_eq!(path, PathBuf::from("https://example.com")),
+            other => panic!("https:// 不应识别为连接链接: {other:?}"),
+        }
+
+        let path = std::env::temp_dir().join("Navop notes").join("README.md");
+        let url = url::Url::from_file_path(&path).unwrap().to_string();
+        match input_from_startup_argument(PathBuf::from(url)) {
+            FileOpenInput::Path(decoded) => assert_eq!(decoded, path),
+            other => panic!("file:// 应解码成本地路径: {other:?}"),
+        }
+
+        let plain = std::env::temp_dir().join("orders.db");
+        match input_from_startup_argument(plain.clone()) {
+            FileOpenInput::Path(decoded) => assert_eq!(decoded, plain),
+            other => panic!("普通路径应原样保留: {other:?}"),
+        }
     }
 
     #[test]

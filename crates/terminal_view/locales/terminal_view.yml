@@ -2210,6 +2210,10 @@ FileManager:
     en: "Failed to read directory: %{error}. Returned to your working directory."
     zh-CN: "读取目录失败：%{error}。已返回你的工作目录。"
     zh-HK: "讀取目錄失敗：%{error}。已返回你的工作目錄。"
+  follow_suspended_restricted_root:
+    en: "Stopped following the terminal directory: this session exposes only a restricted file root (such as a bastion host's file management root), so the terminal's paths do not exist remotely. The panel went back to the root directory; browse it manually, or turn following back on from the toolbar."
+    zh-CN: "已停止跟随终端目录：当前会话只开放了受限的文件根目录（如堡垒机的「文件管理根目录」），终端里的路径在远端并不存在。面板已回到根目录，可手动浏览；需要时可在工具栏重新打开跟随。"
+    zh-HK: "已停止跟隨終端目錄：目前工作階段只開放受限的檔案根目錄（如堡壘機的「檔案管理根目錄」），終端中的路徑在遠端並不存在。面板已回到根目錄，可手動瀏覽；需要時可在工具列重新開啟跟隨。"
   foreign_host_notice:
     en: "Terminal is now on %{host}; the file panel is still connected to %{connection}."
     zh-CN: "终端已进入 %{host}，文件面板仍连接 %{connection}。"

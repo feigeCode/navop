@@ -32,11 +32,52 @@ mod windows {
 }
 
 pub(crate) fn hide() {
+    #[cfg(test)]
+    probe::record(probe::Call::Hide);
     #[cfg(target_os = "windows")]
     windows::hide();
 }
 
 pub(crate) fn restore() {
+    #[cfg(test)]
+    probe::record(probe::Call::Restore);
     #[cfg(target_os = "windows")]
     windows::restore();
+}
+
+/// Counts the `SetCursor` calls the remote desktop view makes, so tests can
+/// assert who owns the OS cursor without a window server.
+#[cfg(test)]
+pub(crate) mod probe {
+    use std::cell::Cell;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Call {
+        Hide,
+        Restore,
+    }
+
+    thread_local! {
+        static HIDES: Cell<usize> = const { Cell::new(0) };
+        static RESTORES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn record(call: Call) {
+        match call {
+            Call::Hide => HIDES.with(|count| count.set(count.get() + 1)),
+            Call::Restore => RESTORES.with(|count| count.set(count.get() + 1)),
+        }
+    }
+
+    pub(crate) fn count(call: Call) -> usize {
+        match call {
+            Call::Hide => HIDES.with(Cell::get),
+            Call::Restore => RESTORES.with(Cell::get),
+        }
+    }
+
+    pub(crate) fn reset() {
+        HIDES.with(|count| count.set(0));
+        RESTORES.with(|count| count.set(0));
+    }
 }

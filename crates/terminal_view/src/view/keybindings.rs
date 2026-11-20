@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) const TERMINAL_CONTEXT: &str = "TerminalView";
+pub(super) const TERMINAL_SEARCH_CONTEXT: &str = "TerminalSearch";
 
 #[cfg(target_os = "macos")]
 pub(super) const TERMINAL_COPY_SHORTCUT: &str = "cmd-c";
@@ -63,6 +64,7 @@ pub fn refresh_keybindings(cx: &mut App) {
 pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
     let mut keybindings = Vec::new();
     keybindings.extend(crate::sidebar::file_manager_panel::init_keybindings());
+    keybindings.push(terminal_search_close_keybinding());
     keybindings.extend(
         shortcuts_for(cx, action_id::TERMINAL_SEND_TAB, &["tab"])
             .into_iter()
@@ -206,6 +208,7 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
 pub(super) fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
     let mut keybindings = Vec::new();
     keybindings.extend(crate::sidebar::file_manager_panel::init_keybindings());
+    keybindings.push(terminal_search_close_keybinding());
     keybindings.extend(rebind_keybindings(
         cx,
         action_id::TERMINAL_SEND_TAB,
@@ -326,6 +329,10 @@ pub(super) fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         ScrollPageDown,
     ));
     keybindings
+}
+
+fn terminal_search_close_keybinding() -> KeyBinding {
+    KeyBinding::new("escape", CloseTerminalSearch, Some(TERMINAL_SEARCH_CONTEXT))
 }
 
 pub(super) fn terminal_paste_defaults() -> Vec<&'static str> {

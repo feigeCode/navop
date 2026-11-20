@@ -70,6 +70,34 @@ impl gpui::Global for GlobalHomePage {}
 #[cfg(feature = "nsh-host")]
 struct NavopExtensionsHost;
 
+/// 扩展连接种类的 id 前缀与分隔符：`ext:{extension_id}::{contribution_id}`。
+///
+/// 向导只把 kind id 当不透明字符串（选中 key、表单复用键），扩展侧需要在
+/// 构造表单时拆回 (extension_id, contribution_id)。
+#[cfg(feature = "nsh-host")]
+const EXTENSION_KIND_PREFIX: &str = "ext:";
+#[cfg(feature = "nsh-host")]
+const EXTENSION_KIND_SEPARATOR: &str = "::";
+
+#[cfg(feature = "nsh-host")]
+fn extension_kind_id(extension_id: &str, contribution_id: &str) -> gpui::SharedString {
+    format!("{EXTENSION_KIND_PREFIX}{extension_id}{EXTENSION_KIND_SEPARATOR}{contribution_id}")
+        .into()
+}
+
+#[cfg(feature = "nsh-host")]
+fn split_extension_kind_id(kind_id: &str) -> Option<(&str, &str)> {
+    kind_id
+        .strip_prefix(EXTENSION_KIND_PREFIX)?
+        .split_once(EXTENSION_KIND_SEPARATOR)
+}
+
+/// 扩展种类的标签占位：真实名字来自运行时清单，恒走 `label_override`。
+#[cfg(feature = "nsh-host")]
+fn extension_kind_label(_cx: &App) -> gpui::SharedString {
+    gpui::SharedString::default()
+}
+
 #[cfg(feature = "nsh-host")]
 impl app_kit::ExtensionsHost for NavopExtensionsHost {
     fn open_extensions(
@@ -87,6 +115,72 @@ impl app_kit::ExtensionsHost for NavopExtensionsHost {
                 home.update(cx, |home, cx| home.add_extensions_tab(window, cx));
             })
             .is_ok()
+    }
+
+    /// 已安装扩展贡献的连接：向导把它们归入「中间件」类目。
+    fn connection_kinds(&self, cx: &App) -> Vec<domain_api::ConnectionKindDescriptor> {
+        let Some(catalog) = crate::connection_visuals::extension_catalog_from_cx(cx) else {
+            return Vec::new();
+        };
+        let mut kinds: Vec<_> = catalog
+            .resource_connections()
+            .map(|contribution| {
+                let mut kind = domain_api::ConnectionKindDescriptor::new(
+                    extension_kind_id(&contribution.extension_id, &contribution.id),
+                    extension_kind_label,
+                    domain_api::ConnectionKindGroup::Extension,
+                    0,
+                )
+                .with_label(contribution.label.clone());
+                if let Some(description) = contribution.description.clone() {
+                    kind = kind.with_description(description);
+                }
+                if let Some(icon) = contribution.icon_path.clone() {
+                    kind = kind.with_icon(domain_api::ConnectionKindIcon::File(icon));
+                }
+                kind
+            })
+            .collect();
+        // 目录底层是 HashMap，按显示名排序保证卡片顺序稳定。
+        kinds.sort_by_key(|kind| kind.display_label(cx).to_lowercase());
+        kinds
+    }
+
+    fn build_connection_form(
+        &self,
+        request: domain_api::ConnectionFormRequest,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<gpui::AnyView> {
+        // 编辑 / 复制走主页的连接动作（`HomePage::show_extension_form`），向导只新建。
+        if request.editing_connection.is_some() || request.initial_connection.is_some() {
+            return None;
+        }
+        let (extension_id, contribution_id) = split_extension_kind_id(request.kind_id.as_ref())?;
+        let contribution = crate::connection_visuals::extension_catalog_from_cx(cx)?
+            .resource_connection(extension_id, contribution_id)?
+            .clone();
+        let (workspaces, teams) = match cx.try_global::<GlobalHomePage>() {
+            Some(global) => {
+                let workspaces = global.home_page.read(cx).workspaces.clone();
+                (
+                    workspaces,
+                    one_core::cloud_sync::get_cached_team_options(cx),
+                )
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+        let config = universal_plugins::ExtensionConnectionFormConfig {
+            contribution,
+            editing_connection: None,
+            initial_workspace_id: request.initial_workspace_id,
+            workspaces,
+            teams,
+        };
+        Some(
+            cx.new(|cx| universal_plugins::ExtensionConnectionForm::new(config, window, cx))
+                .into(),
+        )
     }
 }
 

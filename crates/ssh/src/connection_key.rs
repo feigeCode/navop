@@ -475,8 +475,9 @@ mod tests {
         CredentialScope,
     };
     use crate::{
-        HostKeyPolicy, HostKeyVerifier, JumpServerConnectConfig, KeyboardInteractiveRequest,
-        KeyboardInteractiveResponder, ProxyConnectConfig, ProxyType, SshAuth, SshConnectConfig,
+        BastionUserFormat, HostKeyPolicy, HostKeyVerifier, JumpMode, JumpServerConnectConfig,
+        KeyboardInteractiveRequest, KeyboardInteractiveResponder, ProxyConnectConfig, ProxyType,
+        SshAuth, SshConnectConfig,
     };
     use anyhow::Result;
     use async_trait::async_trait;
@@ -582,6 +583,10 @@ mod tests {
             port: 22,
             username: "jumper".to_owned(),
             auth: SshAuth::Password("jump-password".to_owned()),
+            mode: JumpMode::default(),
+            bastion_asset: String::new(),
+            bastion_account: String::new(),
+            bastion_user_format: BastionUserFormat::default(),
         });
         baseline.proxy = Some(ProxyConnectConfig {
             proxy_type: ProxyType::Socks5,
@@ -721,6 +726,10 @@ mod tests {
             port: 22,
             username: "jumper".to_owned(),
             auth: SshAuth::Agent,
+            mode: JumpMode::default(),
+            bastion_asset: String::new(),
+            bastion_account: String::new(),
+            bastion_user_format: BastionUserFormat::default(),
         });
         assert_eq!(
             ConnectionKey::from_config(&jump_config, target_credentials()),
@@ -762,6 +771,10 @@ mod tests {
             port: 22,
             username: "jumper".to_owned(),
             auth: SshAuth::Password("JUMP-PASSWORD-SECRET".to_owned()),
+            mode: JumpMode::default(),
+            bastion_asset: String::new(),
+            bastion_account: String::new(),
+            bastion_user_format: BastionUserFormat::default(),
         });
         config.proxy = Some(ProxyConnectConfig {
             proxy_type: ProxyType::Http,

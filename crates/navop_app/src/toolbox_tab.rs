@@ -62,7 +62,7 @@ impl ExtensionTool {
     }
 }
 
-/// 从全局 runtime catalog 读取工具箱里的扩展 app（没有连接的才有卡片）。
+/// 从全局 runtime catalog 读取工具箱里的扩展 app（无连接、无面板的才有卡片）。
 pub(crate) fn extension_tools(cx: &App) -> Vec<ExtensionTool> {
     // 没有 nsh 宿主时扩展 app 打不开，不展示只会弹警告的卡片。
     if !crate::nsh_ui_available() {

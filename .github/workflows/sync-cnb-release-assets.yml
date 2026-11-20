@@ -14,6 +14,8 @@ permissions:
 
 env:
   CNB_REPOSITORY: "navop-dev/navop"
+  # CNB 只当国内镜像，旧版本没有保留价值：每次同步新版本后清掉更旧的 Release。
+  CNB_RELEASE_RETENTION: "5"
 
 concurrency:
   group: navop-cnb-release
@@ -111,3 +113,24 @@ jobs:
             echo "::error::mpgrm release sync failed after 3 attempts for ${TAG_NAME}"
             exit 1
           fi
+
+      # 对象存储免费额度只有 100 GiB（统计制品、LFS、图片与附件），而单版镜像
+      # 已涨到约 3 GiB，历史 Release 会持续吃额度直到开始计费。这里只删 Release，
+      # 不动 git tag —— 更新器靠 refs 广告发现 tag，tag 必须留着（已实测：删
+      # Release 不会连带删 tag）。
+      # 脚本从「本次 workflow 的 ref」取，而不是上面按 tag 检出的工作区：手工
+      # 重跑旧 tag 时，那个 tag 的树里还没有这个脚本。
+      # 清理失败不让整个同步 job 变红（镜像本身已经同步成功），但令牌缺
+      # repo-release:rw 时报错，因为那是必须人工修一次的问题。
+      - name: Checkout maintenance scripts
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          sparse-checkout: .github/scripts
+          path: .maintenance
+
+      - name: Prune old CNB releases
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          SYNCED_TAG: ${{ inputs.tag }}
+        run: bash .maintenance/.github/scripts/prune-cnb-releases.sh

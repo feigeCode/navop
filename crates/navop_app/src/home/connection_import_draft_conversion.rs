@@ -224,6 +224,8 @@ fn to_ssh_connection(
                     username: jump.username.clone(),
                     auth_method: imported_ssh_auth_method(&jump.auth_method)?,
                     credential_reference: None,
+                    mode: Default::default(),
+                    bastion: None,
                 })
             })
             .transpose()?,

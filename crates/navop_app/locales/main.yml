@@ -62,6 +62,18 @@ Common:
     en: "Unable to open file: %{error}"
     zh-CN: "无法打开文件：%{error}"
     zh-HK: "無法開啟檔案：%{error}"
+  jump_deeplink_failed:
+    en: "Unable to open the JumpServer link: %{error}"
+    zh-CN: "无法打开 JumpServer 链接：%{error}"
+    zh-HK: "無法開啟 JumpServer 連結：%{error}"
+  connection_deeplink_failed:
+    en: "Unable to open the connection link: %{error}"
+    zh-CN: "无法打开连接链接：%{error}"
+    zh-HK: "無法開啟連線連結：%{error}"
+  deeplink_scheme_disabled:
+    en: "%{scheme}:// links are disabled. Enable them in Settings → General → Link protocols."
+    zh-CN: "%{scheme}:// 链接未启用，可在「设置 → 通用 → 链接协议」中开启。"
+    zh-HK: "%{scheme}:// 連結未啟用，可在「設定 → 一般 → 連結協定」中開啟。"
   storage_unavailable:
     en: Application storage is unavailable
     zh-CN: 应用存储不可用
@@ -168,6 +180,42 @@ Home:
     en: "Recent Connections"
     zh-CN: "最近连接"
     zh-HK: "最近連線"
+  host_metrics_cpu:
+    en: "CPU %{percent}%"
+    zh-CN: "CPU %{percent}%"
+    zh-HK: "CPU %{percent}%"
+  host_metrics_memory:
+    en: "Memory %{percent}%"
+    zh-CN: "内存 %{percent}%"
+    zh-HK: "記憶體 %{percent}%"
+  host_metrics_disk:
+    en: "Disk %{percent}%"
+    zh-CN: "磁盘 %{percent}%"
+    zh-HK: "磁碟 %{percent}%"
+  host_metrics_cpu_label:
+    en: CPU
+    zh-CN: CPU
+    zh-HK: CPU
+  host_metrics_memory_label:
+    en: Memory
+    zh-CN: 内存
+    zh-HK: 記憶體
+  host_metrics_disk_label:
+    en: Disk
+    zh-CN: 磁盘
+    zh-HK: 磁碟
+  host_metrics_cores:
+    en: "%{count} cores"
+    zh-CN: "%{count} 核"
+    zh-HK: "%{count} 核"
+  host_metrics_collecting:
+    en: "Collecting resource info…"
+    zh-CN: "正在采集资源信息…"
+    zh-HK: "正在採集資源資訊…"
+  host_metrics_unavailable:
+    en: "Resource info unavailable"
+    zh-CN: "资源信息不可用"
+    zh-HK: "資源資訊不可用"
   unassigned_connections:
     en: "Unassigned"
     zh-CN: "未分组"
@@ -2750,6 +2798,33 @@ Settings:
       zh-CN: 通用
       zh-HK: 通用
 
+    # 链接协议：是否接管 ssh:// / sftp://（默认关闭）
+    Deeplinks:
+      group_title:
+        en: Link protocols
+        zh-CN: 链接协议
+        zh-HK: 連結協定
+      group_description:
+        en: Let Navop handle ssh:// and sftp:// links from browsers and documents. These schemes usually belong to the terminal or file manager, so they stay off until enabled here.
+        zh-CN: 允许 Navop 处理来自浏览器和文档的 ssh:// 与 sftp:// 链接。这些协议通常由终端或文件管理器接管，因此在勾选前保持关闭。
+        zh-HK: 允許 Navop 處理來自瀏覽器與文件的 ssh:// 與 sftp:// 連結。這些協定通常由終端機或檔案管理器接管，因此在勾選前保持關閉。
+      ssh:
+        en: Handle ssh:// links
+        zh-CN: 接管 ssh:// 链接
+        zh-HK: 接管 ssh:// 連結
+      ssh_desc:
+        en: Open an SSH terminal for the host in the link. Credentials are used for this session only and never saved.
+        zh-CN: 为链接中的主机打开 SSH 终端。凭据只用于本次会话，不会保存。
+        zh-HK: 為連結中的主機開啟 SSH 終端機。憑證只用於本次工作階段，不會儲存。
+      sftp:
+        en: Handle sftp:// links
+        zh-CN: 接管 sftp:// 链接
+        zh-HK: 接管 sftp:// 連結
+      sftp_desc:
+        en: Open the SFTP pane at the directory in the link. Credentials are used for this session only and never saved.
+        zh-CN: 在链接指定的目录打开 SFTP 面板。凭据只用于本次会话，不会保存。
+        zh-HK: 在連結指定的目錄開啟 SFTP 面板。憑證只用於本次工作階段，不會儲存。
+
     # 语言设置
     Language:
       group_title:
@@ -2871,9 +2946,9 @@ Settings:
         zh-CN: 显示远端资源占用
         zh-HK: 顯示遠端資源佔用
       show_host_metrics_desc:
-        en: Collect CPU, memory and disk usage of SSH servers with a background session and show it on connection cards without opening a terminal.
-        zh-CN: 用后台 SSH 会话采集服务器的 CPU、内存与磁盘占用，无需打开终端即可在连接卡片上看到
-        zh-HK: 用後台 SSH 會話採集伺服器的 CPU、記憶體與磁碟佔用，無需開啟終端即可在連線卡片上看到
+        en: Collect the operating system, CPU cores, memory and disk capacity and usage of SSH servers with a background session, then show them across connection cards, lists and trees without opening a terminal.
+        zh-CN: 用后台 SSH 会话采集服务器的系统、CPU 核数、内存与磁盘容量及占用，无需打开终端即可在连接卡片、列表和树中看到
+        zh-HK: 用後台 SSH 會話採集伺服器的系統、CPU 核心數、記憶體與磁碟容量及佔用，無需開啟終端即可在連線卡片、列表和樹狀檢視中看到
       home_layout:
         en: Home Connection Layout
         zh-CN: 主页连接布局

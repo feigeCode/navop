@@ -33,6 +33,25 @@ impl fmt::Display for PrivateKeyLoadFailed {
 
 impl StdError for PrivateKeyLoadFailed {}
 
+/// 跳板机 direct-tcpip 通道被远端拒绝（含服务器回传的原因码与描述）。
+///
+/// 典型场景是 JumpServer 这类堡垒机默认禁用端口转发：客户端能登录跳板机，
+/// 但 `channel_open_direct_tcpip` 被以 `AdministrativelyProhibited` 拒绝，
+/// 界面上只剩 `Failed to open channel (AdministrativelyProhibited)` 一个枚举名，
+/// 用户无从知道该关掉「跳板机」直连资产。
+#[derive(Debug)]
+pub struct JumpChannelRejected {
+    message: String,
+}
+
+impl fmt::Display for JumpChannelRejected {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl StdError for JumpChannelRejected {}
+
 /// Wrap private-key loading failures so the terminal does not reduce a wrong
 /// passphrase or malformed key to russh's opaque `SshKey: cryptographic error`.
 pub(crate) fn add_private_key_load_hint(error: Error) -> Error {
@@ -56,6 +75,39 @@ pub fn add_legacy_algorithm_hint(error: Error, allow_legacy_algorithms: bool) ->
     Error::new(LegacyAlgorithmRequired {
         message: format!("{error:#}\n\n{}", t!("Ssh.legacy_algorithms_required_hint")),
     })
+}
+
+/// 给「跳板机 direct-tcpip 通道被拒」的错误追加可执行的处理建议。
+///
+/// `description` 是服务器在 CHANNEL_OPEN_FAILURE 里回传的描述文本（可能为空）。
+/// 仅当错误链里确实是 `russh::Error::ChannelOpenFailure` 时才包装，其余错误原样返回。
+pub fn add_jump_channel_rejected_hint(error: Error, description: &str) -> Error {
+    let Some(reason) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<russh::Error>())
+        .and_then(|error| match error {
+            russh::Error::ChannelOpenFailure(reason) => Some(reason.clone()),
+            _ => None,
+        })
+    else {
+        return error;
+    };
+
+    let reason_code = reason.code();
+
+    let mut message = format!(
+        "{error:#}\n\n{}",
+        t!("Ssh.jump_channel_rejected_hint", reason = reason_code)
+    );
+    let trimmed = description.trim();
+    if !trimmed.is_empty() {
+        message.push_str(&format!(
+            "\n\n{}",
+            t!("Ssh.server_reason", reason = trimmed)
+        ));
+    }
+
+    Error::new(JumpChannelRejected { message })
 }
 
 fn is_no_common_algorithm_with_legacy_remedy(error: &Error) -> bool {
@@ -84,7 +136,9 @@ fn matches_kind(kind: &russh::AlgorithmKind, theirs: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{LegacyAlgorithmRequired, add_legacy_algorithm_hint};
+    use super::{
+        LegacyAlgorithmRequired, add_jump_channel_rejected_hint, add_legacy_algorithm_hint,
+    };
 
     fn no_common_algorithm(kind: russh::AlgorithmKind) -> anyhow::Error {
         no_common_algorithm_with_theirs(kind, vec!["theirs".to_owned()])
@@ -186,5 +240,54 @@ mod tests {
             assert!(error.downcast_ref::<LegacyAlgorithmRequired>().is_none());
             assert_eq!(error.to_string(), message);
         }
+    }
+
+    fn administratively_prohibited() -> anyhow::Error {
+        russh::Error::ChannelOpenFailure(russh::ChannelOpenFailure::AdministrativelyProhibited)
+            .into()
+    }
+
+    fn connect_failed() -> anyhow::Error {
+        russh::Error::ChannelOpenFailure(russh::ChannelOpenFailure::ConnectFailed).into()
+    }
+
+    #[test]
+    fn jump_channel_rejection_includes_hint_and_server_description() {
+        let error = add_jump_channel_rejected_hint(
+            administratively_prohibited(),
+            "port forwarding is disabled",
+        );
+
+        assert!(error.downcast_ref::<super::JumpChannelRejected>().is_some());
+        assert!(error.to_string().contains("Failed to open channel"));
+        assert!(error.to_string().contains("jump server"));
+        assert!(error.to_string().contains("port forwarding is disabled"));
+    }
+
+    #[test]
+    fn jump_channel_rejection_without_description_keeps_hint() {
+        let error = add_jump_channel_rejected_hint(administratively_prohibited(), "  ");
+
+        assert!(error.downcast_ref::<super::JumpChannelRejected>().is_some());
+        assert!(error.to_string().contains("jump server"));
+    }
+
+    #[test]
+    fn jump_channel_hint_covers_connect_failed_rejections() {
+        let error = add_jump_channel_rejected_hint(connect_failed(), "");
+
+        assert!(error.downcast_ref::<super::JumpChannelRejected>().is_some());
+        assert!(error.to_string().contains("Failed to open channel"));
+    }
+
+    #[test]
+    fn unrelated_errors_are_not_wrapped_as_jump_channel_rejections() {
+        let error = add_jump_channel_rejected_hint(
+            anyhow::anyhow!("Password authentication failed"),
+            "ignored",
+        );
+
+        assert!(error.downcast_ref::<super::JumpChannelRejected>().is_none());
+        assert_eq!(error.to_string(), "Password authentication failed");
     }
 }

@@ -387,6 +387,8 @@ fn resolver_supports_proxy_jump_server_sentinel_and_private_key_content() {
                 password: "manual".to_string(),
             },
             credential_reference: login_reference,
+            mode: Default::default(),
+            bastion: None,
         });
         let ssh = repository
             .resolve_ssh(ssh)
@@ -641,6 +643,8 @@ fn resolver_applies_the_same_rules_to_the_jump_server() {
                 private_key: false,
                 passphrase: false,
             }),
+            mode: Default::default(),
+            bastion: None,
         });
         let resolved = repository.resolve_ssh(ssh).expect("resolve ssh");
         let jump = resolved.jump_server.expect("jump server");

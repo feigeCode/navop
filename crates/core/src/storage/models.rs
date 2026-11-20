@@ -807,6 +807,36 @@ impl RemoteDesktopParams {
     }
 }
 
+/// 跳板机工作模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum JumpMode {
+    /// 现有语义：在跳板机上开 direct-tcpip 通道连目标（ProxyJump 式）。
+    #[default]
+    ProxyJump,
+    /// 直连型堡垒机：目标会话就是堡垒机会话，用户名按预设格式渲染
+    /// （JumpServer 的 `{user}#{account}#{asset}`），不开端口转发通道。
+    BastionDirect,
+}
+
+/// 堡垒机用户名格式预设
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum BastionUserFormat {
+    /// JumpServer：`{user}#{account}#{asset}`
+    #[default]
+    JumpServer,
+}
+
+/// 堡垒机直连目标（`JumpMode::BastionDirect` 时生效）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BastionTarget {
+    /// 资产 IP / 名称 / UUID（JumpServer 支持资产 UUID）
+    pub asset: String,
+    /// 资产账号（如 root）
+    pub account: String,
+    /// 用户名格式预设
+    pub user_format: BastionUserFormat,
+}
+
 /// 跳板机配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JumpServerConfig {
@@ -816,6 +846,33 @@ pub struct JumpServerConfig {
     pub auth_method: SshAuthMethod,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_reference: Option<CredentialReference>,
+    /// 工作模式。存量数据无此字段，反序列化缺省为 ProxyJump。
+    #[serde(default, skip_serializing_if = "is_default_jump_mode")]
+    pub mode: JumpMode,
+    /// 堡垒机直连目标。仅 `JumpMode::BastionDirect` 时有意义。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bastion: Option<BastionTarget>,
+}
+
+/// `mode` 为缺省值（ProxyJump）时序列化省略，保证旧数据可读、diff 干净。
+fn is_default_jump_mode(mode: &JumpMode) -> bool {
+    matches!(mode, JumpMode::ProxyJump)
+}
+
+impl JumpServerConfig {
+    /// 渲染堡垒机直连登录用户名。
+    ///
+    /// 仅 `JumpMode::BastionDirect` 且已配置 `bastion` 时返回 `Some`；
+    /// ProxyJump 或漏配目标时返回 `None`，由调用方沿用普通用户名。
+    pub fn bastion_login_username(&self) -> Option<String> {
+        let bastion = self.bastion.as_ref()?;
+        match bastion.user_format {
+            BastionUserFormat::JumpServer => Some(format!(
+                "{}#{}#{}",
+                self.username, bastion.account, bastion.asset
+            )),
+        }
+    }
 }
 
 /// 代理类型
@@ -973,6 +1030,58 @@ fn tunnel_auth_fields(auth: &SshAuthMethod) -> TunnelAuthFields {
     }
 }
 
+/// 把引用 SSH 连接的 jump/proxy 继承进隧道配置（T1 隧道继承）。
+///
+/// 历史 bug：`apply_referenced_ssh_tunnel` 只回填 host/port/username/auth/timeout，
+/// 引用带跳板机的 SSH 连接时跳板被静默丢弃，隧道直连内网地址导致连接失败。
+/// 统一在各 `apply_referenced_ssh_tunnel` 末尾调用本函数，隧道随引用连接走跳板。
+pub fn inherit_tunnel_jump_and_proxy(
+    tunnel: &mut SshTunnelConfig,
+    ssh_params: &SshParams,
+) {
+    if tunnel.jump.is_none() {
+        tunnel.jump = ssh_params.jump_server.as_ref().map(tunnel_jump_from_storage);
+    }
+    if tunnel.proxy.is_none() {
+        tunnel.proxy = ssh_params.proxy.as_ref().map(tunnel_proxy_from_storage);
+    }
+}
+
+/// 存储 `JumpServerConfig` → 隧道 `TunnelJumpConfig`（已解析凭据子集）。
+fn tunnel_jump_from_storage(jump: &JumpServerConfig) -> connection_tunnel::TunnelJumpConfig {
+    let fields = tunnel_auth_fields(&jump.auth_method);
+    connection_tunnel::TunnelJumpConfig {
+        host: jump.host.clone(),
+        port: jump.port,
+        username: jump.username.clone(),
+        auth_type: fields.auth_type.to_string(),
+        password: fields.password,
+        private_key_path: fields.private_key_path,
+        private_key_content: fields.private_key_content,
+        private_key_passphrase: fields.passphrase,
+        mode: match jump.mode {
+            JumpMode::ProxyJump => connection_tunnel::TunnelJumpMode::ProxyJump,
+            JumpMode::BastionDirect => connection_tunnel::TunnelJumpMode::BastionDirect,
+        },
+        bastion_asset: jump.bastion.as_ref().map(|target| target.asset.clone()),
+        bastion_account: jump.bastion.as_ref().map(|target| target.account.clone()),
+    }
+}
+
+/// 存储 `ProxyConfig` → 隧道 `TunnelProxyConfig`。
+fn tunnel_proxy_from_storage(proxy: &ProxyConfig) -> connection_tunnel::TunnelProxyConfig {
+    connection_tunnel::TunnelProxyConfig {
+        proxy_type: match proxy.proxy_type {
+            ProxyType::Socks5 => "socks5".to_string(),
+            ProxyType::Http => "http".to_string(),
+        },
+        host: proxy.host.clone(),
+        port: proxy.port,
+        username: proxy.username.clone(),
+        password: proxy.password.clone(),
+    }
+}
+
 /// 需要加入本地 ssh-agent 并通过 ForwardAgent 转发的私钥。
 ///
 /// 独立于 [`SshAuthMethod`]：这把密钥不用于本连接自身的认证，只是被加入
@@ -1071,6 +1180,7 @@ impl RedisParams {
         }
 
         let ssh_params = ssh_connection.to_ssh_params()?;
+        inherit_tunnel_jump_and_proxy(tunnel, &ssh_params);
         tunnel.host = ssh_params.host;
         tunnel.port = ssh_params.port;
         tunnel.username = ssh_params.username;
@@ -1084,6 +1194,7 @@ impl RedisParams {
         tunnel.private_key_path = auth_fields.private_key_path;
         tunnel.private_key_content = auth_fields.private_key_content;
         tunnel.private_key_passphrase = auth_fields.passphrase;
+
 
         Ok(())
     }
@@ -1170,6 +1281,7 @@ impl MongoDBParams {
         }
 
         let ssh_params = ssh_connection.to_ssh_params()?;
+        inherit_tunnel_jump_and_proxy(tunnel, &ssh_params);
         tunnel.host = ssh_params.host;
         tunnel.port = ssh_params.port;
         tunnel.username = ssh_params.username;
@@ -1183,6 +1295,7 @@ impl MongoDBParams {
         tunnel.private_key_path = auth_fields.private_key_path;
         tunnel.private_key_content = auth_fields.private_key_content;
         tunnel.private_key_passphrase = auth_fields.passphrase;
+
 
         Ok(())
     }
@@ -1295,6 +1408,7 @@ impl MqttParams {
         }
 
         let ssh_params = ssh_connection.to_ssh_params()?;
+        inherit_tunnel_jump_and_proxy(tunnel, &ssh_params);
         tunnel.host = ssh_params.host;
         tunnel.port = ssh_params.port;
         tunnel.username = ssh_params.username;
@@ -1308,6 +1422,7 @@ impl MqttParams {
         tunnel.private_key_path = auth_fields.private_key_path;
         tunnel.private_key_content = auth_fields.private_key_content;
         tunnel.private_key_passphrase = auth_fields.passphrase;
+
 
         Ok(())
     }
@@ -1972,6 +2087,16 @@ impl DbConnectionConfig {
         if let Some(passphrase) = auth_fields.passphrase {
             self.extra_params
                 .insert("ssh_private_key_passphrase".to_string(), passphrase);
+        }
+
+        // T1 隧道继承：引用连接的 jump/proxy 经 extra_params 传递
+        // （DbConnectionConfig 不持有 SshTunnelConfig 结构体，序列化进去）。
+        if self.extra_params.get("ssh_jump_config").is_none() {
+            if let Some(jump) = &ssh_params.jump_server {
+                if let Ok(encoded) = serde_json::to_string(&tunnel_jump_from_storage(jump)) {
+                    self.extra_params.insert("ssh_jump_config".to_string(), encoded);
+                }
+            }
         }
 
         Ok(())

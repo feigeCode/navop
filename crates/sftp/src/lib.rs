@@ -103,23 +103,31 @@ impl std::error::Error for TransferCancelled {}
 
 pub type ProgressCallback = Box<dyn Fn(TransferProgress) + Send + Sync + 'static>;
 
-/// Whether a server-provided directory entry can be used as one local path
-/// component without escaping its parent directory.
+/// 服务端返回的单个目录项名是否可以当作「一层远程路径」使用。
 ///
-/// SFTP servers control the raw `filename` bytes in `SSH_FXP_NAME`. Even
-/// though a normal POSIX server cannot put `/` in a filename, a malicious
-/// server can return values such as `../outside.txt`. Validate every entry
-/// before path construction; components are deliberately rejected on every
-/// platform so a listing cannot become traversal after transferring between
-/// Unix and Windows.
+/// SFTP 服务端完全控制 `SSH_FXP_NAME` 里的 filename 字节，恶意服务端可以返回
+/// `../outside.txt` 这类值，所以这里只接受单层名称：非空、不是 `.` / `..`、
+/// 不含 `/`、`\`、NUL。
+///
+/// 这个判断必须与客户端操作系统无关：`c:`、`a:b` 在 Linux 服务器上是合法
+/// 文件名，用 Windows 的路径语义去判会把整个目录判成不可读。
+/// 需要拼成本地路径时改用 [`is_valid_local_file_name`]。
 pub fn is_valid_remote_entry_name(name: &str) -> bool {
-    if name.is_empty()
+    !(name.is_empty()
         || name == "."
         || name == ".."
         || name.contains('/')
         || name.contains('\\')
-        || name.contains('\0')
-    {
+        || name.contains('\0'))
+}
+
+/// 远程名字拼接到本地目录后，是否仍然只解析出「父目录下的一个普通文件名」。
+///
+/// Windows 上 `base.join("c:")` 会变成盘符相对路径、`base.join("c:foo")`
+/// 会丢掉整段基路径，所以真正落盘前必须额外拒绝盘符前缀形态；
+/// 其他平台上这个判断与 [`is_valid_remote_entry_name`] 等价。
+pub fn is_valid_local_file_name(name: &str) -> bool {
+    if !is_valid_remote_entry_name(name) {
         return false;
     }
 
@@ -344,7 +352,9 @@ impl<T: RemoteFileClient + ?Sized + Send + Sync> RemoteFileClient for Box<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileEntry, is_valid_remote_entry_name, validate_read_size};
+    use super::{
+        FileEntry, is_valid_local_file_name, is_valid_remote_entry_name, validate_read_size,
+    };
     use std::time::SystemTime;
 
     fn file_entry(user: Option<&str>, uid: Option<u32>) -> FileEntry {
@@ -404,12 +414,64 @@ mod tests {
         }
     }
 
+    #[test]
+    fn remote_entry_name_validation_accepts_posix_names_with_colons() {
+        // Linux 服务器上的 `c:`、`c:foo` 是合法文件名：远程列举绝不能
+        // 因为客户端跑在 Windows 上就把它们判成非法。
+        for name in ["c:", "c:foo", "a:b"] {
+            assert!(
+                is_valid_remote_entry_name(name),
+                "{name:?} is a legal POSIX file name and must stay listable"
+            );
+        }
+    }
+
+    #[test]
+    fn local_file_name_validation_accepts_ordinary_names() {
+        for name in ["notes.txt", "folder", "archive.tar.gz", "文件名.txt"] {
+            assert!(
+                is_valid_local_file_name(name),
+                "{name:?} must be safe to join onto a local directory"
+            );
+        }
+    }
+
+    #[test]
+    fn local_file_name_validation_rejects_traversal() {
+        for name in ["", ".", "..", "../outside.txt", "a/b", "..\\outside.txt"] {
+            assert!(
+                !is_valid_local_file_name(name),
+                "{name:?} must not be joined onto a local directory"
+            );
+        }
+    }
+
     #[cfg(windows)]
     #[test]
-    fn remote_entry_name_validation_rejects_windows_prefixes() {
-        assert!(!is_valid_remote_entry_name("C:outside.txt"));
-        assert!(!is_valid_remote_entry_name(r"C:\outside.txt"));
-        assert!(!is_valid_remote_entry_name(r"\\server\share\outside.txt"));
+    fn local_file_name_validation_rejects_windows_drive_prefixes() {
+        // Windows 上 `join("c:")` 会解析成盘符相对路径，落盘前必须拒绝。
+        for name in ["c:", "C:", "c:outside.txt", "C:outside.txt"] {
+            assert!(
+                is_valid_remote_entry_name(name),
+                "{name:?} can still be listed as a remote entry"
+            );
+            assert!(
+                !is_valid_local_file_name(name),
+                "{name:?} must not be used as a local file name on Windows"
+            );
+        }
+        assert!(!is_valid_local_file_name(r"\\server\share\outside.txt"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn local_file_name_validation_accepts_colons_outside_windows() {
+        for name in ["c:", "c:foo", "a:b"] {
+            assert!(
+                is_valid_local_file_name(name),
+                "{name:?} cannot escape the parent directory on this platform"
+            );
+        }
     }
 
     #[test]

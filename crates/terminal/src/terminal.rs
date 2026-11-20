@@ -22,8 +22,8 @@ use one_core::app_dirs;
 use one_core::gpui_tokio::Tokio;
 use one_core::settings::AppSettings;
 use one_core::storage::models::{
-    ActiveConnections, ProxyType as StorageProxyType, SerialParams, SshAccountExpect,
-    SshAgentForwardKey, SshAuthMethod, StoredConnection, TelnetParams,
+    ActiveConnections, SerialParams, SshAccountExpect, SshAgentForwardKey,
+    SshAuthMethod, StoredConnection, TelnetParams,
 };
 use one_core::storage::{
     GlobalStorageState, TerminalCommandHistoryRepository, TerminalCommandHistorySort,
@@ -86,8 +86,8 @@ use crate::{
     TerminalTransferCancelHandle,
 };
 pub use ssh::{
-    AgentIdentity, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, PtyConfig, SshAuth,
-    SshConnectConfig,
+    AgentIdentity, BastionUserFormat as SshBastionUserFormat, JumpMode as SshJumpMode,
+    JumpServerConnectConfig, ProxyConnectConfig, ProxyType, PtyConfig, SshAuth, SshConnectConfig,
 };
 use ssh::{
     ChannelEvent, HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyVerifier,
@@ -354,6 +354,8 @@ struct ResolvedSshConnection {
     init_commands: Option<String>,
     connection_id: Option<i64>,
     connection_name: String,
+    /// 仓库凭据修订号；临时连接为 `None`，用于派生共享租约身份。
+    credential_revision: Option<i64>,
 }
 
 struct SshConnectTask {
@@ -368,35 +370,6 @@ struct SshConnectTask {
     init_commands: Option<String>,
     recording_tap: Option<RecordingTap>,
     generation: u64,
-}
-
-fn ssh_auth_from_storage(auth: SshAuthMethod) -> SshAuth {
-    match auth {
-        SshAuthMethod::Password { password } => SshAuth::Password(password),
-        SshAuthMethod::PrivateKey {
-            key_path,
-            passphrase,
-        } => SshAuth::PrivateKey {
-            key_path,
-            passphrase,
-            certificate_path: None,
-        },
-        SshAuthMethod::PrivateKeyContent {
-            private_key,
-            passphrase,
-        } => SshAuth::PrivateKeyContent {
-            private_key,
-            passphrase,
-            certificate_path: None,
-        },
-        SshAuthMethod::Agent => SshAuth::Agent,
-        SshAuthMethod::Pageant => SshAuth::Pageant,
-        SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
-        SshAuthMethod::None => SshAuth::None,
-        SshAuthMethod::Chain(steps) => {
-            SshAuth::Chain(steps.into_iter().map(ssh_auth_from_storage).collect())
-        }
-    }
 }
 
 fn password_from_ssh_auth(auth: &SshAuth) -> Option<String> {
@@ -733,26 +706,12 @@ fn resolve_ssh_connection(
         host: params.host,
         port: params.port,
         username: params.username,
-        auth: ssh_auth_from_storage(params.auth_method),
+        auth: sftp_transfer::ssh_auth(params.auth_method),
         timeout: params.connect_timeout.map(Duration::from_secs),
         keepalive_interval: params.keepalive_interval.map(Duration::from_secs),
         keepalive_max: params.keepalive_max,
-        jump_server: params.jump_server.map(|jump| JumpServerConnectConfig {
-            host: jump.host,
-            port: jump.port,
-            username: jump.username,
-            auth: ssh_auth_from_storage(jump.auth_method),
-        }),
-        proxy: params.proxy.map(|proxy| ProxyConnectConfig {
-            proxy_type: match proxy.proxy_type {
-                StorageProxyType::Socks5 => ProxyType::Socks5,
-                StorageProxyType::Http => ProxyType::Http,
-            },
-            host: proxy.host,
-            port: proxy.port,
-            username: proxy.username,
-            password: proxy.password,
-        }),
+        jump_server: params.jump_server.as_ref().map(sftp_transfer::jump_connect_config),
+        proxy: params.proxy.as_ref().map(sftp_transfer::proxy_connect_config),
         keyboard_interactive_responder: None,
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: params.x11_forwarding.unwrap_or(false),
@@ -775,6 +734,7 @@ fn resolve_ssh_connection(
         init_commands,
         connection_id: update.connection.id,
         connection_name: update.connection.name,
+        credential_revision: update.connection.credential_revision,
     })
 }
 
@@ -855,6 +815,37 @@ fn ssh_config_with_runtime_credentials(
         .as_ref()
         .and_then(|jump| password_from_ssh_auth(&jump.auth));
     let target_password = password_from_ssh_auth(&config.ssh_config.auth);
+
+    // 堡垒机直连（BastionDirect）模式下目标认证被跳过，实际认证的是堡垒机会话：
+    // 运行时输入的密码必须同时注入 jump.auth，否则「连接时输入密码」在该模式下
+    // 永远拿到空密码。
+    if let (Some(password), Some(jump)) = (
+        credentials.password.as_deref(),
+        config.ssh_config.jump_server.as_mut(),
+    ) {
+        if jump.bastion_login_username().is_some() {
+            match &mut jump.auth {
+                SshAuth::Password(configured) => {
+                    if configured.is_empty() {
+                        *configured = password.to_string();
+                    }
+                }
+                // 组合认证里的密码因素同样补齐（与目标侧语义一致）。
+                SshAuth::Chain(steps) => {
+                    if let Some(configured) = steps.iter_mut().find_map(|step| match step {
+                        SshAuth::Password(configured) => Some(configured),
+                        _ => None,
+                    }) {
+                        if configured.is_empty() {
+                            *configured = password.to_string();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     let responder = TerminalMfaResponder::new(event_tx, jump_password, target_password)
         .with_otp(base_config.otp.clone());
     config.ssh_config.keyboard_interactive_responder = keyboard_interactive_enabled
@@ -1457,6 +1448,13 @@ pub struct Terminal {
     ssh_base_config: Option<SshTerminalConfig>,
     /// SSH 会话管理器（同一 SSH tab 共享底层连接）
     ssh_session_manager: Option<Arc<SshSessionManager>>,
+    /// 应用级共享租约（经 `SshSessionService` 获取）。
+    ///
+    /// `None` 表示当前 manager 是本地回退（不进 registry 记账），
+    /// 断开语义见 `take_ssh_session_manager`。
+    ssh_session_lease: Option<ssh::SshSessionLease>,
+    /// 仓库凭据修订号快照（来自最近一次 resolve），用于派生共享租约身份。
+    ssh_credential_revision: Option<i64>,
     /// 当前连接的临时凭据策略。
     ssh_credential_prompt_policy: SshCredentialPromptPolicy,
     /// 等待用户输入的临时 SSH 用户名/密码。
@@ -1955,6 +1953,8 @@ impl Terminal {
             ssh_config: None,
             ssh_base_config: None,
             ssh_session_manager: None,
+            ssh_session_lease: None,
+            ssh_credential_revision: None,
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,
@@ -2078,6 +2078,8 @@ impl Terminal {
             ssh_config: None,
             ssh_base_config: None,
             ssh_session_manager: None,
+            ssh_session_lease: None,
+            ssh_credential_revision: None,
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,
@@ -2412,6 +2414,8 @@ impl Terminal {
             ssh_config: Some(base_config.clone()),
             ssh_base_config: Some(base_config.clone()),
             ssh_session_manager: None,
+            ssh_session_lease: None,
+            ssh_credential_revision: resolved.credential_revision,
             ssh_credential_prompt_policy: resolved.credential_prompt_policy,
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: resolved.keyboard_interactive_enabled,
@@ -2549,6 +2553,8 @@ impl Terminal {
             ssh_config: None,
             ssh_base_config: None,
             ssh_session_manager: None,
+            ssh_session_lease: None,
+            ssh_credential_revision: None,
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,
@@ -2672,6 +2678,8 @@ impl Terminal {
             ssh_config: None,
             ssh_base_config: None,
             ssh_session_manager: None,
+            ssh_session_lease: None,
+            ssh_credential_revision: None,
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,
@@ -2819,6 +2827,8 @@ impl Terminal {
                 ssh_config: None,
                 ssh_base_config: None,
                 ssh_session_manager: None,
+            ssh_session_lease: None,
+            ssh_credential_revision: None,
                 ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
                 ssh_credential_request: None,
                 ssh_keyboard_interactive_enabled: false,
@@ -2853,6 +2863,50 @@ impl Terminal {
                 wakeup_pending,
             },
         )
+    }
+
+    /// 取走当前 SSH 会话管理器并按持有方式收尾。
+    ///
+    /// - 本地 manager（未进 registry）：异步 disconnect，保持旧行为；
+    /// - 共享租约：只 release 本次租约，registry 的空闲回收（60s）接管，
+    ///   绝不 disconnect 其他标签页可能仍在共享的传输。
+    fn take_ssh_session_manager(&mut self, cx: &mut Context<Self>) {
+        let lease = self.ssh_session_lease.take();
+        let Some(session_manager) = self.ssh_session_manager.take() else {
+            return;
+        };
+        match lease {
+            Some(lease) => lease.release(),
+            None => {
+                cx.spawn(async move |_, _| {
+                    let _ = session_manager.disconnect().await;
+                })
+                .detach();
+            }
+        }
+    }
+
+    /// 获取装配层注入的应用级 SSH 会话服务；未注入时返回 `None`（本地回退）。
+    fn ssh_session_service(cx: &App) -> Option<ssh::SshSessionService> {
+        cx.try_global::<GlobalSshSessionServiceHandle>()
+            .map(|handle| handle.service.clone())
+    }
+
+    /// 派生共享租约身份：连接 id、凭据修订号、传输配置三者齐备才可能成功。
+    ///
+    /// 身份派生是纯函数（无 I/O）；失败仅意味着本次回退本地 manager。
+    fn derive_shared_session_identity(
+        &self,
+        config: &SshTerminalConfig,
+    ) -> Option<crate::ssh_session_identity::PersistedSshSessionIdentity> {
+        let connection_id = self.connection_id?;
+        let revision = self.ssh_credential_revision?;
+        crate::ssh_session_identity::PersistedSshSessionIdentity::derive_from_metadata(
+            connection_id,
+            revision,
+            &config.ssh_config,
+        )
+        .ok()
     }
 
     fn history_repository(cx: &mut Context<Self>) -> Option<Arc<TerminalCommandHistoryRepository>> {
@@ -3239,18 +3293,74 @@ impl Terminal {
             return false;
         };
 
-        let session_manager = Arc::new(SshSessionManager::new(config.ssh_config.clone()));
-        let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<Option<String>>();
-        Self::spawn_ssh_disconnect_handler(disconnect_rx, generation, cx);
+        // 共享租约身份派生：需要连接 id + 凭据修订号 + 传输配置三者齐备；
+        // 任一缺失（临时连接、旧数据、非装配环境）都回退到本地 manager，
+        // 行为与改造前完全一致。
+        let service = Self::ssh_session_service(cx);
+        let shared_identity = service
+            .as_ref()
+            .and_then(|_| self.derive_shared_session_identity(&config));
 
         // `spawn_ssh_connect` 会拿走 `config`，门禁必须在移动之前先算好。
         let load_remote_history = remote_shell_history_allowed(config.disable_shell_integration);
 
         self.ssh_config = Some(config.clone());
-        self.ssh_session_manager = Some(session_manager.clone());
         self.ssh_mfa_responder = Some(responder);
         let credential_request_cleared = self.ssh_credential_request.take().is_some();
 
+        if let (Some(service), Some(identity)) = (service, shared_identity) {
+            // 共享路径：连接任务等共享租约到位后再启动，保证首个连接就走
+            // registry 的共享传输（本地路径先起跑再换 manager 无法真正共享）。
+            Self::spawn_shared_lease_then_connect(
+                service,
+                identity,
+                config,
+                event_tx,
+                event_proxy,
+                zmodem_responder,
+                load_remote_history,
+                generation,
+                cx,
+            );
+        } else {
+            let session_manager = Arc::new(SshSessionManager::new(config.ssh_config.clone()));
+            self.launch_ssh_connect(
+                session_manager,
+                None,
+                config,
+                event_tx,
+                event_proxy,
+                zmodem_responder,
+                load_remote_history,
+                generation,
+                cx,
+            );
+        }
+
+        if credential_request_cleared {
+            cx.emit(TerminalModelEvent::SshCredentialChanged);
+        }
+        cx.emit(TerminalModelEvent::Wakeup);
+        true
+    }
+
+    /// 用给定 manager 启动 SSH 连接任务（同步路径与共享租约路径共用）。
+    fn launch_ssh_connect(
+        &mut self,
+        session_manager: Arc<SshSessionManager>,
+        lease: Option<ssh::SshSessionLease>,
+        config: SshTerminalConfig,
+        event_tx: UnboundedSender<TerminalEvent>,
+        event_proxy: GpuiEventProxy,
+        zmodem_responder: ZmodemResponder,
+        load_remote_history: bool,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<Option<String>>();
+        Self::spawn_ssh_disconnect_handler(disconnect_rx, generation, cx);
+        self.ssh_session_manager = Some(session_manager.clone());
+        self.ssh_session_lease = lease;
         Self::spawn_ssh_connect(
             SshConnectTask {
                 session_manager: session_manager.clone(),
@@ -3270,12 +3380,73 @@ impl Terminal {
         if load_remote_history {
             Self::spawn_ssh_history_loader(session_manager, cx);
         }
+    }
 
-        if credential_request_cleared {
-            cx.emit(TerminalModelEvent::SshCredentialChanged);
+    /// 异步获取共享租约，到位后（generation 仍有效）再启动连接任务。
+    ///
+    /// acquire 失败或 generation 过期时回退本地 manager / 放弃启动，
+    /// 行为与未装配共享服务时一致。
+    fn spawn_shared_lease_then_connect(
+        service: ssh::SshSessionService,
+        identity: crate::ssh_session_identity::PersistedSshSessionIdentity,
+        config: SshTerminalConfig,
+        event_tx: UnboundedSender<TerminalEvent>,
+        event_proxy: GpuiEventProxy,
+        zmodem_responder: ZmodemResponder,
+        load_remote_history: bool,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        /// 租约获取结果：共享租约或本地回退。
+        enum ManagerSource {
+            Shared(ssh::SshSessionLease),
+            Local,
         }
-        cx.emit(TerminalModelEvent::Wakeup);
-        true
+
+        let key = identity.connection_key().clone();
+        let acquire_connect_config = config.ssh_config.clone();
+        cx.spawn(async move |this, cx| {
+            // acquire 内部会 tokio::spawn（reaper/创建飞行），必须在 Tokio runtime
+            // 上下文里调用；GPUI executor 上没有 reactor，直接 await 会 panic。
+            let acquire_task = Tokio::spawn(cx, async move {
+                service
+                    .acquire(&key, acquire_connect_config)
+                    .await
+            });
+            let source = match acquire_task.await {
+                Ok(Ok(lease)) => ManagerSource::Shared(lease),
+                Ok(Err(_)) | Err(_) => ManagerSource::Local, // acquire 失败：本地 manager 兜底
+            };
+            let _ = this.update(cx, |terminal, cx| {
+                if !terminal.is_current_connection_generation(generation) {
+                    // 过期：不启动连接任务；共享租约随 drop 释放。
+                    return;
+                }
+                let (session_manager, lease) = match source {
+                    ManagerSource::Shared(lease) => {
+                        let manager = Arc::new(lease.manager().clone());
+                        (manager, Some(lease))
+                    }
+                    ManagerSource::Local => (
+                        Arc::new(SshSessionManager::new(config.ssh_config.clone())),
+                        None,
+                    ),
+                };
+                terminal.launch_ssh_connect(
+                    session_manager,
+                    lease,
+                    config,
+                    event_tx,
+                    event_proxy,
+                    zmodem_responder,
+                    load_remote_history,
+                    generation,
+                    cx,
+                );
+                cx.emit(TerminalModelEvent::Wakeup);
+            });
+        })
+        .detach();
     }
 
     /// keyboard-interactive 的生效开关。
@@ -3334,12 +3505,7 @@ impl Terminal {
         if let Some(backend) = self.backend.take() {
             backend.shutdown();
         }
-        if let Some(session_manager) = self.ssh_session_manager.take() {
-            cx.spawn(async move |_, _| {
-                let _ = session_manager.disconnect().await;
-            })
-            .detach();
-        }
+        self.take_ssh_session_manager(cx);
         self.prepare_surface_for_reconnect();
         self.connection_state = ConnectionState::Connecting;
         self.set_connection_active(false, cx);
@@ -3976,6 +4142,7 @@ impl Terminal {
         }
         self.connection_id = resolved.connection_id;
         self.connection_name = Some(resolved.connection_name);
+        self.ssh_credential_revision = resolved.credential_revision;
         self.init_commands = resolved.init_commands;
         self.history_scope = resolved.connection_id.map(TerminalHistoryScope::ssh);
         Ok(())
@@ -4696,12 +4863,7 @@ impl Terminal {
             self.ssh_credential_request = None;
             self.ssh_config = Some(base_config.clone());
 
-            if let Some(session_manager) = self.ssh_session_manager.take() {
-                cx.spawn(async move |_, _| {
-                    let _ = session_manager.disconnect().await;
-                })
-                .detach();
-            }
+            self.take_ssh_session_manager(cx);
 
             if self.ssh_credential_prompt_policy.requires_credentials() {
                 self.queue_ssh_credential_request(generation, cx);
@@ -4816,12 +4978,7 @@ impl Terminal {
         if let Some(backend) = self.backend.take() {
             backend.shutdown();
         }
-        if let Some(session_manager) = self.ssh_session_manager.take() {
-            cx.spawn(async move |_, _| {
-                let _ = session_manager.disconnect().await;
-            })
-            .detach();
-        }
+        self.take_ssh_session_manager(cx);
         self.connection_state = ConnectionState::Disconnected { error: None };
         self.set_connection_active(false, cx);
         cx.emit(TerminalModelEvent::Wakeup);
@@ -4912,12 +5069,7 @@ impl Terminal {
         self.ssh_mfa_responder = None;
         self.ssh_credential_request = None;
 
-        if let Some(session_manager) = self.ssh_session_manager.take() {
-            cx.spawn(async move |_, _| {
-                let _ = session_manager.disconnect().await;
-            })
-            .detach();
-        }
+        self.take_ssh_session_manager(cx);
 
         if !self.start_ssh_connection_attempt(retry_config, responder, generation, cx) {
             self.connection_state = ConnectionState::Disconnected {
@@ -5172,6 +5324,28 @@ async fn receive_terminal_event_for_gpui(
     Some(event)
 }
 
+/// 注入应用级 SSH 会话服务（由装配层在启动时调用一次）。
+///
+/// 重复注入是编程错误：全局句柄应当只由领域装配建立一次。
+pub fn install_ssh_session_service(service: ssh::SshSessionService, cx: &mut App) {
+    assert!(
+        cx.try_global::<GlobalSshSessionServiceHandle>().is_none(),
+        "Terminal SSH session service handle must be installed exactly once"
+    );
+    cx.set_global(GlobalSshSessionServiceHandle { service });
+}
+
+/// 装配层注入的应用级 SSH 会话服务句柄。
+///
+/// `terminal` crate 不依赖任何领域装配 crate；`shell_domain::init` 负责在
+/// 启动时 `cx.set_global` 本句柄，Terminal 连接尝试经它拿共享服务。
+#[derive(Clone)]
+pub(crate) struct GlobalSshSessionServiceHandle {
+    pub(crate) service: ssh::SshSessionService,
+}
+
+impl gpui::Global for GlobalSshSessionServiceHandle {}
+
 #[cfg(test)]
 mod tests {
     #[cfg(target_os = "macos")]
@@ -5362,6 +5536,8 @@ mod tests {
             ssh_config: None,
             ssh_base_config: None,
             ssh_session_manager: None,
+            ssh_session_lease: None,
+            ssh_credential_revision: None,
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,
@@ -7726,6 +7902,8 @@ mod tests {
             ssh_config: None,
             ssh_base_config: None,
             ssh_session_manager: None,
+            ssh_session_lease: None,
+            ssh_credential_revision: None,
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,
@@ -8069,6 +8247,8 @@ mod tests {
             ssh_config: None,
             ssh_base_config: None,
             ssh_session_manager: None,
+            ssh_session_lease: None,
+            ssh_credential_revision: None,
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,

@@ -4,7 +4,8 @@
 //! 领域把事件交给这里注册的应用壳实现，由具体产品决定怎么打开 SFTP、
 //! 保存临时连接等。没有注册宿主时（例如领域单元测试）调用会被忽略。
 
-use gpui::{AnyWindowHandle, App, Window};
+use domain_api::{ConnectionFormRequest, ConnectionKindDescriptor};
+use gpui::{AnyView, AnyWindowHandle, App, Window};
 use one_core::storage::StoredConnection;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -54,6 +55,25 @@ pub fn shell_host() -> Option<Arc<dyn ShellHost>> {
 pub trait ExtensionsHost: Send + Sync {
     /// `parent` 是向导弹窗的父窗口（应用主窗口）；返回 `false` 表示无法打开。
     fn open_extensions(&self, parent: AnyWindowHandle, window: &mut Window, cx: &mut App) -> bool;
+
+    /// 已安装扩展贡献的连接种类。
+    ///
+    /// 新建连接向导把它们归入「中间件」类目；没有任何扩展贡献时返回空。
+    fn connection_kinds(&self, _cx: &App) -> Vec<ConnectionKindDescriptor> {
+        Vec::new()
+    }
+
+    /// 构造扩展连接的新建 / 编辑表单。
+    ///
+    /// `request.kind_id` 不属于扩展种类时返回 `None`，由领域注册表继续兜底。
+    fn build_connection_form(
+        &self,
+        _request: ConnectionFormRequest,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Option<AnyView> {
+        None
+    }
 }
 
 static EXTENSIONS_HOST: OnceLock<Arc<dyn ExtensionsHost>> = OnceLock::new();

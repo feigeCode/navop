@@ -134,6 +134,8 @@ fn basic_info_omits_nested_credentials_and_embedded_private_keys() {
                     password: "jump-password".to_string(),
                 },
                 credential_reference: None,
+                mode: Default::default(),
+                bastion: None,
             }),
             proxy: Some(ProxyConfig {
                 proxy_type: ProxyType::Socks5,
@@ -202,6 +204,8 @@ fn full_info_keeps_credentials_but_always_redacts_embedded_private_key_contents(
                     password: "jump-password".to_string(),
                 },
                 credential_reference: None,
+                mode: Default::default(),
+                bastion: None,
             }),
             proxy: Some(ProxyConfig {
                 proxy_type: ProxyType::Http,

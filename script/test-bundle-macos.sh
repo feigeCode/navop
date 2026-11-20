@@ -59,9 +59,17 @@ bundle_product() {
         grep -q '<string>Viewer</string>' "${app_dir}/Contents/Info.plist"
         grep -q '<string>org.asciinema.cast</string>' "${app_dir}/Contents/Info.plist"
         grep -q '<string>application/x-asciicast</string>' "${app_dir}/Contents/Info.plist"
+        # 深链接：全量产品声明 jms://；ssh:// 与 sftp:// 只是候选声明，
+        # 真正是否接管由设置开关决定（默认关闭）。
+        grep -q '<key>CFBundleURLTypes</key>' "${app_dir}/Contents/Info.plist"
+        grep -A2 '<key>CFBundleURLSchemes</key>' "${app_dir}/Contents/Info.plist" \
+            | grep -q '<string>jms</string>'
+        grep -q '<array><string>ssh</string></array>' "${app_dir}/Contents/Info.plist"
+        grep -q '<array><string>sftp</string></array>' "${app_dir}/Contents/Info.plist"
     else
         ! grep -q '<key>CFBundleDocumentTypes</key>' "${app_dir}/Contents/Info.plist"
         ! grep -q '<key>UTImportedTypeDeclarations</key>' "${app_dir}/Contents/Info.plist"
+        ! grep -q '<key>CFBundleURLTypes</key>' "${app_dir}/Contents/Info.plist"
     fi
 }
 

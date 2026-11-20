@@ -9,6 +9,7 @@ use crate::settings::acp_agents_settings::AcpAgentsView;
 use crate::settings::agent_settings::agent_setting_group;
 use crate::settings::appearance::render as render_appearance_settings;
 use crate::settings::connection_display_settings::connection_display_setting_group;
+use crate::settings::deeplink_settings::deeplink_setting_group;
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::mcp_settings::mcp_setting_group;
 use crate::settings::notes_settings::notes_setting_group;
@@ -990,6 +991,7 @@ impl SettingsPanel {
                             ),
                         ),
                     close_behavior_setting_group(default_settings.close_button_behavior),
+                    deeplink_setting_group(),
                     notes_setting_group(font_options.clone()),
                     SettingGroup::new()
                         .title(t!("Settings.General.Appearance.group_title"))

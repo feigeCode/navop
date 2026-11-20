@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_REMOTE_IMAGE_PREVIEW_BYTES: usize = 25 * 1024 * 1024;
-const CLIPBOARD_UPLOAD_IMAGE_PREFIX: &str = "onetcli-clipboard-upload";
+const CLIPBOARD_UPLOAD_IMAGE_PREFIX: &str = "navop-clipboard-upload";
 
 static CLIPBOARD_UPLOAD_IMAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -170,7 +170,38 @@ fn image_format_extension(format: ImageFormat) -> &'static str {
     }
 }
 
+/// 把剪贴板图片统一成远端普遍能读的标准格式。
+///
+/// macOS 截图写进剪贴板的是 TIFF，Windows 的位图常见 BMP；这些格式落到远端后
+/// CLI（Claude Code、图片查看器等）往往直接拒收。这里把 png/jpeg/webp/gif
+/// 之外的位图重编码为 PNG，解码失败时原样返回，保证上传不会因转换而失败。
+pub fn normalize_clipboard_image(image: Image) -> Image {
+    if matches!(
+        image.format,
+        ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Webp | ImageFormat::Gif
+    ) {
+        return image;
+    }
+
+    let Ok(decoded) = image::load_from_memory(&image.bytes) else {
+        return image;
+    };
+
+    let mut bytes = Vec::new();
+    {
+        let mut cursor = std::io::Cursor::new(&mut bytes);
+        if decoded
+            .write_to(&mut cursor, image::ImageFormat::Png)
+            .is_err()
+        {
+            return image;
+        }
+    }
+    Image::from_bytes(ImageFormat::Png, bytes)
+}
+
 fn write_clipboard_image_to_temp_file(image: &Image) -> anyhow::Result<PathBuf> {
+    let image = normalize_clipboard_image(image.clone());
     let path = temp_clipboard_image_path(image.format);
     std::fs::write(&path, &image.bytes).with_context(|| {
         t!(
@@ -312,6 +343,64 @@ mod tests {
             super::clipboard_upload_paths(&item).expect("clipboard paths should be readable");
 
         assert_eq!(vec![first, second], upload_paths.paths);
+    }
+
+    #[test]
+    fn clipboard_upload_paths_reencodes_tiff_to_png() {
+        let pixels = image::ImageBuffer::from_fn(8, 6, |x, y| {
+            image::Rgba([(x * 9) as u8, (y * 11) as u8, 200, 255])
+        });
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(pixels)
+            .write_to(&mut encoded, image::ImageFormat::Tiff)
+            .expect("fixture TIFF should encode");
+        let tiff_bytes = encoded.into_inner();
+        assert_eq!(
+            image::guess_format(&tiff_bytes).expect("fixture format should be detectable"),
+            image::ImageFormat::Tiff
+        );
+
+        let item = ClipboardItem::new_image(&Image::from_bytes(ImageFormat::Tiff, tiff_bytes));
+
+        let upload_paths =
+            super::clipboard_upload_paths(&item).expect("clipboard image should be written");
+
+        assert_eq!(1, upload_paths.paths.len());
+        let path = &upload_paths.paths[0];
+        assert_eq!(Some("png"), path.extension().and_then(|ext| ext.to_str()));
+        assert!(
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("navop-clipboard-upload-")),
+            "临时文件应使用产品前缀: {}",
+            path.display()
+        );
+        let written = std::fs::read(path).expect("read temp image");
+        assert_eq!(
+            image::guess_format(&written).expect("temp image should be a real image"),
+            image::ImageFormat::Png
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn normalize_clipboard_image_keeps_standard_formats_untouched() {
+        let bytes = vec![1, 2, 3];
+        let image =
+            super::normalize_clipboard_image(Image::from_bytes(ImageFormat::Png, bytes.clone()));
+
+        assert_eq!(ImageFormat::Png, image.format);
+        assert_eq!(bytes, image.bytes);
+    }
+
+    #[test]
+    fn normalize_clipboard_image_falls_back_when_bytes_do_not_decode() {
+        let bytes = vec![0x49, 0x49, 0x2a, 0x00, 0x01];
+        let image =
+            super::normalize_clipboard_image(Image::from_bytes(ImageFormat::Tiff, bytes.clone()));
+
+        assert_eq!(ImageFormat::Tiff, image.format);
+        assert_eq!(bytes, image.bytes);
     }
 
     #[test]

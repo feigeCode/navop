@@ -91,6 +91,26 @@
       <!-- 快捷方式一律不引用 Icon 表：MSI 会把 Icon 表里的图标另存成一份文件，那份文件
            被清理或图标缓存失效后，快捷方式图标就退化成通用白纸（issue #325）。
            navop.exe 已内嵌同一份图标（crates/navop_app/build.rs），留空即由目标 exe 提供。 -->
+      <!-- JumpServer `jms://` 深链接处理器：HKCR 是 HKCU 的合并视图，per-user
+           安装只写 HKCU\Software\Classes 即可被浏览器解析。 -->
+      <Component Id="JumpServerUrlProtocolComponent" Guid="*">
+        <RegistryKey Root="HKCU" Key="Software\Classes\jms">
+          <RegistryValue
+            Id="JumpServerUrlProtocol"
+            Type="string"
+            Value="URL:Navop JumpServer protocol"
+            KeyPath="yes" />
+          <RegistryValue Name="URL Protocol" Type="string" Value="" />
+          <RegistryKey Key="DefaultIcon">
+            <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]navop.exe&quot;,0" />
+          </RegistryKey>
+          <RegistryKey Key="shell\open\command">
+            <RegistryValue
+              Type="string"
+              Value="&quot;[INSTALLFOLDER]navop.exe&quot; &quot;%1&quot;" />
+          </RegistryKey>
+        </RegistryKey>
+      </Component>
       <Component Id="StartMenuShortcutComponent" Directory="ApplicationProgramsFolder" Guid="*">
         <Shortcut
           Id="StartMenuShortcut"

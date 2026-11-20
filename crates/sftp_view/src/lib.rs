@@ -1102,8 +1102,12 @@ fn is_valid_entry_name(name: &str) -> bool {
     sftp::is_valid_remote_entry_name(name)
 }
 
+/// 远程条目名拼成本地下载路径。
+///
+/// 落盘要用本机校验：Windows 上 `join("c:")` 会解析成盘符相对路径，
+/// 而同一份名字在 Linux 上完全合法，所以列表阶段不能拒绝它。
 fn safe_local_download_path(local_root: &std::path::Path, remote_name: &str) -> Option<PathBuf> {
-    is_valid_entry_name(remote_name).then(|| local_root.join(remote_name))
+    sftp::is_valid_local_file_name(remote_name).then(|| local_root.join(remote_name))
 }
 
 fn breadcrumb_item_min_width(label: &str) -> f32 {
@@ -9638,6 +9642,11 @@ mod tests {
         assert_eq!(None, safe_local_download_path(root, "../outside.txt"));
         assert_eq!(None, safe_local_download_path(root, "/tmp/outside.txt"));
         assert_eq!(None, safe_local_download_path(root, "..\\outside.txt"));
+        // 盘符形态的名字在 Linux 上可以安全落盘；Windows 由本机校验拦下。
+        #[cfg(not(windows))]
+        assert_eq!(Some(root.join("c:")), safe_local_download_path(root, "c:"));
+        #[cfg(windows)]
+        assert_eq!(None, safe_local_download_path(root, "c:"));
     }
 
     #[test]

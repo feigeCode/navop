@@ -13,6 +13,7 @@
 use std::fmt;
 
 use one_core::storage::models::{ConnectionType, StoredConnection};
+
 use ssh::{
     ConnectionCredentialRevisions, ConnectionKey, ConnectionKeyError, CredentialRevision,
     SshConnectConfig,
@@ -58,6 +59,30 @@ impl PersistedSshSessionIdentity {
         }
 
         let generation = PersistedCredentialGeneration::from_connection(connection)?;
+        Self::derive_with_generation(generation, config)
+    }
+
+    /// 由连接 id 与凭据修订号直接派生（跳过 StoredConnection 装配）。
+    ///
+    /// 校验与槽位派生和 [`PersistedSshSessionIdentity::derive`] 完全一致；
+    /// 供已抓取好元数据的连接尝试路径使用。类型校验由调用方保证
+    /// （仅 SSH 连接应走到这里）。
+    pub fn derive_from_metadata(
+        connection_id: i64,
+        credential_revision: i64,
+        config: &SshConnectConfig,
+    ) -> Result<Self, PersistedSshSessionIdentityError> {
+        let generation = PersistedCredentialGeneration::from_metadata(
+            connection_id,
+            credential_revision,
+        )?;
+        Self::derive_with_generation(generation, config)
+    }
+
+    fn derive_with_generation(
+        generation: PersistedCredentialGeneration,
+        config: &SshConnectConfig,
+    ) -> Result<Self, PersistedSshSessionIdentityError> {
         let mut credentials =
             ConnectionCredentialRevisions::new(generation.for_scope(CredentialSlotScope::Target)?);
 
@@ -192,33 +217,36 @@ struct PersistedCredentialGeneration {
 }
 
 impl PersistedCredentialGeneration {
+    /// 与 [`PersistedCredentialGeneration::from_connection`] 相同的校验，
+    /// 但直接接收已抓取好的连接 id 与凭据修订号。
+    fn from_metadata(
+        connection_id: i64,
+        revision: i64,
+    ) -> Result<Self, PersistedSshSessionIdentityError> {
+        let connection_id = u64::try_from(connection_id)
+            .ok()
+            .filter(|id| *id > 0)
+            .ok_or(PersistedSshSessionIdentityError::InvalidConnectionId)?;
+        let revision = u64::try_from(revision)
+            .ok()
+            .filter(|revision| *revision > 0)
+            .ok_or(PersistedSshSessionIdentityError::InvalidCredentialRevision)?;
+        let slot_base = connection_id
+            .checked_mul(PERSISTED_CREDENTIAL_SCOPE_COUNT)
+            .ok_or(PersistedSshSessionIdentityError::CredentialSlotOverflow)?;
+        Ok(Self { slot_base, revision })
+    }
+
     fn from_connection(
         connection: &StoredConnection,
     ) -> Result<Self, PersistedSshSessionIdentityError> {
         let connection_id = connection
             .id
             .ok_or(PersistedSshSessionIdentityError::MissingConnectionId)?;
-        let connection_id = u64::try_from(connection_id)
-            .ok()
-            .filter(|id| *id > 0)
-            .ok_or(PersistedSshSessionIdentityError::InvalidConnectionId)?;
-
         let revision = connection
             .credential_revision
             .ok_or(PersistedSshSessionIdentityError::MissingCredentialRevision)?;
-        let revision = u64::try_from(revision)
-            .ok()
-            .filter(|revision| *revision > 0)
-            .ok_or(PersistedSshSessionIdentityError::InvalidCredentialRevision)?;
-
-        let slot_base = connection_id
-            .checked_mul(PERSISTED_CREDENTIAL_SCOPE_COUNT)
-            .ok_or(PersistedSshSessionIdentityError::CredentialSlotOverflow)?;
-
-        Ok(Self {
-            slot_base,
-            revision,
-        })
+        Self::from_metadata(connection_id, revision)
     }
 
     fn for_scope(
@@ -245,9 +273,11 @@ mod tests {
     use anyhow::Result;
     use async_trait::async_trait;
     use one_core::storage::models::{ConnectionType, SshAuthMethod, SshParams, StoredConnection};
-    use ssh::{
-        HostKeyVerifier, JumpServerConnectConfig, KeyboardInteractiveRequest,
-        KeyboardInteractiveResponder, ProxyConnectConfig, ProxyType, SshAuth, SshConnectConfig,
+
+        use ssh::{
+        BastionUserFormat, HostKeyVerifier, JumpMode, JumpServerConnectConfig,
+        KeyboardInteractiveRequest, KeyboardInteractiveResponder, ProxyConnectConfig, ProxyType,
+        SshAuth, SshConnectConfig,
     };
 
     use super::{
@@ -344,6 +374,10 @@ mod tests {
             port: 2222,
             username: "jumper".to_string(),
             auth: SshAuth::Password(JUMP_PASSWORD.to_string()),
+            mode: JumpMode::default(),
+            bastion_asset: String::new(),
+            bastion_account: String::new(),
+            bastion_user_format: BastionUserFormat::default(),
         });
         config.proxy = Some(ProxyConnectConfig {
             proxy_type: ProxyType::Socks5,
@@ -353,6 +387,35 @@ mod tests {
             password: Some(PROXY_PASSWORD.to_string()),
         });
         config
+    }
+
+    #[test]
+    fn derive_from_metadata_matches_derived_identity() {
+        let connection = stored_connection(Some(7), Some(12));
+        let config = terminal_config();
+
+        let identity = PersistedSshSessionIdentity::derive_from_metadata(7, 12, &config)
+            .expect("携带合法元数据时应当能派生共享租约身份");
+
+        let direct = PersistedSshSessionIdentity::derive(&connection, &config)
+            .expect("直接从 StoredConnection 派生也应当成功");
+        assert_eq!(
+            identity, direct,
+            "derive_from_metadata 必须与 derive 保持完全一致的语义"
+        );
+    }
+
+    #[test]
+    fn derive_from_metadata_fails_closed_without_credential_revision() {
+        let error = PersistedSshSessionIdentity::derive_from_metadata(7, 0, &terminal_config())
+            .expect_err("revision 无效时必须 fail-closed");
+        assert!(
+            matches!(
+                error,
+                PersistedSshSessionIdentityError::InvalidCredentialRevision
+            ),
+            "revision 无效的错误应当是 InvalidCredentialRevision，实际是 {error:?}"
+        );
     }
 
     #[test]
