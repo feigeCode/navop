@@ -52,7 +52,9 @@ def prepare(target: str, output: Path) -> dict:
 
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="navop-x11-prepare-") as temporary:
+    # Windows runner 的 TEMP 常在 C:，而 RUNNER_TEMP/输出在 D:；
+    # 与输出同盘的 staging 才能保证 os.replace 原子提交不会 WinError 17。
+    with tempfile.TemporaryDirectory(prefix=".navop-x11-prepare-", dir=output.parent) as temporary:
         temporary = Path(temporary)
         download = temporary / "component.zip"
         digest = hashlib.sha256()
