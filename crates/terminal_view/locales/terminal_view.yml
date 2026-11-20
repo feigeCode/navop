@@ -707,9 +707,9 @@ Settings:
     zh-CN: 搜索...
     zh-HK: 搜尋...
   search_open_hint:
-    en: "Open with %{shortcut}, the terminal right-click menu, or the search button in the command bar."
-    zh-CN: "可按 %{shortcut}，或使用终端右键菜单、命令栏中的搜索按钮打开。"
-    zh-HK: "可按 %{shortcut}，或使用終端右鍵選單、命令列中的搜尋按鈕開啟。"
+    en: "Open with %{shortcut}, the terminal right-click menu, or the search button at the top right."
+    zh-CN: "可按 %{shortcut}，或使用终端右键菜单、右上角的搜索按钮打开。"
+    zh-HK: "可按 %{shortcut}，或使用終端右鍵選單、右上角的搜尋按鈕開啟。"
   search_shortcuts_hint:
     en: Press Enter for next, Shift+Enter for previous
     zh-CN: 按 Enter 跳到下一个，按 Shift+Enter 跳到上一个

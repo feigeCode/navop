@@ -37,6 +37,7 @@ use crate::{
     TerminalHighlightRule,
     broadcast_registry::{broadcast_input_registry, init_broadcast_input_registry},
     theme::{TerminalColors, TerminalTheme},
+    view::TerminalView,
 };
 use ai_chat_view::{
     AgentChatTheme, AgentChatThemeBase, CodeBlockAction, DefaultAgentChatPanel,
@@ -47,7 +48,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, AnyView, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle,
     Focusable, IntoElement, ParentElement, Pixels, Render, SharedString, Styled, Subscription,
-    Window, div, px,
+    WeakEntity, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, Selectable, Sizable, Size, Theme,
@@ -2366,11 +2367,51 @@ struct ExtensionToolbarButtonSnapshot {
 
 pub(crate) struct TerminalSidebarToolbar {
     sidebar: Entity<TerminalSidebar>,
+    terminal_view: WeakEntity<TerminalView>,
 }
 
 impl TerminalSidebarToolbar {
-    pub(crate) fn new(sidebar: Entity<TerminalSidebar>) -> Self {
-        Self { sidebar }
+    pub(crate) fn new(
+        sidebar: Entity<TerminalSidebar>,
+        terminal_view: Entity<TerminalView>,
+    ) -> Self {
+        Self {
+            sidebar,
+            terminal_view: terminal_view.downgrade(),
+        }
+    }
+
+    fn render_search_button(
+        &self,
+        item_size: Size,
+        colors: &TerminalColors,
+        cx: &App,
+    ) -> impl IntoElement {
+        let terminal_view = self.terminal_view.clone();
+        let shortcut = crate::view::keybindings::terminal_search_shortcut_label(cx);
+        let tooltip = if shortcut.is_empty() {
+            t!("Settings.search")
+        } else {
+            t!("ContextMenu.search_with_shortcut", shortcut = shortcut)
+        };
+        let style = ButtonCustomVariant::new(cx)
+            .foreground(colors.foreground)
+            .hover(colors.muted)
+            .active(colors.muted);
+
+        IconButton::new("terminal-toolbar-search", IconName::Search)
+            .hit_size(item_size)
+            .glyph_size(OneIconSize::Small)
+            .custom(style)
+            .tooltip(tooltip)
+            .on_click(move |_, window, cx| {
+                let Some(terminal_view) = terminal_view.upgrade() else {
+                    return;
+                };
+                terminal_view.update(cx, |view, cx| {
+                    view.open_search(window, cx);
+                });
+            })
     }
 
     fn render_extension_button(
@@ -2455,6 +2496,7 @@ impl Render for TerminalSidebarToolbar {
                     .items_center()
                     .py_2()
                     .gap_1()
+                    .child(self.render_search_button(item_size, &snapshot.colors, cx))
                     .children(
                         snapshot.buttons.iter().copied().map(|button| {
                             self.render_button(button, item_size, &snapshot.colors, cx)

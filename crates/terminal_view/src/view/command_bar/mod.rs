@@ -25,7 +25,6 @@ pub(super) enum TerminalCommandBarEvent {
     Submit(String),
     InputToPty(String),
     FocusTerminal,
-    OpenSearch,
     StartRecording,
     PauseRecording,
     ResumeRecording,

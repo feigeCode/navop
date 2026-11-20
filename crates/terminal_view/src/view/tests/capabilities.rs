@@ -715,16 +715,20 @@ fn terminal_search_has_mouse_entries_and_accurate_trigger_help() {
         "终端右键菜单必须提供无需键盘的搜索入口"
     );
 
+    let sidebar = include_str!("../../sidebar/mod.rs");
+    assert!(
+        sidebar.contains("terminal-toolbar-search")
+            && sidebar.contains("self.render_search_button(item_size, &snapshot.colors, cx)")
+            && sidebar.contains("view.open_search(window, cx)"),
+        "右上角工具区必须提供搜索按钮，并打开同一个独立浮层"
+    );
+
     let command_bar = include_str!("../command_bar/render.rs");
     let command_bar_events = include_str!("../command_bar_events.rs");
     assert!(
-        command_bar.contains("terminal-search-open")
-            && command_bar.matches("self.render_search_button(cx)").count() >= 2,
-        "命令栏展开和折叠状态都应显示搜索按钮"
-    );
-    assert!(
-        command_bar_events.contains("TerminalCommandBarEvent::OpenSearch => self.open_search"),
-        "搜索按钮必须打开同一个独立浮层"
+        !command_bar.contains("render_search_button")
+            && !command_bar_events.contains("TerminalCommandBarEvent::OpenSearch"),
+        "搜索入口不应放在底部命令栏"
     );
 
     let settings = include_str!("../../sidebar/settings_panel.rs");
