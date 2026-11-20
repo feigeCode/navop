@@ -410,6 +410,7 @@ fn parse_output_kind(value: &str) -> Option<ImportRecordKind> {
         "port-forwarding" | "port_forwarding" => Some(ImportRecordKind::PortForwarding),
         "quick-command" | "quick_command" => Some(ImportRecordKind::QuickCommand),
         "workspace" => Some(ImportRecordKind::Workspace),
+        "keybinding" => Some(ImportRecordKind::Keybinding),
         _ => None,
     }
 }

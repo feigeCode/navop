@@ -423,6 +423,7 @@ fn database_record(name: &str) -> ImportRecord {
         port_forwarding: None,
         quick_command: None,
         workspace: None,
+        keybinding: None,
         password_status: PasswordImportStatus::Unsupported,
         warnings: Vec::new(),
     }
@@ -452,6 +453,7 @@ fn ssh_record(name: &str, group_path: Option<&str>) -> ImportRecord {
         port_forwarding: None,
         quick_command: None,
         workspace: None,
+        keybinding: None,
         password_status: PasswordImportStatus::Missing,
         warnings: Vec::new(),
     }
@@ -477,6 +479,7 @@ fn workspace_record_for(importer_id: &str, id: &str, path: &str) -> ImportRecord
         workspace: Some(WorkspaceImportRecord {
             path: path.to_string(),
         }),
+        keybinding: None,
         password_status: PasswordImportStatus::Missing,
         warnings: Vec::new(),
     }

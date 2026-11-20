@@ -624,6 +624,18 @@ Home:
       en: Group imports cannot be converted to connections
       zh-CN: 分组导入不能转换为连接
       zh-HK: 分組匯入不能轉換為連線
+    kind_keybinding:
+      en: Shortcut
+      zh-CN: 快捷键
+      zh-HK: 快捷鍵
+    keybinding_invalid:
+      en: Keybinding action or shortcut is empty
+      zh-CN: 快捷键动作或按键不能为空
+      zh-HK: 快捷鍵動作或按鍵不能為空
+    keybinding_editor_unsupported:
+      en: Keybinding imports cannot be opened in the connection editor
+      zh-CN: 快捷键导入不能在连接编辑器中打开
+      zh-HK: 快捷鍵匯入不能在連線編輯器中開啟
     sources:
       en: Application Sources
       zh-CN: 应用来源
@@ -3047,6 +3059,36 @@ Settings:
         en: Quit the application
         zh-CN: 退出应用
         zh-HK: 結束應用程式
+
+    TabBehavior:
+      group_title:
+        en: Tab Bar
+        zh-CN: 标签栏
+        zh-HK: 標籤列
+      double_click_action:
+        en: Double-Click Tab Action
+        zh-CN: 双击标签页动作
+        zh-HK: 雙擊標籤頁動作
+      double_click_action_desc:
+        en: Choose what happens when double-clicking a regular tab in the tab bar.
+        zh-CN: 选择双击标签栏中的普通标签页时执行的操作。
+        zh-HK: 選擇雙擊標籤列中的普通標籤頁時執行的操作。
+      none:
+        en: None
+        zh-CN: 无动作
+        zh-HK: 無動作
+      duplicate_tab:
+        en: Duplicate tab
+        zh-CN: 复制标签页
+        zh-HK: 複製標籤頁
+      rename_tab:
+        en: Rename tab
+        zh-CN: 重命名标签页
+        zh-HK: 重新命名標籤頁
+      close_tab:
+        en: Close tab
+        zh-CN: 关闭标签页
+        zh-HK: 關閉標籤頁
 
     # 笔记设置
     Notes:

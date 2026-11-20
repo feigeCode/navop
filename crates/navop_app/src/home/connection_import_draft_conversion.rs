@@ -78,6 +78,9 @@ fn import_draft_to_connection(
         ImportRecordKind::Workspace => {
             Err(t!("Home.ConnectionImport.workspace_save_unsupported").to_string())
         }
+        ImportRecordKind::Keybinding => {
+            Err(t!("Home.ConnectionImport.keybinding_editor_unsupported").to_string())
+        }
     }
 }
 
@@ -96,6 +99,11 @@ pub(crate) fn import_draft_duplicate_identity(
         ImportRecordKind::Workspace => {
             Err(t!("Home.ConnectionImport.workspace_save_unsupported").to_string())
         }
+        ImportRecordKind::Keybinding => Ok(format!(
+            "keybinding:{}:{}",
+            draft.keybinding_action_id.trim(),
+            draft.keybinding_shortcuts.join(",")
+        )),
     }
 }
 
@@ -185,6 +193,10 @@ fn to_ssh_connection(
         &draft.name,
         t!("Home.ConnectionImport.field_connection_name").as_ref(),
     )?;
+    let username = draft.username.trim().to_string();
+    let auth_method = edited_ssh_auth_method(draft, &imported.auth_method)?;
+    let prompt_username = username.is_empty().then_some(true);
+    let prompt_password = matches!(&auth_method, SshAuthMethod::Password { password } if password.is_empty()).then_some(true);
     let params = SshParams { otp: None,
         remote_file: None,
         sftp_default_directory: None,
@@ -192,11 +204,11 @@ fn to_ssh_connection(
         sftp_account: None,
         host: required_text(&draft.host, t!("Home.ConnectionImport.field_host").as_ref())?,
         port: required_port(&draft.port)?,
-        username: draft.username.trim().to_string(),
-        auth_method: edited_ssh_auth_method(draft, &imported.auth_method)?,
+        username,
+        auth_method,
         credential_reference: None,
-        prompt_username: None,
-        prompt_password: None,
+        prompt_username,
+        prompt_password,
         // 导入协议不携带 keyboard-interactive 信息：迁移源里的「支持多种认证方式」只是服务器
         // 返回的方法列表，不等于需要二次认证。此字段留空会落到全局默认 `true`，使每个迁移进来的
         // 连接都走 keyboard-interactive 优先；而受限设备（交换机/防火墙）上这条路径可能直接被

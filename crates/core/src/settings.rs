@@ -1215,6 +1215,36 @@ impl CloseButtonBehavior {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabDoubleClickAction {
+    #[default]
+    None,
+    DuplicateTab,
+    RenameTab,
+    CloseTab,
+}
+
+impl TabDoubleClickAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TabDoubleClickAction::None => "none",
+            TabDoubleClickAction::DuplicateTab => "duplicate_tab",
+            TabDoubleClickAction::RenameTab => "rename_tab",
+            TabDoubleClickAction::CloseTab => "close_tab",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "duplicate_tab" => TabDoubleClickAction::DuplicateTab,
+            "rename_tab" => TabDoubleClickAction::RenameTab,
+            "close_tab" => TabDoubleClickAction::CloseTab,
+            _ => TabDoubleClickAction::None,
+        }
+    }
+}
+
 /// 更新通道：稳定版 / 测试版（Beta）。
 ///
 /// 通道只决定「去哪份更新清单里找新版本」，安装包本身仍是同一套。稳定通道读
@@ -1360,6 +1390,8 @@ pub struct AppSettings {
     pub main_window_state: Option<MainWindowState>,
     #[serde(default)]
     pub close_button_behavior: CloseButtonBehavior,
+    #[serde(default)]
+    pub tab_double_click_action: TabDoubleClickAction,
     #[serde(default = "default_locale")]
     pub locale: String,
     #[serde(default = "default_theme_mode")]
@@ -1872,6 +1904,7 @@ impl Default for AppSettings {
             main_window_size: None,
             main_window_state: None,
             close_button_behavior: CloseButtonBehavior::default(),
+            tab_double_click_action: TabDoubleClickAction::default(),
             locale: default_locale(),
             theme_mode: default_theme_mode(),
             auto_switch_theme: false,
@@ -2522,6 +2555,7 @@ mod tests {
     use super::{
         AiChatBackendSelection, AiChatSettings, AiChatToolExecutionMode, AppSettings,
         CloseButtonBehavior, ConnectionSortOrder, CustomFont, DEFAULT_AI_REQUEST_TIMEOUT_SECS,
+        TabDoubleClickAction,
         DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
         DEFAULT_TERMINAL_THEME, HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
         LocalTerminalProfileKind, LocalTerminalProfileSettings, LogLevel,
@@ -2907,6 +2941,36 @@ mod tests {
             CloseButtonBehavior::from_str("something_else")
         );
         assert_eq!(CloseButtonBehavior::Ask, CloseButtonBehavior::from_str(""));
+    }
+
+    #[test]
+    fn tab_double_click_action_defaults_round_trips_and_falls_back() {
+        assert_eq!(
+            TabDoubleClickAction::None,
+            AppSettings::default().tab_double_click_action
+        );
+
+        let legacy: AppSettings = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(TabDoubleClickAction::None, legacy.tab_double_click_action);
+
+        for action in [
+            TabDoubleClickAction::None,
+            TabDoubleClickAction::DuplicateTab,
+            TabDoubleClickAction::RenameTab,
+            TabDoubleClickAction::CloseTab,
+        ] {
+            let mut settings = AppSettings::default();
+            settings.tab_double_click_action = action;
+            let json = serde_json::to_value(&settings).unwrap();
+            let restored: AppSettings = serde_json::from_value(json).unwrap();
+            assert_eq!(action, restored.tab_double_click_action);
+            assert_eq!(action, TabDoubleClickAction::from_str(action.as_str()));
+        }
+
+        assert_eq!(
+            TabDoubleClickAction::None,
+            TabDoubleClickAction::from_str("unknown_action")
+        );
     }
 
     #[test]
