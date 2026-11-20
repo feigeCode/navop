@@ -15,6 +15,8 @@ use std::process::Command;
 
 const ASSOCIATION_SCHEMA_VERSION: u32 = 3;
 const REGISTRATION_STAMP_FILE: &str = "file-association-registration-v3";
+/// 上次写入系统的 URL scheme 清单，用于关闭开关时精确摘除注册。
+const REGISTERED_URL_SCHEMES_FILE: &str = "file-association-schemes-v1";
 /// 反向域名 `app_id` 里不参与 ProgID 的根段：`com.navop.shell` → `NavopShell`。
 const REVERSE_DNS_ROOT: &str = "com";
 /// Linux 注册文件名里追加的扩展名。
@@ -141,7 +143,7 @@ pub fn associations_for(identity: &AppIdentity) -> Vec<AssociationSpec> {
 }
 
 /// 注册当前产品的文件关联与 URL 协议；两者都没声明的产品直接跳过。
-pub fn schedule_registration(cx: &mut App) {
+pub fn schedule_registration_with_schemes(cx: &mut App, enabled_schemes: Vec<String>) {
     let Some(identity) = crate::identity() else {
         tracing::debug!("application identity is not configured; skipping file associations");
         return;
@@ -153,11 +155,25 @@ pub fn schedule_registration(cx: &mut App) {
         return;
     }
     cx.background_spawn(async move {
-        if let Err(error) = ensure_registered(identity) {
+        if let Err(error) = ensure_registered(identity, &enabled_schemes) {
             tracing::warn!(error = %error, "file association migration failed");
         }
     })
     .detach();
+}
+
+/// 声明的 scheme 里用户启用的部分（大小写不敏感，保持声明顺序）。
+fn enabled_url_schemes<'a>(identity: &AppIdentity, enabled: &[String]) -> Vec<&'a str> {
+    identity
+        .url_schemes
+        .iter()
+        .copied()
+        .filter(|scheme| {
+            enabled
+                .iter()
+                .any(|candidate| candidate.trim().eq_ignore_ascii_case(scheme))
+        })
+        .collect()
 }
 
 fn association_kind(declared: &str) -> Option<&'static AssociationKind> {
@@ -189,26 +205,64 @@ fn claims_any_registration(identity: &AppIdentity) -> bool {
     !associations_for(identity).is_empty() || !identity.url_schemes.is_empty()
 }
 
-fn ensure_registered(identity: &'static AppIdentity) -> Result<()> {
+fn ensure_registered(identity: &'static AppIdentity, enabled_schemes: &[String]) -> Result<()> {
     if !claims_any_registration(identity) {
         return Ok(());
     }
     let executable = std::env::current_exe().context("resolve current executable")?;
+    let schemes = enabled_url_schemes(identity, enabled_schemes);
+    remove_stale_url_schemes(identity, &schemes)?;
 
     #[cfg(target_os = "windows")]
-    return ensure_windows_registered(&executable, identity);
+    let result = ensure_windows_registered(&executable, identity, &schemes);
 
     #[cfg(target_os = "linux")]
-    return ensure_linux_registered(&executable, identity);
+    let result = ensure_linux_registered(&executable, identity, &schemes);
 
     #[cfg(target_os = "macos")]
-    return ensure_macos_registered(&executable, identity);
+    let result = ensure_macos_registered(&executable, identity, &schemes);
 
-    #[allow(unreachable_code)]
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    let result: Result<()> = Ok(());
+
+    result?;
+    save_registered_url_schemes(&schemes)
+}
+
+/// 之前注册过、现在被用户关掉的 scheme 需要从系统里摘掉，否则关掉开关后
+/// 链接仍然会被系统交给 Navop。只删自己写过的键，不碰第三方应用的注册。
+fn remove_stale_url_schemes(identity: &AppIdentity, current: &[&str]) -> Result<()> {
+    let Some(previous) = read_registered_url_schemes()? else {
+        return Ok(());
+    };
+    let stale = previous
+        .iter()
+        .filter(|scheme| !current.iter().any(|kept| kept.eq_ignore_ascii_case(scheme)))
+        .filter(|scheme| {
+            identity
+                .url_schemes
+                .iter()
+                .any(|declared| declared.eq_ignore_ascii_case(scheme))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    #[cfg(target_os = "windows")]
+    for scheme in &stale {
+        remove_windows_url_protocol(scheme)?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // 桌面文件的 MimeType 会随重渲染去掉；Linux 没有「删除默认关联」的
+        // 标准做法，未启用的 scheme 由应用层拒绝，不再回写默认值即可。
+    }
+
+    let _ = stale;
     Ok(())
 }
 
-fn registration_stamp(executable: &Path, identity: &AppIdentity) -> String {
+fn registration_stamp(executable: &Path, identity: &AppIdentity, schemes: &[&str]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(ASSOCIATION_SCHEMA_VERSION.to_le_bytes());
     hasher.update(std::env::consts::OS.as_bytes());
@@ -216,30 +270,73 @@ fn registration_stamp(executable: &Path, identity: &AppIdentity) -> String {
     hasher.update(identity.app_id.as_bytes());
     hasher.update([0]);
     hasher.update(executable.to_string_lossy().as_bytes());
+    hasher.update([0]);
+    // 启用集合也是注册结果的一部分：开关变化必须重跑一次。
+    hasher.update(schemes.join(",").as_bytes());
     let digest = hasher.finalize();
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// 记录「上次真正写进系统的 scheme」。关闭某个 scheme 时据此精确摘除自己
+/// 写过的注册表键，而不是把同名键都删掉。
+fn registered_url_schemes_path() -> Result<PathBuf> {
+    Ok(get_config_dir()?.join(REGISTERED_URL_SCHEMES_FILE))
+}
+
+fn read_registered_url_schemes() -> Result<Option<Vec<String>>> {
+    match fs::read_to_string(registered_url_schemes_path()?) {
+        Ok(contents) => Ok(Some(
+            contents
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect(),
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn save_registered_url_schemes(schemes: &[&str]) -> Result<()> {
+    let contents = if schemes.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", schemes.join("\n"))
+    };
+    write_if_changed(&registered_url_schemes_path()?, &contents)?;
+    Ok(())
 }
 
 fn registration_stamp_path() -> Result<PathBuf> {
     Ok(get_config_dir()?.join(REGISTRATION_STAMP_FILE))
 }
 
-fn stamp_matches(executable: &Path, identity: &AppIdentity) -> Result<bool> {
-    stamp_matches_at(&registration_stamp_path()?, executable, identity)
+fn stamp_matches(executable: &Path, identity: &AppIdentity, schemes: &[&str]) -> Result<bool> {
+    stamp_matches_at(&registration_stamp_path()?, executable, identity, schemes)
 }
 
-fn stamp_matches_at(path: &Path, executable: &Path, identity: &AppIdentity) -> Result<bool> {
+fn stamp_matches_at(
+    path: &Path,
+    executable: &Path,
+    identity: &AppIdentity,
+    schemes: &[&str],
+) -> Result<bool> {
     match fs::read_to_string(path) {
-        Ok(current) => Ok(current.trim() == registration_stamp(executable, identity)),
+        Ok(current) => Ok(current.trim() == registration_stamp(executable, identity, schemes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error.into()),
     }
 }
 
-fn save_registration_stamp(executable: &Path, identity: &AppIdentity) -> Result<()> {
+fn save_registration_stamp(
+    executable: &Path,
+    identity: &AppIdentity,
+    schemes: &[&str],
+) -> Result<()> {
     write_if_changed(
         &registration_stamp_path()?,
-        &format!("{}\n", registration_stamp(executable, identity)),
+        &format!("{}\n", registration_stamp(executable, identity, schemes)),
     )?;
     Ok(())
 }
@@ -270,12 +367,16 @@ fn windows_plan_context(executable: &Path, identity: &AppIdentity) -> WindowsPla
 const WINDOWS_EXECUTABLE_SUFFIX: &str = ".exe";
 
 #[cfg(any(target_os = "windows", test))]
-fn windows_registry_plan(executable: &Path, identity: &AppIdentity) -> Vec<RegistryCommand> {
+fn windows_registry_plan(
+    executable: &Path,
+    identity: &AppIdentity,
+    schemes: &[&str],
+) -> Vec<RegistryCommand> {
     let context = windows_plan_context(executable, identity);
     let specs = associations_for(identity);
     // 既没有扩展名也没有 URL scheme 的产品不注册任何东西：只写 `Applications`
     // 键既没人用，又会在注册表里留下一个永远无法打开文件的项。
-    if specs.is_empty() && identity.url_schemes.is_empty() {
+    if specs.is_empty() && schemes.is_empty() {
         return Vec::new();
     }
     let mut commands = Vec::new();
@@ -286,7 +387,7 @@ fn windows_registry_plan(executable: &Path, identity: &AppIdentity) -> Vec<Regis
     if !specs.is_empty() {
         append_windows_application_commands(&mut commands, &context, &specs);
     }
-    for scheme in identity.url_schemes {
+    for scheme in schemes {
         append_windows_url_protocol_commands(&mut commands, &context, scheme);
     }
     commands
@@ -401,11 +502,15 @@ fn append_windows_application_commands(
 }
 
 #[cfg(target_os = "windows")]
-fn ensure_windows_registered(executable: &Path, identity: &AppIdentity) -> Result<()> {
-    if stamp_matches(executable, identity)? {
+fn ensure_windows_registered(
+    executable: &Path,
+    identity: &AppIdentity,
+    schemes: &[&str],
+) -> Result<()> {
+    if stamp_matches(executable, identity, schemes)? {
         return Ok(());
     }
-    for registry_command in windows_registry_plan(executable, identity) {
+    for registry_command in windows_registry_plan(executable, identity, schemes) {
         if let RegistryWritePolicy::IfNoDefaultAssociation { extension } = registry_command.policy
             && windows_default_association_exists(extension)?
         {
@@ -414,7 +519,28 @@ fn ensure_windows_registered(executable: &Path, identity: &AppIdentity) -> Resul
         run_registry_command(&registry_command)?;
     }
     notify_windows_association_changed();
-    save_registration_stamp(executable, identity)
+    save_registration_stamp(executable, identity, schemes)
+}
+
+/// 把一个之前由 Navop 写过的 scheme 键从用户注册表里删掉（含子键）。
+#[cfg(target_os = "windows")]
+fn remove_windows_url_protocol(scheme: &str) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let key = format!(r"HKCU\Software\Classes\{scheme}");
+    let status = Command::new("reg.exe")
+        .arg("delete")
+        .arg(&key)
+        .arg("/f")
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .context("delete registered URL protocol")?;
+    if !status.success() {
+        // 键可能本来就不存在（例如从未真正写入过），删除失败不算致命错误。
+        tracing::debug!(%scheme, "reg.exe delete did not remove the URL protocol key");
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -492,13 +618,14 @@ fn linux_registration_files(
     executable: &Path,
     data_dir: &Path,
     identity: &AppIdentity,
+    schemes: &[&str],
 ) -> LinuxRegistrationFiles {
     let applications = data_dir.join("applications");
     let desktop_name = format!("{}{LINUX_DESKTOP_SUFFIX}", identity.binary_name);
     let mime_name = format!("{}{LINUX_MIME_SUFFIX}", identity.binary_name);
     LinuxRegistrationFiles {
         desktop_path: applications.join(&desktop_name),
-        desktop_contents: render_linux_desktop(executable, identity),
+        desktop_contents: render_linux_desktop(executable, identity, schemes),
         mime_path: data_dir.join("mime").join("packages").join(mime_name),
         mime_contents: LINUX_MIME_TEMPLATE.to_string(),
     }
@@ -506,11 +633,11 @@ fn linux_registration_files(
 
 /// 把模板里的产品名、图标与启动命令换成本产品的值。
 #[cfg(any(target_os = "linux", test))]
-fn render_linux_desktop(executable: &Path, identity: &AppIdentity) -> String {
+fn render_linux_desktop(executable: &Path, identity: &AppIdentity, schemes: &[&str]) -> String {
     let quoted = desktop_exec_quote(executable);
     let name = identity.display_name;
     let binary = identity.binary_name;
-    let mime_types = linux_default_mime_types(identity);
+    let mime_types = linux_default_mime_types(identity, schemes);
     LINUX_DESKTOP_TEMPLATE
         .lines()
         .filter_map(|line| {
@@ -557,7 +684,7 @@ fn desktop_exec_quote(executable: &Path) -> String {
 /// 产品需要设为默认的 MIME 类型：文件关联的 MIME 加上每个 URL scheme 对应的
 /// `x-scheme-handler/<scheme>`。
 #[cfg(any(target_os = "linux", test))]
-fn linux_default_mime_types(identity: &AppIdentity) -> Vec<String> {
+fn linux_default_mime_types(identity: &AppIdentity, schemes: &[&str]) -> Vec<String> {
     let mut mime_types = identity
         .file_associations
         .iter()
@@ -565,19 +692,23 @@ fn linux_default_mime_types(identity: &AppIdentity) -> Vec<String> {
         .flat_map(|kind| kind.mime_types.iter().copied())
         .map(str::to_string)
         .collect::<Vec<_>>();
-    for scheme in identity.url_schemes {
+    for scheme in schemes {
         mime_types.push(format!("x-scheme-handler/{scheme}"));
     }
     mime_types
 }
 
 #[cfg(target_os = "linux")]
-fn ensure_linux_registered(executable: &Path, identity: &AppIdentity) -> Result<()> {
+fn ensure_linux_registered(
+    executable: &Path,
+    identity: &AppIdentity,
+    schemes: &[&str],
+) -> Result<()> {
     let data_dir = dirs::data_local_dir().context("resolve user data directory")?;
-    let files = linux_registration_files(executable, &data_dir, identity);
+    let files = linux_registration_files(executable, &data_dir, identity, schemes);
     let desktop_changed = write_if_changed(&files.desktop_path, &files.desktop_contents)?;
     let mime_changed = write_if_changed(&files.mime_path, &files.mime_contents)?;
-    let stamp_current = stamp_matches(executable, identity)?;
+    let stamp_current = stamp_matches(executable, identity, schemes)?;
 
     if mime_changed || !stamp_current {
         run_optional_refresh("update-mime-database", &data_dir.join("mime"))?;
@@ -587,11 +718,11 @@ fn ensure_linux_registered(executable: &Path, identity: &AppIdentity) -> Result<
     }
     if !stamp_current {
         let desktop_name = format!("{}{LINUX_DESKTOP_SUFFIX}", identity.binary_name);
-        for mime_type in linux_default_mime_types(identity) {
+        for mime_type in linux_default_mime_types(identity, schemes) {
             ensure_linux_default_if_missing(&mime_type, &desktop_name)?;
         }
     }
-    save_registration_stamp(executable, identity)
+    save_registration_stamp(executable, identity, schemes)
 }
 
 #[cfg(target_os = "linux")]
@@ -667,8 +798,12 @@ fn macos_app_bundle_from_executable(executable: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-fn ensure_macos_registered(executable: &Path, identity: &AppIdentity) -> Result<()> {
-    if stamp_matches(executable, identity)? {
+fn ensure_macos_registered(
+    executable: &Path,
+    identity: &AppIdentity,
+    schemes: &[&str],
+) -> Result<()> {
+    if stamp_matches(executable, identity, schemes)? {
         return Ok(());
     }
     let app_bundle = match macos_app_bundle_from_executable(executable) {
@@ -687,7 +822,7 @@ fn ensure_macos_registered(executable: &Path, identity: &AppIdentity) -> Result<
     if !status.success() {
         bail!("lsregister failed with status {status}");
     }
-    save_registration_stamp(executable, identity)
+    save_registration_stamp(executable, identity, schemes)
 }
 
 fn write_if_changed(path: &Path, contents: &str) -> Result<bool> {
@@ -744,8 +879,8 @@ mod tests {
     fn standalone_products_claim_no_extensions() {
         assert!(associations_for(&AppIdentity::SHELL).is_empty());
         assert!(associations_for(&AppIdentity::DATA).is_empty());
-        assert!(linux_default_mime_types(&AppIdentity::SHELL).is_empty());
-        assert_eq!(["jms"], AppIdentity::FULL.url_schemes);
+        assert!(linux_default_mime_types(&AppIdentity::SHELL, &[]).is_empty());
+        assert_eq!(["jms", "ssh", "sftp"], AppIdentity::FULL.url_schemes);
         assert!(AppIdentity::SHELL.url_schemes.is_empty());
         assert!(AppIdentity::DATA.url_schemes.is_empty());
     }
@@ -764,7 +899,7 @@ mod tests {
     #[test]
     fn windows_registry_plan_registers_handlers_without_overwriting_user_choice() {
         let executable = Path::new(r"C:\Program Files\Navop\navop.exe");
-        let commands = windows_registry_plan(executable, &AppIdentity::FULL);
+        let commands = windows_registry_plan(executable, &AppIdentity::FULL, &["jms", "ssh"]);
         let rendered = commands
             .iter()
             .map(|command| format!("{} {:?} {}", command.key, command.value_name, command.data))
@@ -810,7 +945,8 @@ mod tests {
         assert!(
             windows_registry_plan(
                 Path::new(r"C:\Navop Shell\navop-shell.exe"),
-                &AppIdentity::SHELL
+                &AppIdentity::SHELL,
+                &[]
             )
             .is_empty()
         );
@@ -822,6 +958,7 @@ mod tests {
             Path::new("/opt/Navop 100%/navop"),
             Path::new("/home/alice/.local/share"),
             &AppIdentity::FULL,
+            &["jms", "ssh", "sftp"],
         );
 
         assert_eq!(
@@ -868,7 +1005,7 @@ mod tests {
                 "application/x-asciicast",
                 "x-scheme-handler/jms",
             ],
-            linux_default_mime_types(&AppIdentity::FULL)
+            linux_default_mime_types(&AppIdentity::FULL, &["jms"])
         );
     }
 
@@ -883,6 +1020,7 @@ mod tests {
             Path::new("/opt/Navop Data/navop-data"),
             Path::new("/home/alice/.local/share"),
             &custom,
+            &[],
         );
 
         assert_eq!(
@@ -897,7 +1035,7 @@ mod tests {
         assert!(files.desktop_contents.contains("Icon=navop-data"));
         assert_eq!(
             vec!["application/x-asciicast"],
-            linux_default_mime_types(&custom)
+            linux_default_mime_types(&custom, &[])
         );
         assert!(!files.desktop_contents.contains("x-scheme-handler/"));
     }
@@ -926,21 +1064,38 @@ mod tests {
         assert_eq!(
             registration_stamp(
                 Path::new("/Applications/Navop.app/Contents/MacOS/navop"),
-                identity
+                identity,
+                &["jms"]
             ),
             registration_stamp(
                 Path::new("/Applications/Navop.app/Contents/MacOS/navop"),
-                identity
+                identity,
+                &["jms"]
             )
         );
         assert_ne!(
             registration_stamp(
                 Path::new("/Applications/Navop.app/Contents/MacOS/navop"),
-                identity
+                identity,
+                &["jms"]
             ),
             registration_stamp(
                 Path::new("/Users/alice/Applications/Navop.app/Contents/MacOS/navop"),
-                identity
+                identity,
+                &["jms"]
+            )
+        );
+        // 启用集合变化也必须触发一次重新注册。
+        assert_ne!(
+            registration_stamp(
+                Path::new("/Applications/Navop.app/Contents/MacOS/navop"),
+                identity,
+                &["jms"]
+            ),
+            registration_stamp(
+                Path::new("/Applications/Navop.app/Contents/MacOS/navop"),
+                identity,
+                &["jms", "ssh"]
             )
         );
     }
@@ -952,16 +1107,33 @@ mod tests {
         let executable = Path::new("/Applications/Navop.app/Contents/MacOS/navop");
         let identity = &AppIdentity::FULL;
 
-        assert!(!stamp_matches_at(&stamp_path, executable, identity)?);
+        assert!(!stamp_matches_at(
+            &stamp_path,
+            executable,
+            identity,
+            &["jms"]
+        )?);
         std::fs::write(
             &stamp_path,
-            format!("{}\n", registration_stamp(executable, identity)),
+            format!("{}\n", registration_stamp(executable, identity, &["jms"])),
         )?;
-        assert!(stamp_matches_at(&stamp_path, executable, identity)?);
+        assert!(stamp_matches_at(
+            &stamp_path,
+            executable,
+            identity,
+            &["jms"]
+        )?);
         assert!(!stamp_matches_at(
             &stamp_path,
             Path::new("/Applications/Navop 2.app/Contents/MacOS/navop"),
-            identity
+            identity,
+            &["jms"]
+        )?);
+        assert!(!stamp_matches_at(
+            &stamp_path,
+            executable,
+            identity,
+            &["jms", "ssh"]
         )?);
         Ok(())
     }

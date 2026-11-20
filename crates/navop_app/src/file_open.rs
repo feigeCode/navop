@@ -22,12 +22,14 @@ pub(crate) enum FileOpenInput {
 /// 把启动参数（ARGV 里的路径或 URL）转成 `FileOpenInput`。
 ///
 /// Windows/macOS 传本地路径；Linux 桌面文件的 `%U` 会把 URL 传进来，既可能是
-/// `file://` 本地文件，也可能就是 JumpServer 的 `jms://` 深链接。
+/// `file://` 本地文件，也可能是 `jms://`、`ssh://`、`sftp://` 深链接。
 pub(crate) fn input_from_startup_argument(argument: PathBuf) -> FileOpenInput {
     let Some(raw) = argument.to_str() else {
         return FileOpenInput::Path(argument);
     };
-    if crate::jump_deeplink::is_jump_deeplink(raw) {
+    if crate::jump_deeplink::is_jump_deeplink(raw)
+        || crate::connection_deeplink::scheme_of(raw).is_some()
+    {
         return FileOpenInput::Url(raw.to_string());
     }
     if raw.len() > "file://".len()
@@ -92,12 +94,17 @@ fn show_file_open_error(error: &anyhow::Error, window: &mut Window, cx: &mut App
 }
 
 fn try_open_input(input: FileOpenInput, window: &mut Window, cx: &mut App) -> Result<()> {
-    if let FileOpenInput::Url(url) = &input
-        && crate::jump_deeplink::is_jump_deeplink(url)
-    {
-        // JumpServer 深链接不指向本地文件，直接建立临时 SSH 会话。
-        crate::jump_deeplink::open_jump_deeplink(url, window, cx);
-        return Ok(());
+    if let FileOpenInput::Url(url) = &input {
+        if crate::jump_deeplink::is_jump_deeplink(url) {
+            // JumpServer 深链接不指向本地文件，直接建立临时 SSH 会话。
+            crate::jump_deeplink::open_jump_deeplink(url, window, cx);
+            return Ok(());
+        }
+        if crate::connection_deeplink::scheme_of(url).is_some() {
+            // ssh:// / sftp:// 同理会话化，是否允许由设置决定。
+            crate::connection_deeplink::open_connection_deeplink(url, window, cx);
+            return Ok(());
+        }
     }
     let path = match &input {
         FileOpenInput::Path(path) => Some(path.clone()),
@@ -397,6 +404,19 @@ mod tests {
         match input_from_startup_argument(PathBuf::from("JMS://abc")) {
             FileOpenInput::Url(url) => assert_eq!(url, "JMS://abc"),
             other => panic!("JMS:// 应识别为 URL: {other:?}"),
+        }
+
+        // 通用连接链接同样走 URL 分支（是否放行由设置决定）。
+        for link in ["ssh://alice@example.com:2222", "sftp://example.com/var/log"] {
+            match input_from_startup_argument(PathBuf::from(link)) {
+                FileOpenInput::Url(url) => assert_eq!(url, link),
+                other => panic!("{link} 应识别为 URL: {other:?}"),
+            }
+        }
+        // 其它 scheme 仍按路径处理，不误触发连接。
+        match input_from_startup_argument(PathBuf::from("https://example.com")) {
+            FileOpenInput::Path(path) => assert_eq!(path, PathBuf::from("https://example.com")),
+            other => panic!("https:// 不应识别为连接链接: {other:?}"),
         }
 
         let path = std::env::temp_dir().join("Navop notes").join("README.md");

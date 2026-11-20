@@ -4,6 +4,7 @@ pub mod appearance;
 mod appearance_import;
 mod appearance_state;
 pub mod connection_display_settings;
+pub mod deeplink_settings;
 pub mod llm_providers_view;
 mod mcp_agent_config_copy;
 pub mod mcp_client_config;

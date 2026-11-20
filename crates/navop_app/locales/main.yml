@@ -66,6 +66,14 @@ Common:
     en: "Unable to open the JumpServer link: %{error}"
     zh-CN: "无法打开 JumpServer 链接：%{error}"
     zh-HK: "無法開啟 JumpServer 連結：%{error}"
+  connection_deeplink_failed:
+    en: "Unable to open the connection link: %{error}"
+    zh-CN: "无法打开连接链接：%{error}"
+    zh-HK: "無法開啟連線連結：%{error}"
+  deeplink_scheme_disabled:
+    en: "%{scheme}:// links are disabled. Enable them in Settings → General → Link protocols."
+    zh-CN: "%{scheme}:// 链接未启用，可在「设置 → 通用 → 链接协议」中开启。"
+    zh-HK: "%{scheme}:// 連結未啟用，可在「設定 → 一般 → 連結協定」中開啟。"
   storage_unavailable:
     en: Application storage is unavailable
     zh-CN: 应用存储不可用
@@ -2789,6 +2797,33 @@ Settings:
       en: General
       zh-CN: 通用
       zh-HK: 通用
+
+    # 链接协议：是否接管 ssh:// / sftp://（默认关闭）
+    Deeplinks:
+      group_title:
+        en: Link protocols
+        zh-CN: 链接协议
+        zh-HK: 連結協定
+      group_description:
+        en: Let Navop handle ssh:// and sftp:// links from browsers and documents. These schemes usually belong to the terminal or file manager, so they stay off until enabled here.
+        zh-CN: 允许 Navop 处理来自浏览器和文档的 ssh:// 与 sftp:// 链接。这些协议通常由终端或文件管理器接管，因此在勾选前保持关闭。
+        zh-HK: 允許 Navop 處理來自瀏覽器與文件的 ssh:// 與 sftp:// 連結。這些協定通常由終端機或檔案管理器接管，因此在勾選前保持關閉。
+      ssh:
+        en: Handle ssh:// links
+        zh-CN: 接管 ssh:// 链接
+        zh-HK: 接管 ssh:// 連結
+      ssh_desc:
+        en: Open an SSH terminal for the host in the link. Credentials are used for this session only and never saved.
+        zh-CN: 为链接中的主机打开 SSH 终端。凭据只用于本次会话，不会保存。
+        zh-HK: 為連結中的主機開啟 SSH 終端機。憑證只用於本次工作階段，不會儲存。
+      sftp:
+        en: Handle sftp:// links
+        zh-CN: 接管 sftp:// 链接
+        zh-HK: 接管 sftp:// 連結
+      sftp_desc:
+        en: Open the SFTP pane at the directory in the link. Credentials are used for this session only and never saved.
+        zh-CN: 在链接指定的目录打开 SFTP 面板。凭据只用于本次会话，不会保存。
+        zh-HK: 在連結指定的目錄開啟 SFTP 面板。憑證只用於本次工作階段，不會儲存。
 
     # 语言设置
     Language:

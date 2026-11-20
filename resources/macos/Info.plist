@@ -161,6 +161,22 @@
             <key>CFBundleURLSchemes</key>
             <array><string>jms</string></array>
         </dict>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.onetcli.app.ssh</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array><string>ssh</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.onetcli.app.sftp</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array><string>sftp</string></array>
+        </dict>
     </array>
     <!-- NAVOP_DOCUMENT_TYPES_END -->
     <key>LSApplicationCategoryType</key>

@@ -16,6 +16,7 @@ mod auth;
 
 mod ai_chat_acp;
 mod app_init;
+mod connection_deeplink;
 mod connection_sort;
 mod connection_type_menu;
 mod connection_visuals;

@@ -1520,6 +1520,12 @@ pub struct AppSettings {
     pub large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode,
     #[serde(default)]
     pub startup_default_page: StartupDefaultPage,
+    /// 除私有 `jms://` 外允许 Navop 接管的通用 URL scheme。
+    ///
+    /// 空集合（默认）表示只接管 `jms://`。启用的 scheme 才会注册到系统，
+    /// 避免默认抢走终端、文件管理器的既有 `ssh://`、`sftp://` 关联。
+    #[serde(default)]
+    pub deeplink_schemes: Vec<String>,
     /// 是否要求每次启动时输入主密钥后才能访问已保存的连接
     #[serde(default)]
     pub require_master_key_on_startup: bool,
@@ -1928,6 +1934,7 @@ impl Default for AppSettings {
             database_open_mode: DatabaseOpenMode::default(),
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             startup_default_page: StartupDefaultPage::default(),
+            deeplink_schemes: Vec::new(),
             require_master_key_on_startup: false,
             portable_remember_master_key: false,
             master_key_storage: MasterKeyStorage::SystemCredentialStore,
@@ -2017,6 +2024,48 @@ impl AppSettings {
             self.require_master_key_on_startup,
             self.portable_remember_master_key,
         )
+    }
+
+    /// Navop 私有、始终启用的深链接 scheme（JumpServer）。
+    pub const PRIVATE_DEEPLINK_SCHEME: &'static str = "jms";
+
+    /// 该 scheme 是否允许打开深链接；`jms://` 始终允许。
+    pub fn deeplink_scheme_enabled(&self, scheme: &str) -> bool {
+        scheme.eq_ignore_ascii_case(Self::PRIVATE_DEEPLINK_SCHEME)
+            || self
+                .deeplink_schemes
+                .iter()
+                .any(|enabled| enabled.eq_ignore_ascii_case(scheme))
+    }
+
+    /// 需要注册到系统的全部 scheme：私有 scheme 始终在最前，其余按用户启用。
+    pub fn enabled_deeplink_schemes(&self) -> Vec<String> {
+        let mut schemes = vec![Self::PRIVATE_DEEPLINK_SCHEME.to_string()];
+        for scheme in &self.deeplink_schemes {
+            let scheme = scheme.trim();
+            if scheme.is_empty()
+                || schemes
+                    .iter()
+                    .any(|known| known.eq_ignore_ascii_case(scheme))
+            {
+                continue;
+            }
+            schemes.push(scheme.to_string());
+        }
+        schemes
+    }
+
+    /// 启用/停用某个通用 scheme；私有 `jms://` 不受设置影响。
+    pub fn set_deeplink_scheme_enabled(&mut self, scheme: &str, enabled: bool) {
+        let scheme = scheme.trim();
+        if scheme.is_empty() || scheme.eq_ignore_ascii_case(Self::PRIVATE_DEEPLINK_SCHEME) {
+            return;
+        }
+        self.deeplink_schemes
+            .retain(|known| !known.eq_ignore_ascii_case(scheme));
+        if enabled {
+            self.deeplink_schemes.push(scheme.to_string());
+        }
     }
 
     fn migrate_legacy_mcp_toolsets(&mut self) {
@@ -2489,6 +2538,57 @@ mod tests {
     #[test]
     fn app_settings_disables_sync_by_default() {
         assert!(!AppSettings::default().sync_enabled);
+    }
+
+    #[test]
+    fn deeplink_schemes_default_to_the_private_scheme_only() {
+        let settings = AppSettings::default();
+        assert!(settings.deeplink_schemes.is_empty());
+        assert!(settings.deeplink_scheme_enabled("jms"));
+        assert!(!settings.deeplink_scheme_enabled("ssh"));
+        assert!(!settings.deeplink_scheme_enabled("sftp"));
+        assert_eq!(vec!["jms".to_string()], settings.enabled_deeplink_schemes());
+    }
+
+    #[test]
+    fn deeplink_scheme_toggles_are_case_insensitive_and_deduplicated() {
+        let mut settings = AppSettings::default();
+        settings.set_deeplink_scheme_enabled("SSH", true);
+        settings.set_deeplink_scheme_enabled("sftp", true);
+        settings.set_deeplink_scheme_enabled("ssh", true);
+        assert!(settings.deeplink_scheme_enabled("ssh"));
+        assert!(settings.deeplink_scheme_enabled("SFTP"));
+        // 重新启用只是刷新位置，不会重复；私有 scheme 永远在最前。
+        assert_eq!(
+            vec!["jms".to_string(), "sftp".to_string(), "ssh".to_string()],
+            settings.enabled_deeplink_schemes()
+        );
+
+        settings.set_deeplink_scheme_enabled("ssh", false);
+        assert!(!settings.deeplink_scheme_enabled("ssh"));
+        assert_eq!(
+            vec!["jms".to_string(), "sftp".to_string()],
+            settings.enabled_deeplink_schemes()
+        );
+
+        // 私有 scheme 不能被设置关掉。
+        settings.set_deeplink_scheme_enabled("jms", false);
+        assert!(settings.deeplink_scheme_enabled("jms"));
+    }
+
+    #[test]
+    fn deeplink_schemes_round_trip_through_json() {
+        let mut settings = AppSettings::default();
+        settings.set_deeplink_scheme_enabled("sftp", true);
+        let json = serde_json::to_string(&settings).expect("serialize");
+        let restored: AppSettings = serde_json::from_str(&json).expect("deserialize");
+        assert!(restored.deeplink_scheme_enabled("sftp"));
+        assert!(!restored.deeplink_scheme_enabled("ssh"));
+
+        let legacy: AppSettings =
+            serde_json::from_str("{}").expect("missing field falls back to the default");
+        assert!(legacy.deeplink_schemes.is_empty());
+        assert!(legacy.deeplink_scheme_enabled("jms"));
     }
 
     #[test]

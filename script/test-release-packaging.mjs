@@ -137,6 +137,11 @@ test("installers register the jms:// JumpServer deep link", () => {
     plist,
     /<key>CFBundleURLSchemes<\/key>\s*<array><string>jms<\/string><\/array>/,
   );
+  // 通用连接 scheme 只是「声明候选」，是否接管由设置开关决定（默认关闭）。
+  assert.match(plist, /<string>com\.onetcli\.app\.ssh<\/string>/);
+  assert.match(plist, /<string>com\.onetcli\.app\.sftp<\/string>/);
+  assert.match(plist, /<array><string>ssh<\/string><\/array>/);
+  assert.match(plist, /<array><string>sftp<\/string><\/array>/);
   assert.match(plist, /<key>CFBundleTypeRole<\/key>\s*<string>Viewer<\/string>/);
 
   assert.match(desktop, /^Exec=navop %U$/m);
