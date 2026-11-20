@@ -296,20 +296,13 @@ impl Focusable for ConnectionImportWindow {
 
 fn load_importer_descriptors() -> (Vec<ImporterDescriptor>, Option<String>) {
     let Some(root) = extension_runtime::extension::extensions_root() else {
-        return (
-            Vec::new(),
-            Some(t!("Home.ConnectionImport.extension_directory_unavailable").to_string()),
-        );
+        return (Vec::new(), None);
     };
     let composite_root =
         root.join(extension_runtime::extension::ExtensionKind::Composite.dir_name());
     match extension_runtime::connection_import_provider::list_manifest_connection_importers(
         &composite_root,
     ) {
-        Ok(importers) if importers.is_empty() => (
-            Vec::new(),
-            Some(t!("Home.ConnectionImport.no_import_extensions").to_string()),
-        ),
         Ok(importers) => (
             importers
                 .into_iter()

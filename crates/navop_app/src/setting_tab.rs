@@ -79,6 +79,7 @@ fn llm_providers_page_index(pages_before_rest: usize) -> usize {
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
     AppSettings, CloseButtonBehavior, CustomFont, GlobalCurrentUser, GlobalProxySettings,
+    TabDoubleClickAction,
     LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, LogLevel, MasterKeyStorage,
     PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, StartupDefaultPage, SyncProvider,
     effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
@@ -991,6 +992,7 @@ impl SettingsPanel {
                             ),
                         ),
                     close_behavior_setting_group(default_settings.close_button_behavior),
+                    tab_behavior_setting_group(default_settings.tab_double_click_action),
                     deeplink_setting_group(),
                     notes_setting_group(font_options.clone()),
                     SettingGroup::new()
@@ -1520,6 +1522,49 @@ fn close_behavior_setting_group(default: CloseButtonBehavior) -> SettingGroup {
                 .default_value(SharedString::from(default.as_str())),
             )
             .description(t!("Settings.General.CloseBehavior.behavior_desc").to_string()),
+        )
+}
+
+fn tab_behavior_setting_group(default: TabDoubleClickAction) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.General.TabBehavior.group_title"))
+        .item(
+            SettingItem::new(
+                t!("Settings.General.TabBehavior.double_click_action"),
+                SettingField::dropdown(
+                    vec![
+                        (
+                            SharedString::from(TabDoubleClickAction::None.as_str()),
+                            t!("Settings.General.TabBehavior.none").into(),
+                        ),
+                        (
+                            SharedString::from(TabDoubleClickAction::DuplicateTab.as_str()),
+                            t!("Settings.General.TabBehavior.duplicate_tab").into(),
+                        ),
+                        (
+                            SharedString::from(TabDoubleClickAction::RenameTab.as_str()),
+                            t!("Settings.General.TabBehavior.rename_tab").into(),
+                        ),
+                        (
+                            SharedString::from(TabDoubleClickAction::CloseTab.as_str()),
+                            t!("Settings.General.TabBehavior.close_tab").into(),
+                        ),
+                    ],
+                    |cx: &App| {
+                        SharedString::from(
+                            AppSettings::global(cx).tab_double_click_action.as_str(),
+                        )
+                    },
+                    |val: SharedString, cx: &mut App| {
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings.tab_double_click_action =
+                                TabDoubleClickAction::from_str(val.as_ref());
+                        });
+                    },
+                )
+                .default_value(SharedString::from(default.as_str())),
+            )
+            .description(t!("Settings.General.TabBehavior.double_click_action_desc").to_string()),
         )
 }
 

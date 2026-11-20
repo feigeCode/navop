@@ -31,6 +31,7 @@ pub enum ImportRecordKind {
     PortForwarding,
     QuickCommand,
     Workspace,
+    Keybinding,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +102,8 @@ pub struct ImportRecord {
     pub quick_command: Option<QuickCommandImportRecord>,
     #[serde(default)]
     pub workspace: Option<WorkspaceImportRecord>,
+    #[serde(default)]
+    pub keybinding: Option<KeybindingImportRecord>,
     pub password_status: PasswordImportStatus,
     pub warnings: Vec<ImportWarning>,
 }
@@ -115,6 +118,7 @@ impl ImportRecord {
             self.port_forwarding.is_some(),
             self.quick_command.is_some(),
             self.workspace.is_some(),
+            self.keybinding.is_some(),
         ];
         let expected_slot = match self.kind {
             ImportRecordKind::Database => 0,
@@ -123,6 +127,7 @@ impl ImportRecord {
             ImportRecordKind::PortForwarding => 3,
             ImportRecordKind::QuickCommand => 4,
             ImportRecordKind::Workspace => 5,
+            ImportRecordKind::Keybinding => 6,
         };
         let payload_count = payloads.iter().filter(|present| **present).count();
         if payload_count == 1 && payloads[expected_slot] {
@@ -217,6 +222,16 @@ pub struct QuickCommandImportRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceImportRecord {
     pub path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeybindingImportRecord {
+    pub action_id: String,
+    pub shortcuts: Vec<String>,
+    #[serde(default)]
+    pub source_action: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -370,6 +385,7 @@ mod tests {
             port_forwarding: None,
             quick_command: None,
             workspace: None,
+            keybinding: None,
             password_status: PasswordImportStatus::Unsupported,
             warnings: Vec::new(),
         }

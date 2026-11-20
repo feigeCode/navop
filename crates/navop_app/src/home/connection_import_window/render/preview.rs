@@ -56,7 +56,9 @@ fn render_row_actions(
         .when(
             !matches!(
                 row.draft.kind(),
-                ImportDraftKind::QuickCommand | ImportDraftKind::Workspace
+                ImportDraftKind::QuickCommand
+                    | ImportDraftKind::Workspace
+                    | ImportDraftKind::Keybinding
             ),
             |this| {
                 this.child(
@@ -146,6 +148,10 @@ fn row_detail_text(draft: &EditableImportDraft) -> String {
         }
         return parts.join(" · ");
     }
+    if matches!(draft.kind(), ImportDraftKind::Keybinding) {
+        parts.push(draft.keybinding_detail_text());
+        return parts.join(" · ");
+    }
     if let Some(endpoint) = endpoint_text(draft) {
         parts.push(endpoint);
     }
@@ -189,6 +195,7 @@ fn kind_text(kind: ImportDraftKind) -> String {
         ImportDraftKind::Telnet => "Telnet".to_string(),
         ImportDraftKind::QuickCommand => t!("Home.ConnectionImport.kind_quick_command").to_string(),
         ImportDraftKind::Workspace => t!("Home.ConnectionImport.kind_workspace").to_string(),
+        ImportDraftKind::Keybinding => t!("Home.ConnectionImport.kind_keybinding").to_string(),
         ImportDraftKind::Unsupported => t!("Home.ConnectionImport.kind_unsupported").to_string(),
     }
 }

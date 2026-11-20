@@ -33,6 +33,7 @@ mod tests {
             port_forwarding: None,
             quick_command: None,
             workspace: None,
+            keybinding: None,
             password_status: PasswordImportStatus::Unsupported,
             warnings: Vec::new(),
         };
@@ -67,6 +68,7 @@ mod tests {
             port_forwarding: None,
             quick_command: None,
             workspace: None,
+            keybinding: None,
             password_status: PasswordImportStatus::Unsupported,
             warnings: Vec::new(),
         };
