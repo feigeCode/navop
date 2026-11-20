@@ -93,13 +93,6 @@ impl PersistentConnectionSidebar {
                     .min_h_0()
                     .min_w_0()
                     .overflow_hidden()
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.home_page
-                                .update(cx, |home, _| home.finish_drag_selection());
-                        }),
-                    )
                     .when(rows.is_empty(), |body| {
                         // 过滤空态：树内就地改筛选，不提供清除按钮（DESIGN §10）。
                         body.child(
@@ -353,23 +346,15 @@ impl PersistentConnectionSidebar {
         let layout = one_ui::theme_geometry().layout;
         // 停靠树的 header 从窗口左上角开始；macOS 红绿灯覆盖该区域，需左侧避让。
         let titlebar_inset = cfg!(target_os = "macos") && macos_titlebar_inset;
-        let titlebar_padding = if titlebar_inset {
-            let ribbon = if AppSettings::global(cx).navigation_ribbon_expanded {
-                layout.global_rail
-            } else {
-                px(0.0)
-            };
-            (layout.macos_title_bar_content_padding - ribbon).max(px(0.0))
-        } else {
-            px(0.0)
-        };
         h_flex()
             .id("persistent-connection-header")
             .w_full()
             .h(layout.embedded_panel_header)
             .flex_shrink_0()
             .pr_2()
-            .when(titlebar_inset, |header| header.pl(titlebar_padding))
+            .when(titlebar_inset, |header| {
+                header.pl(layout.macos_title_bar_content_padding)
+            })
             .when(!titlebar_inset, |header| header.pl_2())
             .items_center()
             .justify_between()

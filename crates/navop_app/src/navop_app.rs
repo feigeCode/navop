@@ -4,11 +4,10 @@ use crate::home_tab::{
 use crate::persistent_connection_sidebar::{
     PersistentConnectionSidebar, PersistentConnectionSidebarEvent,
 };
-use crate::setting_tab::SettingsPanel;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, ExternalPaths, InteractiveElement, IntoElement,
-    KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
+    App, AppContext, Context, Entity, ExternalPaths, InteractiveElement, IntoElement, KeyBinding,
+    Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{
     WindowExt,
@@ -1519,26 +1518,12 @@ fn handle_main_window_close_request(window: &mut Window, cx: &mut App) {
 pub struct NavopApp {
     tab_container: Entity<TabContainer>,
     connection_sidebar: Entity<PersistentConnectionSidebar>,
-    ribbon_expanded: bool,
     quit_state: QuitRequestState,
     /// 「最小化到托盘 / 退出应用」弹窗是否已经打开：标题栏关闭按钮可能被连点，
     /// 不能叠出第二个完全相同的弹窗。
     close_choice_prompt_open: bool,
     main_window_size_save_task: Option<Task<()>>,
     _appearance_subscription: gpui::Subscription,
-}
-
-enum SecondaryColumn {
-    Connection,
-    Settings(Entity<SettingsPanel>),
-    Workbench(Entity<ai_chat_view::WorkbenchShell>),
-    Notes(Entity<notes::NotesView>),
-}
-
-impl SecondaryColumn {
-    fn is_connection(&self) -> bool {
-        matches!(self, Self::Connection)
-    }
 }
 
 /// 关闭弹窗里「记住我的选择」勾选框的状态。
@@ -1589,7 +1574,6 @@ impl NavopApp {
 
         let settings = AppSettings::current(cx);
         let layout = initial_content_layout();
-        let navigation_ribbon_expanded = settings.navigation_ribbon_expanded;
         // 侧边栏展开状态完全跟随用户上次保存的选择，进入主页不强制展开。
         let connection_sidebar_expanded = settings.connection_sidebar_expanded;
         let tab_container = cx.new(|cx| {
@@ -1749,7 +1733,6 @@ impl NavopApp {
         Self {
             tab_container,
             connection_sidebar,
-            ribbon_expanded: navigation_ribbon_expanded,
             quit_state: QuitRequestState::default(),
             close_choice_prompt_open: false,
             main_window_size_save_task: None,
@@ -1767,98 +1750,12 @@ impl NavopApp {
         self.persist_connection_sidebar_expanded(expanded, cx);
     }
 
-    fn active_secondary_column(&self, cx: &App) -> (SecondaryColumn, Option<&'static str>) {
-        let active = self.tab_container.read(cx).active_item();
-        let Some(active) = active else {
-            return (SecondaryColumn::Connection, None);
-        };
-        let content_key = active.content().content_key(cx);
-        if content_key == "Settings"
-            && let Ok(settings) = active.content().view().downcast::<SettingsPanel>()
-        {
-            return (SecondaryColumn::Settings(settings), Some(content_key));
-        }
-        if content_key == "AiWorkbench"
-            && let Ok(workbench) = active
-                .content()
-                .view()
-                .downcast::<ai_chat_view::WorkbenchShell>()
-            && workbench.read(cx).nav_hosted_by_shell()
-        {
-            return (SecondaryColumn::Workbench(workbench), Some(content_key));
-        }
-        if content_key == "Notes"
-            && let Ok(notes) = active.content().view().downcast::<notes::NotesView>()
-            && notes.read(cx).sidebar_hosted_by_shell()
-        {
-            return (SecondaryColumn::Notes(notes), Some(content_key));
-        }
-        (SecondaryColumn::Connection, Some(content_key))
-    }
-
-    fn render_secondary_column(
-        &self,
-        column: SecondaryColumn,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        match column {
-            SecondaryColumn::Connection => self.connection_sidebar.update(cx, |sidebar, cx| {
-                sidebar.render_docked_connection_tree(window, cx)
-            }),
-            SecondaryColumn::Settings(settings) => {
-                let content = settings.update(cx, |settings, cx| {
-                    settings.render_secondary_column(window, cx)
-                });
-                self.wrap_secondary_content(content, cx)
-            }
-            SecondaryColumn::Workbench(workbench) => {
-                let content = workbench
-                    .update(cx, |workbench, cx| workbench.render_secondary_column(cx))
-                    .unwrap_or_else(|| gpui::div().into_any_element());
-                self.wrap_secondary_content(content, cx)
-            }
-            SecondaryColumn::Notes(notes) => {
-                let content = notes.update(cx, |notes, cx| notes.render_secondary_column(cx));
-                self.wrap_secondary_content(content, cx)
-            }
-        }
-    }
-
-    fn wrap_secondary_content(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
-        let width = self.connection_sidebar.read(cx).tree_width();
-        div()
-            .w(width)
-            .min_w(width)
-            .max_w(width)
-            .h_full()
-            .min_h_0()
-            .flex_shrink_0()
-            .overflow_hidden()
-            .border_r_1()
-            .border_color(cx.theme().sidebar_border)
-            .bg(cx.theme().sidebar)
-            .child(content)
-            .into_any_element()
-    }
-
     fn persist_connection_sidebar_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
         AppSettings::update_and_save(cx, |settings| {
             settings.connection_sidebar_expanded = expanded;
         });
         self.tab_container.update(cx, |tabs, cx| {
             tabs.set_navigation_sidebar_expanded(expanded, cx)
-        });
-        cx.notify();
-    }
-
-    pub(crate) fn set_ribbon_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
-        if self.ribbon_expanded == expanded {
-            return;
-        }
-        self.ribbon_expanded = expanded;
-        AppSettings::update_and_save(cx, |settings| {
-            settings.navigation_ribbon_expanded = expanded;
         });
         cx.notify();
     }
@@ -2351,37 +2248,17 @@ mod tests {
     fn tree_auto_hide_selects_floating_overlay_otherwise_docked_panel() {
         let source = include_str!("navop_app.rs");
         let render = source.rsplit("impl Render for NavopApp").next().unwrap();
-        assert!(render.contains("render_floating_tree_at"));
-        assert!(render.contains("render_secondary_column(secondary_column"));
-        assert!(source.contains("render_docked_connection_tree"));
+        assert!(render.contains("render_floating_tree"));
+        assert!(render.contains("render_docked_connection_tree"));
         assert!(render.contains("is_auto_hide_tree()"));
         assert!(
-            render.contains("floating_tree = secondary_expanded && auto_hide_tree"),
+            render.contains("sidebar_expanded && auto_hide_tree"),
             "浮层连接树仅应在自动隐藏开启时渲染，避免遮挡终端"
         );
         assert!(
-            render.contains("docked_tree = secondary_expanded && !floating_tree"),
-            "非自动隐藏时应渲染并排的第二列"
+            render.contains("sidebar_expanded && (!auto_hide_tree || home_has_navigation_sidebar)"),
+            "非自动隐藏或全局导航布局时应渲染并排的分割面板"
         );
-    }
-
-    #[test]
-    fn shell_keeps_a_fixed_ribbon_and_one_contextual_secondary_column() {
-        let source = include_str!("navop_app.rs");
-        let render = source.rsplit("impl Render for NavopApp").next().unwrap();
-
-        assert!(render.contains("active_secondary_column(cx)"));
-        assert!(render.contains("render_ribbon(active_content_key, window, cx)"));
-        assert!(render.contains("render_secondary_column(secondary_column, window, cx)"));
-        assert!(!render.contains("home_has_navigation_sidebar"));
-        assert!(source.contains("SecondaryColumn::Settings"));
-        assert!(source.contains("SecondaryColumn::Workbench"));
-        assert!(source.contains("SecondaryColumn::Notes"));
-
-        let settings = include_str!("setting_tab.rs");
-        assert!(settings.contains("fn render_secondary_column"));
-        assert!(settings.contains(".sidebar_width(px(0.0))"));
-        assert!(settings.contains(".sidebar_size_range(px(0.0)..px(0.0))"));
     }
 
     #[test]
@@ -2405,23 +2282,13 @@ mod tests {
     }
 
     #[test]
-    fn ribbon_visibility_is_persisted_and_uses_the_existing_sidebar_shortcut() {
-        let source = include_str!("navop_app.rs");
-        assert!(source.contains("settings.navigation_ribbon_expanded"));
-        assert!(source.contains("settings.navigation_ribbon_expanded = expanded"));
-        assert!(source.contains("this.set_ribbon_expanded(!this.ribbon_expanded, cx)"));
-        assert!(source.contains("action_id::WINDOW_TOGGLE_CONNECTION_SIDEBAR"));
-        assert!(source.contains(r#"default_shortcut("cmd-b", "ctrl-b")"#));
-    }
-
-    #[test]
     fn floating_connection_tree_occludes_scroll_from_reaching_the_tab_content() {
         let sidebar_source = include_str!("persistent_connection_sidebar/mod.rs");
         let floating = sidebar_source
-            .split("fn render_floating_tree_at")
+            .split("fn render_floating_tree")
             .nth(1)
             .and_then(|source| source.split("\n    pub(crate) fn new").next())
-            .expect("render_floating_tree_at source");
+            .expect("render_floating_tree source");
 
         assert!(
             floating.contains(".occlude()"),
@@ -3114,44 +2981,50 @@ impl Render for NavopApp {
         let dialog_layer = render_dialog_layer(window, cx);
         let notification_layer = render_notification_layer(window, cx);
         let main_content = self.tab_container.clone();
-        let (secondary_column, active_content_key) = self.active_secondary_column(cx);
-        let connection_secondary = secondary_column.is_connection();
-        let home_active = active_content_key == Some("Home");
-        let secondary_expanded = self.connection_sidebar.read(cx).is_expanded();
-        let auto_hide_tree = connection_secondary
-            && !home_active
-            && self.connection_sidebar.read(cx).is_auto_hide_tree();
-        // The tab bar owns the second-column visibility control for every tab.
+        // 全局导航布局仍需要 TabContainer 的收起/展开按钮；其他主页布局不重复显示。
+        // home 是 pinned tab，active_tab() 只查普通 tabs，必须用 pinned 通道判断。
+        let home_active = self
+            .tab_container
+            .read(cx)
+            .is_pinned_tab_active_by_id("home");
+        let auto_hide_tree = self.connection_sidebar.read(cx).is_auto_hide_tree();
+        let home_has_navigation_sidebar = home_active
+            && cx
+                .try_global::<GlobalHomePage>()
+                .is_some_and(|global| global.home_page.read(cx).uses_global_navigation_layout());
+        let sidebar_expanded = (!home_active || home_has_navigation_sidebar)
+            && self.connection_sidebar.read(cx).is_expanded();
         self.tab_container.update(cx, |tabs, cx| {
-            tabs.set_navigation_sidebar_toggle(Some(secondary_expanded), cx);
+            tabs.set_navigation_sidebar_toggle(
+                if home_has_navigation_sidebar {
+                    Some(self.connection_sidebar.read(cx).is_expanded())
+                } else {
+                    (!home_active).then(|| self.connection_sidebar.read(cx).is_expanded())
+                },
+                cx,
+            );
         });
-        let floating_tree = secondary_expanded && auto_hide_tree;
-        let docked_tree = secondary_expanded && !floating_tree;
-        let docked_tree_element =
-            docked_tree.then(|| self.render_secondary_column(secondary_column, window, cx));
-        let ribbon = self.ribbon_expanded.then(|| {
-            cx.try_global::<GlobalHomePage>()
-                .map(|global| global.home_page.clone())
-                .map(|home_page| {
-                    home_page.update(cx, |home, cx| {
-                        home.render_ribbon(active_content_key, window, cx)
-                    })
-                })
-                .unwrap_or_else(|| div().into_any_element())
+        // 全局导航布局把连接树固定到 TabContainer 左侧；不受自动隐藏设置影响。
+        let docked_tree = sidebar_expanded && (!auto_hide_tree || home_has_navigation_sidebar);
+        let docked_tree_element = docked_tree.then(|| {
+            self.connection_sidebar.update(cx, |sidebar, cx| {
+                sidebar.render_docked_connection_tree(window, cx)
+            })
         });
-        let floating_left = if self.ribbon_expanded {
-            one_ui::theme_geometry().layout.global_rail
-        } else {
-            gpui::px(0.0)
-        };
+        let floating_tree = (sidebar_expanded && auto_hide_tree && !home_has_navigation_sidebar)
+            .then(|| {
+                self.connection_sidebar
+                    .update(cx, |sidebar, cx| sidebar.render_floating_tree(window, cx))
+            });
         // macOS：浮动树覆盖 tab 栏左侧，需要给红绿灯占位；停靠模式并排渲染则不需要。
         #[cfg(target_os = "macos")]
-        {
-            let layout = one_ui::theme_geometry().layout;
-            let tab_bar_left_padding = if self.ribbon_expanded {
-                (layout.macos_title_bar_content_padding - layout.global_rail).max(px(0.0))
+        if sidebar_expanded {
+            let tab_bar_left_padding = if auto_hide_tree {
+                one_ui::theme_geometry()
+                    .layout
+                    .macos_title_bar_content_padding
             } else {
-                layout.macos_title_bar_content_padding
+                px(0.0)
             };
             self.tab_container.update(cx, |tabs, cx| {
                 tabs.set_left_padding(tab_bar_left_padding, cx)
@@ -3173,7 +3046,8 @@ impl Render for NavopApp {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleConnectionSidebar, _, cx| {
-                this.set_ribbon_expanded(!this.ribbon_expanded, cx);
+                let expanded = !this.connection_sidebar.read(cx).is_expanded();
+                this.set_connection_sidebar_expanded(expanded, cx);
             }))
             .bg(cx.theme().background)
             .child({
@@ -3181,14 +3055,13 @@ impl Render for NavopApp {
                     .size_full()
                     .min_w_0()
                     .overflow_hidden()
-                    .when_some(ribbon, |layout, ribbon| layout.child(ribbon))
                     .when_some(docked_tree_element, |layout, tree| layout.child(tree))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .when(floating_tree, |this| {
+                            .when(sidebar_expanded && auto_hide_tree, |this| {
                                 this.on_mouse_down(
                                     gpui::MouseButton::Left,
                                     cx.listener(
@@ -3197,8 +3070,10 @@ impl Render for NavopApp {
                                                 return;
                                             }
                                             let layout = one_ui::theme_geometry().layout;
-                                            // Any content click below the tab bar dismisses
-                                            // the temporary floating second column.
+                                            // The navigation rail is gone; everything below
+                                            // the tab bar on the left now belongs to the
+                                            // tree overlay itself, so any content click
+                                            // below the tab bar dismisses the auto-hide tree.
                                             let in_terminal = event.position.y > layout.tab_bar;
                                             if in_terminal {
                                                 this.set_connection_sidebar_expanded(false, cx);
@@ -3210,12 +3085,10 @@ impl Render for NavopApp {
                             .child(main_content),
                     )
             })
-            .when(floating_tree, |this| {
-                let tree = self.connection_sidebar.update(cx, |sidebar, cx| {
-                    sidebar.render_floating_tree_at(floating_left, window, cx)
-                });
-                this.child(tree)
-            })
+            .when(
+                sidebar_expanded && auto_hide_tree && !home_has_navigation_sidebar,
+                |this| this.when_some(floating_tree, |this, tree| this.child(tree)),
+            )
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)

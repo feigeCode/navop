@@ -120,22 +120,13 @@ fn neutral_avatar(
 }
 
 impl HomePage {
-    pub(crate) fn render_ribbon_account_entry(
+    pub(super) fn render_account_entry(
         &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        self.render_account_entry_with_anchor(Anchor::TopRight, true, window, cx)
-    }
-
-    fn render_account_entry_with_anchor(
-        &self,
-        anchor: Anchor,
-        collapsed: bool,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let view = cx.entity();
+        let collapsed = self.sidebar_collapsed;
         let trigger = AccountTrigger {
             avatar: self.current_user.as_ref().map(|user| {
                 (
@@ -159,7 +150,7 @@ impl HomePage {
             muted_fg: cx.theme().muted_foreground,
         };
         Popover::new("home-account-menu")
-            .anchor(anchor)
+            .anchor(Anchor::TopLeft)
             .trigger(trigger)
             .open(self.account_menu_open)
             .on_open_change(cx.listener(|this, open, _, cx| {

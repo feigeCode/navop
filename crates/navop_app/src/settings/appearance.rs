@@ -14,7 +14,6 @@ use gpui_component::{
 };
 use one_assets::IconName;
 use one_core::{settings::AppSettings, themes};
-use one_ui::DensityScale;
 use rust_i18n::t;
 use std::rc::Rc;
 const OPACITY_PRESETS: &[f32] = &[100.0, 85.0, 70.0];
@@ -36,7 +35,6 @@ pub fn render(
         .gap_4()
         .w_full()
         .child(render_mode(cx))
-        .child(render_density(cx))
         .child(render_opacity(options, &state, cx))
         .child(render_palette(cx))
         .children(
@@ -46,60 +44,6 @@ pub fn render(
         )
         .child(render_accent(&state, cx))
         .into_any_element()
-}
-
-fn render_density(cx: &App) -> impl IntoElement {
-    let current = AppSettings::global(cx).interface_density;
-    h_flex()
-        .justify_between()
-        .items_center()
-        .child(
-            v_flex()
-                .gap_1()
-                .child(div().child(t!("Settings.General.Appearance.density")))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(t!("Settings.General.Appearance.density_desc")),
-                ),
-        )
-        .child(
-            h_flex()
-                .gap_1()
-                .children(DensityScale::ALL.into_iter().map(|density| {
-                    let selected = current == density;
-                    Button::new(SharedString::from(format!(
-                        "appearance-density-{}",
-                        density.as_str()
-                    )))
-                    .label(density_label(density))
-                    .selected(selected)
-                    .when(selected, |button| button.primary())
-                    .small()
-                    .on_click(move |_, _, cx| set_density(density, cx))
-                })),
-        )
-}
-
-fn density_label(density: DensityScale) -> SharedString {
-    match density {
-        DensityScale::Compact => t!("Settings.General.Appearance.density_compact").into(),
-        DensityScale::Default => t!("Settings.General.Appearance.density_default").into(),
-        DensityScale::Comfortable => t!("Settings.General.Appearance.density_comfortable").into(),
-    }
-}
-
-fn set_density(density: DensityScale, cx: &mut App) {
-    if AppSettings::global(cx).interface_density == density {
-        return;
-    }
-    AppSettings::update_and_save(cx, |settings| {
-        settings.interface_density = density;
-    });
-    one_ui::set_density_scale(density);
-    AppSettings::current(cx).apply_font_size(cx);
-    cx.refresh_windows();
 }
 
 fn render_mode(cx: &App) -> impl IntoElement {

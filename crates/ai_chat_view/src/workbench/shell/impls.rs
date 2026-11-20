@@ -84,7 +84,7 @@ impl Render for WorkbenchShell {
         // 懒面板在这里落地：只有本帧真正要显示的面板才建视图。
         self.materialize_visible_panel(window, cx);
         let theme = self.snapshot(cx);
-        let show_nav = !self.nav_hosted_by_shell && !self.state.nav_collapsed() && self.has_nav();
+        let show_nav = !self.state.nav_collapsed() && self.has_nav();
         let nav = show_nav
             .then(|| self.render_session_nav(&theme, cx))
             .flatten();
@@ -251,15 +251,6 @@ impl Render for WorkbenchShell {
 }
 
 impl WorkbenchShell {
-    /// Session navigation hosted by the application shell's second column.
-    pub fn render_secondary_column(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        if !self.has_nav() {
-            return None;
-        }
-        let theme = self.snapshot(cx);
-        self.render_session_nav(&theme, cx)
-    }
-
     /// 左侧 / 底部的单槽面板：标题栏（图标 + 名称 + 移到下一处 + 关闭）+ 内容。
     fn render_dock(
         &self,

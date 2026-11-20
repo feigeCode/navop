@@ -14,7 +14,6 @@ use rust_i18n::t;
 use super::tree_model::ConnectionTreeRow;
 use super::{PersistentConnectionSidebar, SidebarPalette};
 use crate::home_tab::HomePage;
-use crate::home_tab::connection_selection::connection_selection_actions;
 
 impl PersistentConnectionSidebar {
     pub(super) fn render_batch_toolbar(
@@ -49,11 +48,7 @@ impl PersistentConnectionSidebar {
                     .text_color(palette.foreground)
                     .child(t!("Connection.batch_selected", count = selected_count).to_string()),
             )
-            .child(connection_selection_actions(
-                home.clone(),
-                visible_ids,
-                selected_count,
-            ))
+            .child(select_visible_button(home.clone(), visible_ids))
             .child(move_connections_button(
                 home.clone(),
                 selected_ids.clone(),
@@ -131,6 +126,19 @@ pub(super) fn auto_hide_tree_toggle(
         })
 }
 
+fn select_visible_button(home: gpui::Entity<HomePage>, visible_ids: Vec<i64>) -> IconButton {
+    let disabled = visible_ids.is_empty();
+    IconButton::new("persistent-select-visible-connections", IconName::Check)
+        .role(IconButtonRole::Compact)
+        .tooltip(t!("Connection.batch_select_visible"))
+        .disabled(disabled)
+        .on_click(move |_, _, cx| {
+            home.update(cx, |home, cx| {
+                home.select_visible_connections(&visible_ids, cx);
+            });
+        })
+}
+
 fn move_connections_button(
     home: gpui::Entity<HomePage>,
     selected_ids: Vec<i64>,
@@ -196,7 +204,7 @@ mod tests {
     #[test]
     fn toolbar_exposes_move_delete_select_visible_and_exit_actions() {
         let source = include_str!("batch_toolbar.rs");
-        assert!(source.contains("connection_selection_actions"));
+        assert!(source.contains("persistent-select-visible-connections"));
         assert!(source.contains("persistent-move-selected-connections"));
         assert!(source.contains("persistent-delete-selected-connections"));
         assert!(source.contains("persistent-exit-batch-connections"));

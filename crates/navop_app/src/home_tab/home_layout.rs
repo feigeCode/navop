@@ -38,6 +38,7 @@ impl HomePage {
             .size_full()
             .min_w_0()
             .overflow_hidden()
+            .child(self.render_sidebar(window, cx))
             .child(
                 v_flex()
                     .flex_1()

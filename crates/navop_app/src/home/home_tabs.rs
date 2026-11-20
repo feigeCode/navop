@@ -267,7 +267,6 @@ impl HomePage {
                     "notes",
                     |window, cx| {
                         let notes = cx.new(|cx| NotesView::new(window, cx));
-                        notes.update(cx, |notes, cx| notes.set_sidebar_hosted_by_shell(true, cx));
                         TabItem::new("notes", "home", notes)
                     },
                     window,

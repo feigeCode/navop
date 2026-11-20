@@ -2613,13 +2613,6 @@ impl TabContainer {
         self.tabs.get(self.active_index)
     }
 
-    /// Active item across both pinned and regular tabs.
-    pub fn active_item(&self) -> Option<TabItem> {
-        self.active_pinned_tab()
-            .or_else(|| self.active_tab())
-            .cloned()
-    }
-
     pub fn set_size(&mut self, size: Size, cx: &mut Context<Self>) {
         self.size = size;
         cx.notify();

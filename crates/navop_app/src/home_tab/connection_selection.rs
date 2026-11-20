@@ -9,13 +9,7 @@ use gpui::{
     AnyElement, App, Context, Entity, InteractiveElement, IntoElement, ParentElement, SharedString,
     Styled, div,
 };
-use gpui_component::{
-    Disableable, Sizable,
-    button::{Button, ButtonGroup},
-    checkbox::Checkbox,
-};
-use one_assets::IconName;
-use rust_i18n::t;
+use gpui_component::{Sizable, checkbox::Checkbox};
 
 use super::HomePage;
 
@@ -84,16 +78,11 @@ impl ConnectionSelection {
         self.ids = ids.into_iter().collect();
     }
 
-    pub(crate) fn select_all(&mut self, visible_ids: &[i64]) {
-        self.ids.extend(visible_ids.iter().copied());
-        self.anchor_id = visible_ids.first().copied();
-    }
-
-    pub(crate) fn invert(&mut self, visible_ids: &[i64]) {
-        for connection_id in visible_ids {
-            if !self.ids.remove(connection_id) {
-                self.ids.insert(*connection_id);
-            }
+    pub(crate) fn select_visible(&mut self, visible_ids: &[i64]) {
+        if visible_ids.iter().all(|id| self.ids.contains(id)) {
+            self.ids.retain(|id| !visible_ids.contains(id));
+        } else {
+            self.ids.extend(visible_ids.iter().copied());
         }
         self.anchor_id = visible_ids.first().copied();
     }
@@ -256,22 +245,12 @@ impl HomePage {
         cx.notify();
     }
 
-    pub(crate) fn select_all_connections(&mut self, visible_ids: &[i64], cx: &mut Context<Self>) {
-        self.connection_selection.select_all(visible_ids);
-        cx.notify();
-    }
-
-    pub(crate) fn invert_visible_connections(
+    pub(crate) fn select_visible_connections(
         &mut self,
         visible_ids: &[i64],
         cx: &mut Context<Self>,
     ) {
-        self.connection_selection.invert(visible_ids);
-        cx.notify();
-    }
-
-    pub(crate) fn clear_connection_selection(&mut self, cx: &mut Context<Self>) {
-        self.connection_selection.clear();
+        self.connection_selection.select_visible(visible_ids);
         cx.notify();
     }
 
@@ -325,46 +304,6 @@ pub(crate) fn connection_selection_checkbox(
         .into_any_element()
 }
 
-pub(crate) fn connection_selection_actions(
-    home: Entity<HomePage>,
-    visible_ids: Vec<i64>,
-    selected_count: usize,
-) -> AnyElement {
-    let visible_count = visible_ids.len();
-    ButtonGroup::new("connection-selection-actions")
-        .outline()
-        .child(
-            Button::new("connection-selection-all")
-                .xsmall()
-                .icon(IconName::Check)
-                .disabled(visible_count == 0)
-                .tooltip(t!("Connection.batch_select_all")),
-        )
-        .child(
-            Button::new("connection-selection-invert")
-                .xsmall()
-                .icon(IconName::Refresh)
-                .disabled(visible_count == 0)
-                .tooltip(t!("Connection.batch_invert")),
-        )
-        .child(
-            Button::new("connection-selection-clear")
-                .xsmall()
-                .icon(IconName::Close)
-                .disabled(selected_count == 0)
-                .tooltip(t!("Connection.batch_clear")),
-        )
-        .on_click(move |indices, _, cx| {
-            home.update(cx, |home, cx| match indices.first() {
-                Some(0) => home.select_all_connections(&visible_ids, cx),
-                Some(1) => home.invert_visible_connections(&visible_ids, cx),
-                Some(2) => home.clear_connection_selection(cx),
-                _ => {}
-            });
-        })
-        .into_any_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::{ConnectionSelection, ConnectionSelectionMode, DragSelection};
@@ -408,15 +347,15 @@ mod tests {
     }
 
     #[test]
-    fn select_all_and_invert_only_touch_visible_connections() {
+    fn selecting_visible_connections_toggles_all_visible_items() {
         let mut selection = ConnectionSelection::default();
-        selection.replace([3, 99]);
+        selection.replace([3]);
 
-        selection.select_all(&[3, 6, 9]);
-        assert_eq!(selection.ids(), vec![3, 6, 9, 99]);
+        selection.select_visible(&[3, 6]);
+        assert_eq!(selection.ids(), vec![3, 6]);
 
-        selection.invert(&[3, 6, 9]);
-        assert_eq!(selection.ids(), vec![99]);
+        selection.select_visible(&[3, 6]);
+        assert!(selection.is_empty());
     }
 
     #[test]

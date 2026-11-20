@@ -36,7 +36,6 @@ pub struct NotesView {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) standalone_markdown: bool,
     pub(crate) sidebar_collapsed: bool,
-    pub(crate) sidebar_hosted_by_shell: bool,
     pub(crate) editor_theme: Option<MarkdownEditorTheme>,
     /// Cached, collapsible document outline for the active Markdown document.
     pub(crate) outline: crate::markdown_outline::MarkdownOutlineState,
@@ -152,7 +151,6 @@ impl NotesView {
             focus_handle: cx.focus_handle(),
             standalone_markdown,
             sidebar_collapsed: false,
-            sidebar_hosted_by_shell: false,
             editor_theme,
             outline: crate::markdown_outline::MarkdownOutlineState::default(),
         }
@@ -176,22 +174,6 @@ impl NotesView {
             });
         }
         cx.notify();
-    }
-
-    pub fn set_sidebar_hosted_by_shell(&mut self, hosted: bool, cx: &mut Context<Self>) {
-        if self.sidebar_hosted_by_shell != hosted {
-            self.sidebar_hosted_by_shell = hosted;
-            cx.notify();
-        }
-    }
-
-    pub fn sidebar_hosted_by_shell(&self) -> bool {
-        self.sidebar_hosted_by_shell
-    }
-
-    /// Notebook tree rendered in the application shell's second column.
-    pub fn render_secondary_column(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        self.render_sidebar_content(cx)
     }
 
     pub(crate) fn resolved_editor_theme(&self, cx: &App) -> MarkdownEditorTheme {

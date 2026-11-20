@@ -1,80 +1,7 @@
 use gpui::{Edges, Pixels, px};
 use gpui_component::Size;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
-
-/// Application-wide UI density. This scales application-owned geometry and the
-/// GPUI rem basis together so dense desktop surfaces stay internally coherent.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DensityScale {
-    Compact,
-    #[default]
-    Default,
-    Comfortable,
-}
-
-impl DensityScale {
-    pub const ALL: [Self; 3] = [Self::Compact, Self::Default, Self::Comfortable];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Compact => "compact",
-            Self::Default => "default",
-            Self::Comfortable => "comfortable",
-        }
-    }
-
-    pub fn from_str(value: &str) -> Self {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "compact" => Self::Compact,
-            "comfortable" => Self::Comfortable,
-            _ => Self::Default,
-        }
-    }
-
-    /// Geometry and spacing multiplier.
-    pub fn geometry_scale(self) -> f32 {
-        match self {
-            Self::Compact => 0.94,
-            Self::Default => 1.0,
-            Self::Comfortable => 1.08,
-        }
-    }
-
-    /// Typography multiplier applied to the GPUI rem basis.
-    pub fn font_scale(self) -> f32 {
-        match self {
-            Self::Compact => 0.97,
-            Self::Default => 1.0,
-            Self::Comfortable => 1.06,
-        }
-    }
-}
-
-static ACTIVE_DENSITY: AtomicU8 = AtomicU8::new(1);
-
-/// Set the process-wide density used by [`theme_geometry`].
-///
-/// The application calls this from `AppSettings::apply`; tests that do not
-/// initialize application settings continue to see [`DensityScale::Default`].
-pub fn set_density_scale(density: DensityScale) {
-    let encoded = match density {
-        DensityScale::Compact => 0,
-        DensityScale::Default => 1,
-        DensityScale::Comfortable => 2,
-    };
-    ACTIVE_DENSITY.store(encoded, Ordering::Relaxed);
-}
-
-pub fn active_density_scale() -> DensityScale {
-    match ACTIVE_DENSITY.load(Ordering::Relaxed) {
-        0 => DensityScale::Compact,
-        2 => DensityScale::Comfortable,
-        _ => DensityScale::Default,
-    }
-}
 
 /// Geometry tokens shared by the application shell, components, and pages.
 ///
@@ -98,17 +25,6 @@ pub struct ThemeGeometry {
 }
 
 impl ThemeGeometry {
-    /// Build geometry for a density without changing the process-wide setting.
-    pub fn for_density(density: DensityScale) -> Self {
-        let mut geometry = Self::default();
-        let scale = density.geometry_scale();
-        geometry.spacing = geometry.spacing.scaled(scale);
-        geometry.control = geometry.control.scaled(scale);
-        geometry.layout = geometry.layout.scaled(scale);
-        geometry.tree = geometry.tree.scaled(scale);
-        geometry
-    }
-
     /// Resolve a control height from the legacy component [`Size`].
     ///
     /// This compatibility accessor lets components migrate to theme geometry
@@ -212,20 +128,6 @@ impl Default for SpacingTokens {
     }
 }
 
-impl SpacingTokens {
-    fn scaled(self, scale: f32) -> Self {
-        Self {
-            space_1: (self.space_1 * scale).round(),
-            space_2: (self.space_2 * scale).round(),
-            space_3: (self.space_3 * scale).round(),
-            space_4: (self.space_4 * scale).round(),
-            space_5: (self.space_5 * scale).round(),
-            space_6: (self.space_6 * scale).round(),
-            space_8: (self.space_8 * scale).round(),
-        }
-    }
-}
-
 /// Semantic corner-radius scale.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -293,23 +195,9 @@ impl Default for ControlSizeTokens {
     }
 }
 
-impl ControlSizeTokens {
-    fn scaled(self, scale: f32) -> Self {
-        Self {
-            compact: (self.compact * scale).round(),
-            small: (self.small * scale).round(),
-            default: (self.default * scale).round(),
-            medium: (self.medium * scale).round(),
-            large: (self.large * scale).round(),
-            xlarge: (self.xlarge * scale).round(),
-            hero: (self.hero * scale).round(),
-        }
-    }
-}
-
 /// Application shell and workspace role sizes.
 ///
-/// Candidate dimensions such as the 56px global rail are defined here before
+/// Candidate dimensions such as the 52px global rail are defined here before
 /// page migration. Existing surfaces should switch to these roles atomically
 /// with their related offsets and platform safe areas.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -363,7 +251,7 @@ impl Default for LayoutSizeTokens {
             list_header: px(28.),
             collapsed_bottom_dock_header: px(29.),
             status_bar: px(28.),
-            global_rail: px(56.),
+            global_rail: px(52.),
             compact_rail: px(44.),
             global_rail_item: px(40.),
             context_sidebar_default: px(260.),
@@ -380,46 +268,9 @@ impl Default for LayoutSizeTokens {
     }
 }
 
-impl LayoutSizeTokens {
-    fn scaled(self, scale: f32) -> Self {
-        Self {
-            title_bar: (self.title_bar * scale).round(),
-            title_bar_content_padding: (self.title_bar_content_padding * scale).round(),
-            macos_title_bar_content_padding: (self.macos_title_bar_content_padding * scale).round(),
-            macos_compact_title_bar_content_padding: (self.macos_compact_title_bar_content_padding
-                * scale)
-                .round(),
-            macos_rail_title_bar_height: (self.macos_rail_title_bar_height * scale).round(),
-            window_control_width: (self.window_control_width * scale).round(),
-            tab_bar: (self.tab_bar * scale).round(),
-            tab_item: (self.tab_item * scale).round(),
-            command_bar: (self.command_bar * scale).round(),
-            panel_header: (self.panel_header * scale).round(),
-            embedded_panel_header: (self.embedded_panel_header * scale).round(),
-            dock_panel_header: (self.dock_panel_header * scale).round(),
-            list_header: (self.list_header * scale).round(),
-            collapsed_bottom_dock_header: (self.collapsed_bottom_dock_header * scale).round(),
-            status_bar: (self.status_bar * scale).round(),
-            global_rail: (self.global_rail * scale).round(),
-            compact_rail: (self.compact_rail * scale).round(),
-            global_rail_item: (self.global_rail_item * scale).round(),
-            context_sidebar_default: (self.context_sidebar_default * scale).round(),
-            context_sidebar_min: (self.context_sidebar_min * scale).round(),
-            context_sidebar_max: (self.context_sidebar_max * scale).round(),
-            utility_panel_default: (self.utility_panel_default * scale).round(),
-            utility_panel_min: (self.utility_panel_min * scale).round(),
-            utility_panel_max: (self.utility_panel_max * scale).round(),
-            sidebar_panel_min: (self.sidebar_panel_min * scale).round(),
-            sidebar_center_min: (self.sidebar_center_min * scale).round(),
-            sidebar_bottom_default: (self.sidebar_bottom_default * scale).round(),
-            workspace_min: (self.workspace_min * scale).round(),
-        }
-    }
-}
-
 /// Shared geometry for compact trees and hierarchical lists.
 ///
-/// These defaults describe the common 32px tree used by data explorers.
+/// These defaults describe the common 28px tree used by data explorers.
 /// Surfaces with an intentional density difference may keep a local row height
 /// or indent while still sharing base padding and disclosure geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -434,21 +285,10 @@ pub struct TreeListGeometry {
 impl Default for TreeListGeometry {
     fn default() -> Self {
         Self {
-            row_height: px(32.),
+            row_height: px(28.),
             indent: px(16.),
             base_padding: px(8.),
             disclosure_size: px(16.),
-        }
-    }
-}
-
-impl TreeListGeometry {
-    fn scaled(self, scale: f32) -> Self {
-        Self {
-            row_height: (self.row_height * scale).round(),
-            indent: (self.indent * scale).round(),
-            base_padding: (self.base_padding * scale).round(),
-            disclosure_size: (self.disclosure_size * scale).round(),
         }
     }
 }
@@ -730,7 +570,7 @@ mod tests {
         assert_eq!(layout.panel_header, px(36.));
         assert_eq!(layout.list_header, px(28.));
         assert_eq!(layout.status_bar, px(28.));
-        assert_eq!(layout.global_rail, px(56.));
+        assert_eq!(layout.global_rail, px(52.));
         assert_eq!(layout.compact_rail, px(44.));
         assert_eq!(layout.global_rail_item, px(40.));
         assert_eq!(layout.workspace_min, px(640.));
@@ -744,7 +584,7 @@ mod tests {
     fn tree_geometry_has_stable_density_and_disclosure_slots() {
         let tree = TreeListGeometry::default();
 
-        assert_eq!(tree.row_height, px(32.));
+        assert_eq!(tree.row_height, px(28.));
         assert_eq!(tree.indent, px(16.));
         assert_eq!(tree.base_padding, px(8.));
         assert_eq!(tree.disclosure_size, px(16.));
@@ -774,35 +614,11 @@ mod tests {
     }
 }
 
-/// The application geometry tokens for the active density.
+/// The application geometry tokens.
 ///
 /// Navop keeps these in the application layer rather than upstream
-/// `gpui-component`. Density is a process-wide preference because geometry is
-/// consumed by synchronous render helpers that do not take an `App`.
+/// `gpui-component`. They are not customized per theme, so the defaults are
+/// the single source of truth.
 pub fn theme_geometry() -> ThemeGeometry {
-    ThemeGeometry::for_density(active_density_scale())
-}
-
-#[cfg(test)]
-mod density_tests {
-    use super::*;
-
-    #[test]
-    fn density_scales_keep_compact_default_and_comfortable_ordered() {
-        let compact = ThemeGeometry::for_density(DensityScale::Compact);
-        let default = ThemeGeometry::for_density(DensityScale::Default);
-        let comfortable = ThemeGeometry::for_density(DensityScale::Comfortable);
-
-        assert!(compact.tree.row_height < default.tree.row_height);
-        assert!(default.tree.row_height < comfortable.tree.row_height);
-        assert!(compact.control.default < default.control.default);
-        assert!(default.control.default < comfortable.control.default);
-    }
-
-    #[test]
-    fn density_round_trips_through_its_storage_value() {
-        for density in DensityScale::ALL {
-            assert_eq!(density, DensityScale::from_str(density.as_str()));
-        }
-    }
+    ThemeGeometry::default()
 }

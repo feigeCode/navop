@@ -71,10 +71,14 @@ actions!(
 );
 
 const HOME_CONNECTION_LIST_ACTIONS_WIDTH: gpui::Pixels = px(96.0);
+// 侧栏舒适宽度收窄（redesign §8.2），把空间让给主工作面。
+const HOME_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(184.0);
+const HOME_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(58.0);
 /// 最近连接区的历史语义图标（gpui-component IconName 无 history 变体，内嵌提供）。
 pub(crate) const NAVOP_HISTORY_ICON: &str = "navop/history.svg";
 /// 首页导航/Tab 的线性 Home 图标（依赖库 home.svg 为固定填充色，改用自有线稿）。
 pub(crate) const NAVOP_HOME_LINE_ICON: &str = "navop/home-line.svg";
+pub(crate) const GLOBAL_NAV_TREE_WIDTH: Pixels = px(248.0);
 // HomePage Entity - 管理 home 页面的所有状态
 
 /// 连接列表布局模式
@@ -162,6 +166,10 @@ impl HomePage {
         }
         cx.notify();
     }
+
+    pub(crate) fn uses_global_navigation_layout(&self) -> bool {
+        self.connection_layout == ConnectionLayout::Navigation
+    }
 }
 
 pub struct HomePage {
@@ -171,6 +179,7 @@ pub struct HomePage {
     /// 连接类型筛选条的动态布局状态（可见类型数量按容器宽度实测决定）。
     connection_type_filter: connection_type_filter_bar::ConnectionTypeFilterBar,
     connection_layout: ConnectionLayout,
+    sidebar_collapsed: bool,
     collapsed_groups: HashSet<Option<i64>>,
     recent_collapsed: bool,
     pub(crate) workspaces: Vec<Workspace>,
@@ -284,6 +293,7 @@ mod local_terminal;
 mod navigation;
 mod recent;
 mod render;
+mod sidebar;
 mod sidebar_navigation;
 mod sync_route;
 mod team_permissions;

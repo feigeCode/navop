@@ -8,7 +8,6 @@ use agent_runtime::{
 use gpui::http_client::Url;
 use gpui::{App, Font, FontFallbacks, Global, font, px};
 use gpui_component::{Theme, ThemeMode};
-use one_ui::DensityScale;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -1390,9 +1389,6 @@ pub struct AppSettings {
     /// 表达的界面尺寸，效果等同于浏览器缩放，便于在 4K 等高分辨率屏幕上使用。
     #[serde(default = "default_ui_scale_percent")]
     pub ui_scale_percent: u32,
-    /// Application-owned density for navigation rails, trees, and settings.
-    #[serde(default)]
-    pub interface_density: DensityScale,
     #[serde(default = "default_monospace_font_family")]
     pub sql_editor_font_family: String,
     #[serde(default = "default_sql_editor_font_size")]
@@ -1546,9 +1542,6 @@ pub struct AppSettings {
     pub connection_sort_order: ConnectionSortOrder,
     #[serde(default = "default_true")]
     pub connection_sidebar_expanded: bool,
-    /// Whether the persistent application ribbon is visible.
-    #[serde(default = "default_true")]
-    pub navigation_ribbon_expanded: bool,
     #[serde(default)]
     pub connection_sidebar_tree_state: ConnectionSidebarTreeState,
     /// 是否启用SQL查询的自动保存功能
@@ -1885,7 +1878,6 @@ impl Default for AppSettings {
             font_family: default_font_family(),
             font_size: default_font_size(),
             ui_scale_percent: default_ui_scale_percent(),
-            interface_density: DensityScale::default(),
             sql_editor_font_family: default_monospace_font_family(),
             sql_editor_font_size: default_sql_editor_font_size(),
             sql_editor_hover_enabled: default_sql_editor_hover_enabled(),
@@ -1944,7 +1936,6 @@ impl Default for AppSettings {
             home_show_host_metrics: true,
             connection_sort_order: ConnectionSortOrder::default(),
             connection_sidebar_expanded: true,
-            navigation_ribbon_expanded: true,
             connection_sidebar_tree_state: ConnectionSidebarTreeState::default(),
             enable_sql_auto_save: true,
             sql_auto_save_interval: default_auto_save_interval(),
@@ -2324,7 +2315,6 @@ impl AppSettings {
 
     pub fn apply(&self, cx: &mut App) {
         gpui_component::set_locale(effective_locale_for_setting(&self.locale));
-        one_ui::set_density_scale(self.interface_density);
         crate::themes::apply_appearance(self, cx);
 
         // 同步自动保存配置
@@ -2359,8 +2349,7 @@ impl AppSettings {
         // GPUI 的 rem 基准长度取自主题字号（gpui-component 的 `Root::render` 会调用
         // `window.set_rem_size(cx.theme().font_size)`），因此把界面缩放倍率乘进字号，
         // 即可整体缩放所有以 rem 表达的字体、间距与控件尺寸。
-        theme.font_size =
-            px(self.font_size as f32 * self.ui_scale() * self.interface_density.font_scale());
+        theme.font_size = px(self.font_size as f32 * self.ui_scale());
         Theme::sync_base(cx);
     }
 
@@ -3362,23 +3351,6 @@ mod tests {
         );
         assert_eq!(ConnectionSortOrder::Natural, settings.connection_sort_order);
         assert!(settings.connection_sidebar_expanded);
-        assert!(settings.navigation_ribbon_expanded);
-        assert_eq!(one_ui::DensityScale::Default, settings.interface_density);
-    }
-
-    #[test]
-    fn interface_density_and_ribbon_state_round_trip() {
-        let settings: AppSettings = serde_json::from_value(serde_json::json!({
-            "interface_density": "comfortable",
-            "navigation_ribbon_expanded": false
-        }))
-        .expect("density and ribbon settings should deserialize");
-
-        assert_eq!(
-            one_ui::DensityScale::Comfortable,
-            settings.interface_density
-        );
-        assert!(!settings.navigation_ribbon_expanded);
     }
 
     #[test]
@@ -3771,23 +3743,6 @@ mod tests {
 
             // 默认缩放为 100% 时行为与改动前一致。
             assert_eq!(px(14.0), Theme::global(cx).font_size);
-        });
-    }
-
-    #[gpui::test]
-    fn app_settings_apply_scales_by_interface_density(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            cx.set_global(Theme::default());
-
-            let mut settings = AppSettings::default();
-            settings.interface_density = one_ui::DensityScale::Comfortable;
-            let expected = settings.font_size as f32 * settings.interface_density.font_scale();
-
-            settings.apply(cx);
-
-            assert_eq!(px(expected), Theme::global(cx).font_size);
-            one_ui::set_density_scale(one_ui::DensityScale::Default);
         });
     }
 
