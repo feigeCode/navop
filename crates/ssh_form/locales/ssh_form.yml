@@ -498,27 +498,48 @@ SSH:
     en: Other
     zh-CN: 其他设置
     zh-HK: 其他設定
-  # 跳板机相关
-  enable_jump_server:
-    en: Enable Jump Server
-    zh-CN: 启用跳板机
-    zh-HK: 啟用跳板機
-  jump_mode:
-    en: Jump Mode
-    zh-CN: 跳板机模式
-    zh-HK: 跳板機模式
-  jump_mode_proxy_jump:
-    en: ProxyJump
-    zh-CN: 标准跳转 (ProxyJump)
-    zh-HK: 標準跳轉 (ProxyJump)
-  jump_mode_bastion_direct:
+  # 连接方式（基础信息）
+  connection_mode:
+    en: Connection Mode
+    zh-CN: 连接方式
+    zh-HK: 連接方式
+  connection_mode_direct:
+    en: Direct
+    zh-CN: 直连
+    zh-HK: 直連
+  connection_mode_jump:
+    en: Jump Server
+    zh-CN: 跳板机
+    zh-HK: 跳板機
+  connection_mode_bastion:
     en: Bastion Direct
     zh-CN: 堡垒机直连
     zh-HK: 堡壘機直連
-  jump_mode_bastion_direct_hint:
-    en: Connect straight to the bastion host and let it proxy the session to the asset. Login username is rendered from the fields below (e.g. user#account#asset for JumpServer). The bastion host address is still the Jump Host above; target address fields are ignored.
-    zh-CN: 直接连上堡垒机，由它把会话代理到目标资产；登录用户名按下方字段渲染（JumpServer 格式为 用户名#账号#资产）。地址仍填上方跳板机地址，目标机地址不再参与连接。
-    zh-HK: 直接连上堡壘機，由它把會話代理到目標資產；登錄用戶名按下方字段渲染（JumpServer 格式為 用戶名#賬號#資產）。地址仍填上方跳板機地址，目標機地址不再參與連接。
+  bastion_direct_hint:
+    en: The address, port, username and credentials above are the bastion login. The bastion proxies the session to the asset below; the login name is rendered as user#account#asset.
+    zh-CN: 上方地址、端口、用户名与认证即堡垒机登录信息，由堡垒机把会话代理到下方填写的资产；登录名按 用户名#账号#资产 渲染。
+    zh-HK: 上方地址、端口、用戶名與認證即堡壘機登錄信息，由堡壘機把會話代理到下方填寫的資產；登錄名按 用戶名#賬號#資產 渲染。
+  bastion_host:
+    en: Bastion Host
+    zh-CN: 堡垒机地址
+    zh-HK: 堡壘機地址
+  bastion_port:
+    en: Bastion Port
+    zh-CN: 堡垒机端口
+    zh-HK: 堡壘機端口
+  # 跳板机相关
+  jump_tab_enabled_hint:
+    en: Traffic is forwarded through the jump server (ProxyJump). Fill in the jump server below.
+    zh-CN: 当前连接方式为「跳板机」，流量经下方跳板机转发（ProxyJump）。
+    zh-HK: 當前連接方式為「跳板機」，流量經下方跳板機轉發（ProxyJump）。
+  jump_tab_bastion_hint:
+    en: Connection mode is Bastion Direct. The bastion login is configured in Basic Info, so the jump server settings below do not take effect.
+    zh-CN: 当前连接方式为「堡垒机直连」，堡垒机登录信息在「基本信息」中配置，下方跳板机设置不生效。
+    zh-HK: 當前連接方式為「堡壘機直連」，堡壘機登錄信息在「基本信息」中配置，下方跳板機設定不生效。
+  jump_tab_disabled_hint:
+    en: Connection mode is Direct. Choose "Jump Server" in Basic Info to enable the forwarding below. Filled settings are kept for later.
+    zh-CN: 当前连接方式为「直连」。如需经跳板机转发，请先在「基本信息」中选择「跳板机」；已填内容会保留备用。
+    zh-HK: 當前連接方式為「直連」。如需經跳板機轉發，請先在「基本信息」中選擇「跳板機」；已填內容會保留備用。
   bastion_asset:
     en: Bastion Asset ID
     zh-CN: 堡垒机资产 ID
