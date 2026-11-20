@@ -91,7 +91,6 @@ jobs:
   # 并在判定为发布改动时就地校验 changelog 与版本号；其余 PR 照旧跑全量测试。
   classify:
     name: Classify changes
-    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     outputs:
       release_only: ${{ steps.check.outputs.release_only }}
@@ -105,7 +104,13 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 script/release_pr.py check
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python3 script/release_pr.py check
+          else
+            # 非 PR 事件也必须产生成功输出；否则 needs 此 job 的矩阵会被整体跳过。
+            echo "release_only=false" >> "$GITHUB_OUTPUT"
+          fi
 
   # PR 快车道：Linux 跑完整 `cargo test --all`；macOS / Windows 的 workspace
   # 只做 `cargo check --workspace --all-targets`（含测试目标），不链接、不跑测试；
