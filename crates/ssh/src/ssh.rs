@@ -944,6 +944,12 @@ pub struct RusshClient {
     /// 启用后，终端在 pty 之后、shell 之前会发送 agent 转发请求，
     /// 使远端（如跳板机）能通过 `auth-agent@openssh.com` 通道使用本地 ssh-agent。
     forward_agent: bool,
+    /// 是否以「堡垒机直连」方式建立（会话即堡垒机，没有 direct-tcpip）。
+    ///
+    /// 关闭 SSH 连接前的会话共享方（如文件面板复用终端连接）据此判断目标
+    /// 是不是堡垒机本身：JumpServer 会把这类会话的 SFTP 限制在资产配置的
+    /// 「文件管理根目录」里，路径不存在时要给出不同解释。
+    bastion_direct: bool,
 }
 
 pub struct LocalPortForwardTunnel {
@@ -2704,6 +2710,12 @@ impl SshClient for RusshClient {
         let x11_handle = x11_proxy.as_ref().map(|proxy| proxy.handle());
         let host_key_verifier = config.host_key_verifier.clone();
         let remote_forward_target = Arc::new(RwLock::new(None));
+        // 堡垒机直连：会话本身就是堡垒机（用户名按 user#account#asset 渲染），
+        // 不建立 direct-tcpip。共享这条连接的 SFTP 需要据此解释路径错误。
+        let bastion_direct = config
+            .jump_server
+            .as_ref()
+            .is_some_and(|jump| jump.bastion_login_username().is_some());
 
         let connect = async {
             // 情况1: 使用跳板机连接
@@ -2768,6 +2780,7 @@ impl SshClient for RusshClient {
                         x11_proxy: x11_proxy.clone(),
                         remote_forward_target: Arc::clone(&remote_forward_target),
                         forward_agent: config.forward_agent,
+                        bastion_direct,
                     });
                 }
 
@@ -2867,6 +2880,7 @@ impl SshClient for RusshClient {
                     x11_proxy: x11_proxy.clone(),
                     remote_forward_target: Arc::clone(&remote_forward_target),
                     forward_agent: config.forward_agent,
+                    bastion_direct,
                 })
             }
             // 情况2: 仅使用代理连接
@@ -2908,6 +2922,7 @@ impl SshClient for RusshClient {
                     x11_proxy: x11_proxy.clone(),
                     remote_forward_target: Arc::clone(&remote_forward_target),
                     forward_agent: config.forward_agent,
+                    bastion_direct,
                 })
             }
             // 情况3: 直接连接
@@ -2942,6 +2957,7 @@ impl SshClient for RusshClient {
                     x11_proxy: x11_proxy.clone(),
                     remote_forward_target: Arc::clone(&remote_forward_target),
                     forward_agent: config.forward_agent,
+                    bastion_direct,
                 })
             }
         };
@@ -2994,6 +3010,11 @@ impl SshClient for RusshClient {
 impl RusshClient {
     pub async fn open_raw_channel(&mut self) -> Result<Channel<client::Msg>> {
         Ok(self.session.channel_open_session().await?)
+    }
+
+    /// 这条连接是否以「堡垒机直连」方式建立（会话即堡垒机）。
+    pub fn is_bastion_direct(&self) -> bool {
+        self.bastion_direct
     }
 }
 

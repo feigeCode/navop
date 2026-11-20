@@ -79,6 +79,48 @@ const SHARED_MAX_CONCURRENT_READS: usize = 8;
 const OWNER_LOOKUP_BATCH_SIZE: usize = 128;
 const OWNER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// 目录枚举的超时上限。
+///
+/// 堡垒机和限流网络下 `read_dir` 可能长时间不返回：没有上限时文件面板会一直转圈，
+/// MCP 那条连接还会因为被拖住而整条关掉（表现为「Navop MCP connection closed」）。
+const DIRECTORY_LIST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 给目录枚举套一层超时，超时后给出可读的提示而不是静默挂死。
+async fn with_directory_list_timeout<T, F>(path: &str, future: F) -> Result<T>
+where
+    F: Future<Output = Result<T>>,
+{
+    match tokio::time::timeout(DIRECTORY_LIST_TIMEOUT, future).await {
+        Ok(result) => result,
+        Err(_) => Err(anyhow!("{}", directory_list_timeout_message(path))),
+    }
+}
+
+fn directory_list_timeout_message(path: &str) -> String {
+    format!(
+        "列出目录 {path} 超时：{} 秒内没有收到服务器响应（堡垒机限流或目录过大），请稍后重试",
+        DIRECTORY_LIST_TIMEOUT.as_secs()
+    )
+}
+
+/// 把 SFTP 列目录失败翻译成用户能采取动作的话。
+///
+/// 堡垒机直连时 JumpServer 会把 SFTP 会话的根目录限制在资产的「文件管理根目录」，
+/// 根目录之外的路径会被服务端回 `No such file`（不是 permission denied），直接
+/// 透传会让用户以为文件真的不存在。
+fn describe_list_dir_error(path: &str, bastion_direct: bool, error: &str) -> String {
+    if !error.contains("No such file") {
+        return format!("Failed to read directory {path}: {error}");
+    }
+    if bastion_direct {
+        format!(
+            "堡垒机只开放了受限的 SFTP 根目录，{path} 不在其中：JumpServer 把会话限制在资产的「文件管理根目录」（常见为 /tmp），会话里能列出的根目录 / 就是它。请在根目录 / 内操作，或请管理员把「文件管理根目录」改成你要浏览的路径"
+        )
+    } else {
+        format!("Failed to read directory {path}: 目录不存在或没有访问权限")
+    }
+}
+
 /// SFTP 会话独占这条 SSH 连接，还是与交互终端共用。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SftpTransport {
@@ -1601,6 +1643,9 @@ pub struct RusshSftpClient {
     raw_sftp: Option<Arc<RawSftpSession>>,
     owner_names: BTreeMap<u32, Option<String>>,
     owner_lookup_disabled: bool,
+    /// 会话是否走「堡垒机直连」（会话即堡垒机，SFTP 根目录由 JumpServer 的
+    /// 「文件管理根目录」决定）。用于把「路径不存在」翻译成用户能行动的话。
+    bastion_direct: bool,
 }
 
 impl RusshSftpClient {
@@ -1613,13 +1658,15 @@ impl RusshSftpClient {
             raw_sftp,
             owner_names: BTreeMap::new(),
             owner_lookup_disabled: false,
+            bastion_direct: false,
         }
     }
 
     pub async fn connect_with_client(client: Arc<Mutex<RusshClient>>) -> Result<Self> {
-        let channel = {
+        let (channel, bastion_direct) = {
             let mut guard = client.lock().await;
-            guard.open_raw_channel().await?
+            let bastion_direct = guard.is_bastion_direct();
+            (guard.open_raw_channel().await?, bastion_direct)
         };
         channel.request_subsystem(true, "sftp").await?;
         let sftp = SftpSession::new_with_config(
@@ -1635,6 +1682,7 @@ impl RusshSftpClient {
             raw_sftp: None,
             owner_names: BTreeMap::new(),
             owner_lookup_disabled: false,
+            bastion_direct,
         })
     }
 
@@ -2389,6 +2437,79 @@ fn build_sftp_russh_config(
     }))
 }
 
+impl RusshSftpClient {
+    async fn list_dir_untimed(
+        &mut self,
+        path: &str,
+        bastion_direct: bool,
+    ) -> Result<Vec<FileEntry>> {
+        let dir_entries = self.sftp.read_dir(path).await.map_err(|e| {
+            anyhow!(
+                "{}",
+                describe_list_dir_error(path, bastion_direct, &e.to_string())
+            )
+        })?;
+
+        let mut entries = Vec::new();
+
+        for entry in dir_entries {
+            let file_name = entry.file_name();
+
+            if file_name == "." || file_name == ".." {
+                continue;
+            }
+            if !is_valid_remote_entry_name(&file_name) {
+                return Err(anyhow!(
+                    "Refusing unsafe SFTP directory entry name in {}: {:?}",
+                    path,
+                    file_name
+                ));
+            }
+
+            let metadata = entry.metadata();
+            let size = metadata.size.unwrap_or(0);
+            let is_dir = metadata.is_dir();
+            let permissions = metadata.permissions.unwrap_or(0);
+            let uid = metadata.uid;
+            let gid = metadata.gid;
+            let user = metadata.user.clone();
+            let group = metadata.group.clone();
+
+            let modified = metadata
+                .mtime
+                .and_then(|mtime| UNIX_EPOCH.checked_add(Duration::from_secs(mtime as u64)))
+                .unwrap_or_else(SystemTime::now);
+
+            entries.push(FileEntry {
+                name: file_name.clone(),
+                path: file_name,
+                size,
+                modified,
+                is_dir,
+                permissions,
+                uid,
+                gid,
+                user,
+                group,
+            });
+        }
+
+        self.resolve_entry_owners(&mut entries).await;
+
+        entries.sort_by(|a, b| {
+            if a.is_dir == b.is_dir {
+                a.name.to_lowercase().cmp(&b.name.to_lowercase())
+            } else if a.is_dir {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            }
+        });
+
+        Ok(entries)
+    }
+}
+
 #[async_trait]
 impl SftpClient for RusshSftpClient {
     async fn connect(ssh_config: SshConnectConfig) -> Result<Self> {
@@ -2598,6 +2719,7 @@ impl SftpClient for RusshSftpClient {
             raw_sftp: None,
             owner_names: BTreeMap::new(),
             owner_lookup_disabled: false,
+            bastion_direct,
         })
     }
 }
@@ -2605,69 +2727,8 @@ impl SftpClient for RusshSftpClient {
 #[async_trait]
 impl RemoteFileClient for RusshSftpClient {
     async fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>> {
-        let dir_entries = self
-            .sftp
-            .read_dir(path)
-            .await
-            .map_err(|e| anyhow!("Failed to read directory {}: {}", path, e))?;
-
-        let mut entries = Vec::new();
-
-        for entry in dir_entries {
-            let file_name = entry.file_name();
-
-            if file_name == "." || file_name == ".." {
-                continue;
-            }
-            if !is_valid_remote_entry_name(&file_name) {
-                return Err(anyhow!(
-                    "Refusing unsafe SFTP directory entry name in {}: {:?}",
-                    path,
-                    file_name
-                ));
-            }
-
-            let metadata = entry.metadata();
-            let size = metadata.size.unwrap_or(0);
-            let is_dir = metadata.is_dir();
-            let permissions = metadata.permissions.unwrap_or(0);
-            let uid = metadata.uid;
-            let gid = metadata.gid;
-            let user = metadata.user.clone();
-            let group = metadata.group.clone();
-
-            let modified = metadata
-                .mtime
-                .and_then(|mtime| UNIX_EPOCH.checked_add(Duration::from_secs(mtime as u64)))
-                .unwrap_or_else(SystemTime::now);
-
-            entries.push(FileEntry {
-                name: file_name.clone(),
-                path: file_name,
-                size,
-                modified,
-                is_dir,
-                permissions,
-                uid,
-                gid,
-                user,
-                group,
-            });
-        }
-
-        self.resolve_entry_owners(&mut entries).await;
-
-        entries.sort_by(|a, b| {
-            if a.is_dir == b.is_dir {
-                a.name.to_lowercase().cmp(&b.name.to_lowercase())
-            } else if a.is_dir {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Greater
-            }
-        });
-
-        Ok(entries)
+        let bastion_direct = self.bastion_direct;
+        with_directory_list_timeout(path, self.list_dir_untimed(path, bastion_direct)).await
     }
 
     async fn stat(&mut self, path: &str) -> Result<Option<PathMetadata>> {
@@ -4960,3 +5021,53 @@ mod short_read_tests;
 #[cfg(test)]
 #[path = "russh_impl_directory_concurrency_tests.rs"]
 mod directory_concurrency_tests;
+
+/// 堡垒机直连下目录浏览的用户可读性保障：超时与「根目录受限」的解释。
+#[cfg(test)]
+mod jump_listing_guard_tests {
+    use super::*;
+
+    #[test]
+    fn bastion_direct_missing_path_explains_restricted_sftp_root() {
+        let message = describe_list_dir_error("/root", true, "No such file: file does not exist");
+
+        assert!(message.contains("/root"), "{message}");
+        assert!(message.contains("文件管理根目录"), "{message}");
+        assert!(
+            !message.contains("Failed to read directory"),
+            "堡垒机直连不该把原始英文错误直接透给用户: {message}"
+        );
+    }
+
+    #[test]
+    fn normal_server_missing_path_keeps_failed_prefix() {
+        let message = describe_list_dir_error("/root", false, "No such file: file does not exist");
+
+        assert!(
+            message.starts_with("Failed to read directory /root"),
+            "{message}"
+        );
+        assert!(!message.contains("文件管理根目录"), "{message}");
+    }
+
+    #[test]
+    fn other_failures_are_passed_through_verbatim() {
+        let message = describe_list_dir_error("/data", true, "Permission denied");
+
+        assert_eq!(message, "Failed to read directory /data: Permission denied");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn directory_listing_times_out_with_path_and_limit() {
+        let result: Result<()> =
+            with_directory_list_timeout("/tmp", std::future::pending::<Result<()>>()).await;
+
+        let message = result.expect_err("永不完结的目录枚举必须超时").to_string();
+        assert!(message.contains("/tmp"), "{message}");
+        assert!(message.contains("超时"), "{message}");
+        assert!(
+            message.contains(&DIRECTORY_LIST_TIMEOUT.as_secs().to_string()),
+            "{message}"
+        );
+    }
+}
