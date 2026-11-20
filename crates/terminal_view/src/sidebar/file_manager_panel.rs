@@ -1050,6 +1050,14 @@ fn should_apply_directory_result(current_path: &str, listed_path: &str) -> bool 
     current_path == listed_path
 }
 
+/// 一次读目录失败是否该归因于「跟随终端目录」。
+///
+/// 条件是这个目录本来就是终端上报、面板才去切过去的：只有这种失败才值得
+/// 停用跟随；用户自己点进去的目录失败仍走原来的回退逻辑。
+fn should_suspend_follow(current_path: &str, follow_target: Option<&str>) -> bool {
+    follow_target.is_some_and(|target| target == current_path)
+}
+
 fn is_current_generation(current: u64, expected: u64) -> bool {
     current == expected
 }
@@ -1473,6 +1481,13 @@ pub struct FileManagerPanel {
     loading: bool,
     /// 读目录失败后的自动回退额度
     navigation_recovery: NavigationRecovery,
+
+    /// 最近一次由「跟随终端目录」发起的导航目标。
+    ///
+    /// 终端里的路径属于远端真实文件系统，而受限会话（堡垒机文件管理根目录）
+    /// 只暴露一小块，两者经常对不上。记住是谁发起的导航，失败时才能判断
+    /// 该不该自动停用跟随，而不是每 cd 一次弹一次错误。
+    follow_navigation_target: Option<String>,
     /// 读目录失败通知的节流（同一条错误短时间内只弹一次）
     navigation_failure_notice: NotificationThrottle,
     /// 文件复制/剪切缓冲区
@@ -1639,6 +1654,7 @@ impl FileManagerPanel {
             focus_handle,
             loading: false,
             navigation_recovery: NavigationRecovery::default(),
+            follow_navigation_target: None,
             navigation_failure_notice: NotificationThrottle::new(NAVIGATION_FAILURE_NOTICE_WINDOW),
             file_clipboard: None,
             favorite_paths,
@@ -1849,6 +1865,12 @@ impl FileManagerPanel {
 
     fn recover_from_navigation_error(&mut self, message: String, cx: &mut Context<Self>) {
         self.loading = false;
+        let follow_target = self.follow_navigation_target.take();
+        if should_suspend_follow(&self.current_path, follow_target.as_deref()) {
+            self.suspend_follow_after_restricted_root(cx);
+            return;
+        }
+
         let fallback_path = self.navigation_recovery.next_fallback(
             &self.current_path,
             self.working_dir_hint.as_deref(),
@@ -1882,6 +1904,42 @@ impl FileManagerPanel {
         self.connection_state = ConnectionState::Connected;
         self.current_path = fallback_path.clone();
         self.repair_history_after_navigation_failure(&failed_path, &fallback_path);
+        self.refresh_dir(cx);
+    }
+
+    /// 跟随终端目录失败后停用跟随，退到根目录，并只提示一次。
+    ///
+    /// 受限会话（堡垒机直连常见）只开放一个文件根目录，终端里的 cwd 在远端
+    /// 不存在。此时继续跟随只会每 `cd` 一次报一次错，所以直接停掉跟随、回到
+    /// 根目录让用户手动浏览；开关状态通过事件交回宿主持久化。
+    fn suspend_follow_after_restricted_root(&mut self, cx: &mut Context<Self>) {
+        tracing::info!(
+            path = %self.current_path,
+            "跟随终端目录失败，已停用跟随并回到根目录"
+        );
+        if self.follow_terminal_cwd {
+            self.follow_terminal_cwd = false;
+            cx.emit(FileManagerPanelEvent::ToggleFollowTerminalCwd);
+        }
+
+        let notice = t!("FileManager.follow_suspended_restricted_root").to_string();
+        if self.navigation_failure_notice.should_show(&notice) {
+            if let Some(window) = cx.active_window() {
+                let notification = Notification::error(notice).autohide(true);
+                let _ = window.update(cx, |_, window, cx| {
+                    window.push_notification(notification, cx);
+                });
+            }
+        }
+
+        self.connection_state = ConnectionState::Connected;
+        let root = "/".to_string();
+        if self.current_path != root {
+            let failed_path = self.current_path.clone();
+            self.current_path = root.clone();
+            self.repair_history_after_navigation_failure(&failed_path, &root);
+        }
+        self.navigation_recovery.reset();
         self.refresh_dir(cx);
     }
 
@@ -1992,6 +2050,7 @@ impl FileManagerPanel {
         if path == self.current_path {
             return;
         }
+        self.follow_navigation_target = Some(path.clone());
         self.navigate_to(path, cx);
     }
 
@@ -2472,6 +2531,7 @@ impl FileManagerPanel {
                 match result {
                     Ok(Ok(entries)) => {
                         this.navigation_recovery.reset();
+                        this.follow_navigation_target = None;
                         this.items = entries
                             .into_iter()
                             .filter(|e| e.name != "." && e.name != "..")
@@ -4278,6 +4338,7 @@ impl FileManagerPanel {
             .next()
             .unwrap_or(&remote_path)
             .to_string();
+        // 远程名随后会 join 到用户选的本地目录，必须用本机落盘校验。
         if !sftp::is_valid_remote_entry_name(&remote_name) {
             window.push_notification(Notification::error(t!("FileManager.invalid_name")), cx);
             return;
@@ -6500,6 +6561,23 @@ impl Render for FileManagerPanel {
             ConnectionState::Connected => self.render_file_list(cx).into_any_element(),
             ConnectionState::Error(ref msg) => self.render_error(msg, cx).into_any_element(),
         })
+    }
+}
+
+#[cfg(test)]
+mod follow_suspension_tests {
+    use super::should_suspend_follow;
+
+    #[test]
+    fn follow_failure_is_attributed_to_following_only_for_the_same_path() {
+        assert!(should_suspend_follow("/home/u", Some("/home/u")));
+    }
+
+    #[test]
+    fn failure_of_a_path_the_user_opened_is_not_blamed_on_following() {
+        // 用户自己点进去的目录：即使刚刚跟随失败过，也不该因此停用跟随。
+        assert!(!should_suspend_follow("/home/u", None));
+        assert!(!should_suspend_follow("/var/log", Some("/home/u")));
     }
 }
 
