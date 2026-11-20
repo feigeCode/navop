@@ -160,6 +160,9 @@ if df -kP -x tmpfs -x devtmpfs -x overlay >/dev/null 2>&1; then
 fi
 
 echo "network:"
+if [ -r /proc/uptime ]; then
+  emit_number "uptime" "$(cut -d' ' -f1 /proc/uptime)"
+fi
 echo "  interfaces:"
 if [ -d /sys/class/net ]; then
   for nic in /sys/class/net/*; do
@@ -501,9 +504,10 @@ struct ProcessStats {
     top_memory: Vec<ProcessEntry>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct NetworkTotals {
     interfaces: Vec<NetworkInterfaceTotal>,
+    sampled_at_uptime: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -525,7 +529,14 @@ impl NetworkTotals {
                     tx_total,
                 })
                 .collect(),
+            sampled_at_uptime: None,
         }
+    }
+
+    #[cfg(test)]
+    fn with_uptime(mut self, uptime: f64) -> Self {
+        self.sampled_at_uptime = Some(uptime);
+        self
     }
 }
 
@@ -1860,11 +1871,16 @@ pub fn sample_network_rates(
         }
     }
 
+    let interval_secs = if interval_secs > 0.0 {
+        interval_secs
+    } else {
+        1.0
+    };
     NetworkRateSample {
         rx_delta,
         tx_delta,
-        rx_bytes_per_sec: rx_delta as f64 / interval_secs.max(1.0),
-        tx_bytes_per_sec: tx_delta as f64 / interval_secs.max(1.0),
+        rx_bytes_per_sec: rx_delta as f64 / interval_secs,
+        tx_bytes_per_sec: tx_delta as f64 / interval_secs,
     }
 }
 
@@ -2137,6 +2153,7 @@ fn parse_network_totals(section: &BTreeMap<String, String>) -> NetworkTotals {
                 })
             })
             .collect(),
+        sampled_at_uptime: section.get("uptime").and_then(|value| parse_f64(value)),
     }
 }
 
@@ -2285,10 +2302,12 @@ pub struct HostResourceUsage {
     pub memory_percent: Option<f64>,
     pub disk_total_kib: Option<u64>,
     pub disk_percent: Option<f64>,
+    pub network_rx_bytes_per_sec: Option<f64>,
+    pub network_tx_bytes_per_sec: Option<f64>,
 }
 
 impl HostResourceUsage {
-    /// 生成卡片上的一行摘要；三项都拿不到时返回 None。
+    /// 生成卡片上的一行摘要；所有指标都拿不到时返回 None。
     pub fn summary(&self) -> Option<String> {
         let mut parts = Vec::new();
         if let Some(cpu) = self.cpu_percent {
@@ -2300,8 +2319,23 @@ impl HostResourceUsage {
         if let Some(disk) = self.disk_percent {
             parts.push(format!("磁盘 {disk:.0}%"));
         }
+        if let (Some(rx), Some(tx)) = (self.network_rx_bytes_per_sec, self.network_tx_bytes_per_sec)
+        {
+            parts.push(format!(
+                "网速 ↑{} ↓{}",
+                format_bytes_per_sec(tx),
+                format_bytes_per_sec(rx)
+            ));
+        }
         (!parts.is_empty()).then(|| parts.join(" · "))
     }
+}
+
+#[derive(Default)]
+struct ProbeSample {
+    uptime: Option<f64>,
+    cpu_snapshots: Vec<CpuSnapshot>,
+    network_totals: NetworkTotals,
 }
 
 /// 用一次性后台 SSH 会话采集远端资源占用（#279）。
@@ -2317,14 +2351,22 @@ pub async fn probe_host_resource_usage(
     let parsed = payload.and_then(|payload| parse_server_stats(&payload));
     let stats = parsed?;
     tokio::time::sleep(Duration::from_millis(250)).await;
-    let next_cpu_snapshot = collect_cpu_snapshot(session_manager.clone())
+    let next_sample = collect_probe_sample(session_manager.clone())
         .await
         .ok()
         .unwrap_or_default();
     session_manager.disconnect().await.ok();
     let cpu_percent = (stats.cpu_snapshots.iter().any(|item| item.name == "cpu")
-        && next_cpu_snapshot.iter().any(|item| item.name == "cpu"))
-    .then(|| sample_cpu_usage(&stats.cpu_snapshots, &next_cpu_snapshot).total_percent);
+        && next_sample
+            .cpu_snapshots
+            .iter()
+            .any(|item| item.name == "cpu"))
+    .then(|| sample_cpu_usage(&stats.cpu_snapshots, &next_sample.cpu_snapshots).total_percent);
+    let network_rate = stats.network_totals.as_ref().and_then(|previous| {
+        network_sampling_interval(previous, &next_sample.network_totals).map(|interval_secs| {
+            sample_network_rates(previous, &next_sample.network_totals, interval_secs)
+        })
+    });
     let disk_total_kib = stats
         .disks
         .iter()
@@ -2357,18 +2399,94 @@ pub async fn probe_host_resource_usage(
         memory_percent: stats.memory.as_ref().map(|memory| memory.used_percent()),
         disk_total_kib,
         disk_percent: stats.disks.iter().map(|disk| disk.percent).reduce(f64::max),
+        network_rx_bytes_per_sec: network_rate.as_ref().map(|sample| sample.rx_bytes_per_sec),
+        network_tx_bytes_per_sec: network_rate.as_ref().map(|sample| sample.tx_bytes_per_sec),
     })
 }
 
-async fn collect_cpu_snapshot(session_manager: Arc<SshSessionManager>) -> Result<Vec<CpuSnapshot>> {
+async fn collect_probe_sample(session_manager: Arc<SshSessionManager>) -> Result<ProbeSample> {
     let output = exec_capture(
         &session_manager,
-        "awk '/^cpu[0-9]* / { total = $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9 + $10 + $11; print $1, $2, $4, $5, total }' /proc/stat",
+        r#"
+if [ -r /proc/uptime ]; then
+  printf 'uptime %s\n' "$(cut -d' ' -f1 /proc/uptime)"
+fi
+awk '/^cpu[0-9]* / { total = $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9 + $10 + $11; print "cpu", $1, $2, $4, $5, total }' /proc/stat
+if [ -d /sys/class/net ]; then
+  for nic in /sys/class/net/*; do
+    name="$(basename "$nic")"
+    case "$name" in
+      lo|docker0|veth*|br-*) continue ;;
+    esac
+    [ -r "$nic/statistics/rx_bytes" ] || continue
+    printf 'network %s %s %s\n' "$name" "$(cat "$nic/statistics/rx_bytes")" "$(cat "$nic/statistics/tx_bytes")"
+  done
+fi
+"#,
     )
     .await?;
-    Ok(parse_cpu_snapshot_output(&output))
+    Ok(parse_probe_sample_output(&output))
 }
 
+fn parse_probe_sample_output(output: &str) -> ProbeSample {
+    let mut sample = ProbeSample::default();
+    for line in output.lines() {
+        let mut fields = line.split_whitespace();
+        match fields.next() {
+            Some("uptime") => {
+                sample.uptime = fields.next().and_then(|value| value.parse().ok());
+            }
+            Some("cpu") => {
+                let Some(name) = fields.next() else {
+                    continue;
+                };
+                let Some(load_user) = fields.next().and_then(|value| value.parse().ok()) else {
+                    continue;
+                };
+                let Some(load_system) = fields.next().and_then(|value| value.parse().ok()) else {
+                    continue;
+                };
+                let Some(load_idle) = fields.next().and_then(|value| value.parse().ok()) else {
+                    continue;
+                };
+                let Some(load_total) = fields.next().and_then(|value| value.parse().ok()) else {
+                    continue;
+                };
+                sample.cpu_snapshots.push(CpuSnapshot {
+                    name: name.to_string(),
+                    load_user,
+                    load_system,
+                    load_idle,
+                    load_total,
+                });
+            }
+            Some("network") => {
+                let Some(name) = fields.next() else {
+                    continue;
+                };
+                let Some(rx_total) = fields.next().and_then(|value| value.parse().ok()) else {
+                    continue;
+                };
+                let Some(tx_total) = fields.next().and_then(|value| value.parse().ok()) else {
+                    continue;
+                };
+                sample
+                    .network_totals
+                    .interfaces
+                    .push(NetworkInterfaceTotal {
+                        name: name.to_string(),
+                        rx_total,
+                        tx_total,
+                    });
+            }
+            _ => {}
+        }
+    }
+    sample.network_totals.sampled_at_uptime = sample.uptime;
+    sample
+}
+
+#[cfg(test)]
 fn parse_cpu_snapshot_output(output: &str) -> Vec<CpuSnapshot> {
     output
         .lines()
@@ -2383,6 +2501,12 @@ fn parse_cpu_snapshot_output(output: &str) -> Vec<CpuSnapshot> {
             })
         })
         .collect()
+}
+
+fn network_sampling_interval(previous: &NetworkTotals, current: &NetworkTotals) -> Option<f64> {
+    let previous_uptime = previous.sampled_at_uptime?;
+    let current_uptime = current.sampled_at_uptime?;
+    (current_uptime > previous_uptime).then_some(current_uptime - previous_uptime)
 }
 
 /// 执行简单远端命令（不推送脚本），用于 legacy 清理等 best-effort 场景。
@@ -2510,8 +2634,9 @@ mod tests {
         AcceleratorVendor, CpuSnapshot, HistoryLimit, HostResourceUsage, MemoryStats,
         NetworkTotals, ProcessEntry, REMOTE_MONITOR_SCRIPT, build_collect_command,
         build_legacy_cleanup_command, history_points, history_tick_margin,
-        parse_cpu_snapshot_output, parse_server_stats, push_history_point, sample_cpu_usage,
-        sample_network_rates, split_sections,
+        network_sampling_interval, parse_cpu_snapshot_output, parse_probe_sample_output,
+        parse_server_stats, push_history_point, sample_cpu_usage, sample_network_rates,
+        split_sections,
     };
 
     #[test]
@@ -2525,6 +2650,8 @@ mod tests {
                 memory_percent: None,
                 disk_total_kib: None,
                 disk_percent: Some(51.6),
+                network_rx_bytes_per_sec: None,
+                network_tx_bytes_per_sec: None,
             }
             .summary()
             .as_deref(),
@@ -2539,9 +2666,31 @@ mod tests {
                 memory_percent: None,
                 disk_total_kib: None,
                 disk_percent: None,
+                network_rx_bytes_per_sec: None,
+                network_tx_bytes_per_sec: None,
             }
             .summary(),
             None
+        );
+    }
+
+    #[test]
+    fn host_resource_usage_summary_includes_network_rates() {
+        assert_eq!(
+            HostResourceUsage {
+                os_name: None,
+                cpu_cores: None,
+                cpu_percent: None,
+                memory_total_kib: None,
+                memory_percent: None,
+                disk_total_kib: None,
+                disk_percent: None,
+                network_rx_bytes_per_sec: Some(3_000.0),
+                network_tx_bytes_per_sec: Some(1_536.0),
+            }
+            .summary()
+            .as_deref(),
+            Some("网速 ↑1.5K/s ↓2.9K/s")
         );
     }
 
@@ -2557,6 +2706,39 @@ mod tests {
         assert_eq!(snapshots[0].load_system, 40);
         assert_eq!(snapshots[0].load_idle, 860);
         assert_eq!(snapshots[0].load_total, 1000);
+    }
+
+    #[test]
+    fn probe_sample_parser_reads_cpu_network_and_remote_uptime() {
+        let sample = parse_probe_sample_output(
+            "uptime 123.25\ncpu cpu 100 40 860 1000\ncpu cpu0 50 20 430 500\nnetwork eth0 4000 5000\nnetwork ens5 8000 9000\n",
+        );
+
+        assert_eq!(sample.uptime, Some(123.25));
+        assert_eq!(sample.cpu_snapshots.len(), 2);
+        assert_eq!(sample.cpu_snapshots[0].name, "cpu");
+        assert_eq!(sample.network_totals.interfaces.len(), 2);
+        assert_eq!(sample.network_totals.interfaces[1].name, "ens5");
+        assert_eq!(sample.network_totals.interfaces[1].rx_total, 8000);
+        assert_eq!(sample.network_totals.interfaces[1].tx_total, 9000);
+        assert_eq!(sample.network_totals.sampled_at_uptime, Some(123.25));
+    }
+
+    #[test]
+    fn network_sampling_interval_uses_remote_uptime_fraction() {
+        let previous = NetworkTotals::new(vec![("eth0", 1_000, 2_000)]).with_uptime(10.25);
+        let current = NetworkTotals::new(vec![("eth0", 1_150, 2_300)]).with_uptime(10.5);
+
+        assert_eq!(network_sampling_interval(&previous, &current), Some(0.25));
+    }
+
+    #[test]
+    fn host_probe_samples_rediscover_network_totals_with_uptime() {
+        let source = include_str!("server_monitor_panel.rs");
+
+        assert!(REMOTE_MONITOR_SCRIPT.contains(r#"emit_number "uptime""#));
+        assert!(source.contains(r#"'network %s %s %s\n'"#));
+        assert!(source.contains("network_sampling_interval"));
     }
 
     #[test]
@@ -2798,6 +2980,17 @@ accelerators:
         assert_eq!(sampled.tx_bytes_per_sec.round() as i32, 750);
         assert_eq!(sampled.rx_delta, 1_200);
         assert_eq!(sampled.tx_delta, 1_500);
+    }
+
+    #[test]
+    fn sample_network_rates_preserves_subsecond_probe_interval() {
+        let previous = NetworkTotals::new(vec![("eth0", 1_000, 2_000)]);
+        let current = NetworkTotals::new(vec![("eth0", 1_250, 2_500)]);
+
+        let sampled = sample_network_rates(&previous, &current, 0.25);
+
+        assert_eq!(sampled.rx_bytes_per_sec, 1_000.0);
+        assert_eq!(sampled.tx_bytes_per_sec, 2_000.0);
     }
 
     #[test]

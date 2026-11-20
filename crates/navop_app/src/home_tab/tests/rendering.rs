@@ -634,20 +634,26 @@ fn connection_card_and_row_require_the_first_click_for_double_click_open() {
 }
 
 #[test]
-fn host_metrics_are_wired_to_card_list_and_tree_views() {
+fn host_metrics_are_wired_only_to_the_list_view() {
     let host_metrics = include_str!("../host_metrics.rs");
     let card = include_str!("../connection_card_content.rs");
     let list = include_str!("../connection_list.rs");
     let tree_rows = include_str!("../../persistent_connection_sidebar/rows.rs");
 
     assert!(
-        card.contains("render_host_metrics_card"),
-        "卡片必须使用适配窄宽度的紧凑资源状态带"
+        !card.contains("render_host_metrics_card"),
+        "卡片不应显示远端资源条，避免与无资源卡片产生高度和内容差异"
     );
     let card_layout = include_str!("../connection_card.rs");
     assert!(
-        card_layout.contains("shows_host_metrics") && card_layout.contains("5.5"),
-        "卡片必须仅在需要资源状态带时预留第二行高度"
+        card_layout.contains("const CONNECTION_CARD_HEIGHT_REMS: f32 = 4.5")
+            && card_layout.contains("CONNECTION_CARD_HEIGHT_REMS")
+            && card_layout.contains(".h(gpui::rems(CONNECTION_CARD_HEIGHT_REMS))"),
+        "卡片布局必须使用统一紧凑高度"
+    );
+    assert!(
+        !card_layout.contains("let card_height = if shows_host_metrics"),
+        "卡片高度不得再依赖资源条是否显示"
     );
     assert!(
         list.contains("render_host_metrics_detail"),
@@ -658,16 +664,38 @@ fn host_metrics_are_wired_to_card_list_and_tree_views() {
         "列表中的地址与资源标签应共用一行并在窄宽度下自然换行"
     );
     assert!(
-        tree_rows.contains("render_host_metrics_compact"),
-        "树形布局和默认导航布局左侧树必须显示紧凑资源仪表"
+        !tree_rows.contains("render_host_metrics_compact"),
+        "树形布局应保留类型标签，不再用资源仪表替换它"
     );
     assert!(
         host_metrics.contains("home_show_host_metrics"),
-        "所有布局共用的摘要必须尊重显示开关"
+        "列表资源信息必须尊重显示开关"
+    );
+    assert!(
+        host_metrics.contains("self.connection_layout != ConnectionLayout::List")
+            && host_metrics.contains("self.connection_layout == ConnectionLayout::List"),
+        "资源探测必须只在列表布局启用，卡片和树形不得建立隐藏的后台 SSH 会话"
     );
     assert!(
         host_metrics.contains("Progress::new"),
         "资源占用应使用进度条表达，不能退回纯文字摘要"
+    );
+    assert!(
+        host_metrics.contains("render_host_metric_track")
+            && host_metrics.contains("HOST_METRIC_TRACK_WIDTH_REMS")
+            && host_metrics.contains(".w_10()")
+            && host_metrics.contains(".text_right()"),
+        "列表资源项必须使用固定宽度的标签、右对齐百分比和进度轨道，保证跨行对齐"
+    );
+    assert!(
+        host_metrics.contains("accessibility_label(accessibility_label)"),
+        "进度条必须为辅助技术提供带标签与数值的完整描述"
+    );
+    assert!(
+        host_metrics.contains("render_host_network_track")
+            && host_metrics.contains("network_rx_bytes_per_sec")
+            && host_metrics.contains("network_tx_bytes_per_sec"),
+        "列表与卡片必须显示远端上下行网络速率"
     );
     assert!(
         host_metrics.contains("Tooltip::new"),

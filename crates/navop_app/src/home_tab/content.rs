@@ -12,6 +12,9 @@ impl HomePage {
     ) {
         self.connection_layout = layout.into();
         self.sync_sidebar_home_embedded(cx);
+        if self.connection_layout == ConnectionLayout::List {
+            self.refresh_host_metrics(cx);
+        }
         cx.notify();
     }
 

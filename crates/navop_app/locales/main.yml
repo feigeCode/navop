@@ -204,6 +204,18 @@ Home:
     en: Disk
     zh-CN: 磁盘
     zh-HK: 磁碟
+  host_metrics_network_label:
+    en: Network
+    zh-CN: 网速
+    zh-HK: 網速
+  host_metrics_network_up:
+    en: "Upload %{value}"
+    zh-CN: "上行 %{value}"
+    zh-HK: "上行 %{value}"
+  host_metrics_network_down:
+    en: "Download %{value}"
+    zh-CN: "下行 %{value}"
+    zh-HK: "下行 %{value}"
   host_metrics_cores:
     en: "%{count} cores"
     zh-CN: "%{count} 核"
@@ -2946,9 +2958,9 @@ Settings:
         zh-CN: 显示远端资源占用
         zh-HK: 顯示遠端資源佔用
       show_host_metrics_desc:
-        en: Collect the operating system, CPU cores, memory and disk capacity and usage of SSH servers with a background session, then show them across connection cards, lists and trees without opening a terminal.
-        zh-CN: 用后台 SSH 会话采集服务器的系统、CPU 核数、内存与磁盘容量及占用，无需打开终端即可在连接卡片、列表和树中看到
-        zh-HK: 用後台 SSH 會話採集伺服器的系統、CPU 核心數、記憶體與磁碟容量及佔用，無需開啟終端即可在連線卡片、列表和樹狀檢視中看到
+        en: Collect SSH server system, CPU, memory, disk and network usage with a background session and show them in the connection list without opening a terminal.
+        zh-CN: 用后台 SSH 会话采集服务器的系统、CPU、内存、磁盘与网络占用，无需打开终端即可在连接列表中看到
+        zh-HK: 用後台 SSH 會話採集伺服器的系統、CPU、記憶體、磁碟與網路佔用，無需開啟終端即可在連線列表中看到
       home_layout:
         en: Home Connection Layout
         zh-CN: 主页连接布局
