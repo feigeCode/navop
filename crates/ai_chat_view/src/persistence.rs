@@ -8,7 +8,7 @@
 //! DB 操作为同步、低频(每轮结束保存一次 / 切换会话时读取一次)、载荷小,直接在
 //! 调用线程执行,沿用项目既有的同步 Repository 调用风格。
 
-use agent_runtime::{AcpSessionRef, HistoryItem, Session, SessionSnapshot};
+use agent_runtime::{AcpSessionRef, HistoryItem, Session, SessionHost, SessionSnapshot};
 use one_core::{
     llm::chat_history::{AgentSessionRepository, ChatMessage, MessageRepository},
     storage::GlobalStorageState,
@@ -28,10 +28,21 @@ const MAX_TITLE_CHARS: usize = 40;
 /// 否则写本次传入的当前工作区。之后无论外壳切到哪个工作区，该会话都留在
 /// 首次落盘时的工作区（侧栏分组与底部新建对话下拉都以此为准）。
 /// 不需要归属时传 `None`。
+#[cfg(test)]
 pub fn save_session_with_workspace(
     cx: &App,
     session: &Session,
     workspace_root: Option<&str>,
+) -> Option<(String, i64)> {
+    save_session_with_context(cx, session, workspace_root, None)
+}
+
+/// 带工作区与 SSH 主机归属定格的保存。
+pub fn save_session_with_context(
+    cx: &App,
+    session: &Session,
+    workspace_root: Option<&str>,
+    host: Option<SessionHost>,
 ) -> Option<(String, i64)> {
     let mut snapshot = session.snapshot();
     if snapshot.history.is_empty() {
@@ -41,6 +52,11 @@ pub fn save_session_with_workspace(
         && let Some(root) = workspace_root_non_empty(workspace_root)
     {
         snapshot.workspace_root = Some(root);
+    }
+    if snapshot.host.is_none() {
+        snapshot.host = load_snapshot(cx, &snapshot.id.to_string())
+            .and_then(|saved| saved.host)
+            .or(host);
     }
     let title = derive_title(&snapshot);
     let snapshot_json = serde_json::to_string(&snapshot).ok()?;
@@ -133,7 +149,7 @@ fn agent_usage_repository(cx: &App) -> Option<std::sync::Arc<one_core::llm::Agen
 
 /// 保存一条**由外部 agent 承载**的会话（ACP）。
 ///
-/// 与 [`save_session_with_workspace`] 的关键差别：历史在外部 agent 那边，本地
+/// 与 [`save_session_with_context`] 的关键差别：历史在外部 agent 那边，本地
 /// `history` 就是空的，所以这里**不**按「空历史就跳过」处理——按那条规则走，
 /// ACP 会话永远进不了侧栏（用户在会话列表里看不到自己刚聊过的一切）。
 /// 本地只存「这个会话指向哪个 agent 的哪条协议会话」加一个可读标题。
@@ -145,11 +161,25 @@ fn agent_usage_repository(cx: &App) -> Option<std::sync::Arc<one_core::llm::Agen
 /// `mark_active` 区分「真有过动静」与「只是点开看一眼」：只有前者才把侧栏时间
 /// 顶到当前（发送消息 / 一轮结束）。打开历史会话、接上 agent 这类**被动**落盘
 /// 传 `false`，否则点一下会话就会把它排到列表最前面。
+#[cfg(test)]
 pub fn save_acp_session(
     cx: &App,
     uid: &str,
     title: &str,
     workspace_root: Option<&str>,
+    acp: AcpSessionRef,
+    mark_active: bool,
+) -> Option<(String, i64)> {
+    save_acp_session_with_context(cx, uid, title, workspace_root, None, acp, mark_active)
+}
+
+/// 保存 ACP 会话，并允许外壳首次写入固定的工作区与主机归属。
+pub fn save_acp_session_with_context(
+    cx: &App,
+    uid: &str,
+    title: &str,
+    workspace_root: Option<&str>,
+    host: Option<SessionHost>,
     acp: AcpSessionRef,
     mark_active: bool,
 ) -> Option<(String, i64)> {
@@ -163,6 +193,9 @@ pub fn save_acp_session(
         && let Some(root) = workspace_root_non_empty(workspace_root)
     {
         snapshot.workspace_root = Some(root);
+    }
+    if snapshot.host.is_none() {
+        snapshot.host = host;
     }
     let title = match title.trim() {
         "" => derive_title(&snapshot),
@@ -191,6 +224,7 @@ fn empty_snapshot(uid: &str) -> SessionSnapshot {
         system_instruction: None,
         skills: agent_runtime::SkillContext::new(),
         workspace_root: None,
+        host: None,
         draft: None,
         context_tokens: None,
         acp: None,
@@ -252,7 +286,7 @@ fn message_repository(cx: &App) -> Option<std::sync::Arc<MessageRepository>> {
 
 fn list_summaries_by_archived(cx: &App, archived: bool) -> Vec<SessionSummary> {
     // 只取摘要行：`snapshot_json` 本体（实测本机未归档 356 行合计 76.8MB、单条
-    // 最大 19.2MB）不再进入进程内存，工作区归属与外部 agent 来源这两个来自快照的
+    // 最大 19.2MB）不再进入进程内存，工作区、主机与外部 agent 来源这些快照摘要
     // 字段由 SQL 层的 `json_extract` 直接给出。
     //
     // 这里以前是把整列快照读上来、再逐行整体反序列化两次（一次取 workspace_root、
@@ -263,8 +297,13 @@ fn list_summaries_by_archived(cx: &App, archived: bool) -> Vec<SessionSummary> {
         .unwrap_or_default()
         .into_iter()
         .map(|row| {
+            let host = row.host_id.filter(|id| !id.trim().is_empty()).map(|id| {
+                let name = row.host_name.unwrap_or_else(|| id.clone());
+                SessionHost { id, name }
+            });
             SessionSummary::new(row.uid, row.title, row.updated_at)
                 .with_workspace_root(snapshot_workspace_root(row.workspace_root))
+                .with_host(host)
                 .with_external_agent(external_agent_label(row.acp_agent_id))
         })
         .collect()
@@ -392,6 +431,7 @@ mod tests {
             system_instruction: None,
             skills: agent_runtime::SkillContext::new(),
             workspace_root: None,
+            host: None,
             draft: None,
             context_tokens: None,
             acp: None,
@@ -515,11 +555,98 @@ mod tests {
             system_instruction: None,
             skills: agent_runtime::SkillContext::new(),
             workspace_root: None,
+            host: None,
             draft: None,
             context_tokens: None,
             acp: None,
         };
         assert_eq!(derive_title(&snap), "新 Agent 会话");
+    }
+
+    #[gpui::test]
+    fn host_association_round_trips_and_appears_in_summaries(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(GlobalStorageState {
+                storage: test_storage(),
+            });
+        });
+        let session = test_session();
+        session.record_user_input("检查生产主机负载");
+        let host = agent_runtime::SessionHost {
+            id: "ssh-42".into(),
+            name: "生产 API 主机".into(),
+        };
+
+        cx.update(|cx| save_session_with_context(cx, &session, None, Some(host.clone())))
+            .expect("保存带主机的会话");
+        cx.update(|cx| {
+            save_session_with_context(
+                cx,
+                &session,
+                None,
+                Some(agent_runtime::SessionHost {
+                    id: "ssh-99".into(),
+                    name: "另一台主机".into(),
+                }),
+            )
+        })
+        .expect("重复保存不得漂移主机归属");
+
+        let summaries = cx.update(|cx| list_summaries(cx));
+        assert_eq!(Some(&host), summaries[0].host.as_ref());
+        let snapshot = cx
+            .update(|cx| load_snapshot(cx, "sess_persist"))
+            .expect("读回快照");
+        assert_eq!(Some(host), snapshot.host);
+    }
+
+    #[gpui::test]
+    fn acp_host_association_round_trips_and_does_not_drift(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(GlobalStorageState {
+                storage: test_storage(),
+            });
+        });
+        let host = agent_runtime::SessionHost {
+            id: "ssh-7".into(),
+            name: "生产 SSH".into(),
+        };
+        cx.update(|cx| {
+            save_acp_session_with_context(
+                cx,
+                "sess_acp_host",
+                "检查生产服务",
+                None,
+                Some(host.clone()),
+                acp_ref("agent-1", "acp-1"),
+                true,
+            )
+        })
+        .expect("保存带主机的 ACP 会话");
+        cx.update(|cx| {
+            save_acp_session_with_context(
+                cx,
+                "sess_acp_host",
+                "检查生产服务",
+                None,
+                Some(agent_runtime::SessionHost {
+                    id: "ssh-8".into(),
+                    name: "当前另一台主机".into(),
+                }),
+                acp_ref("agent-1", "acp-2"),
+                true,
+            )
+        })
+        .expect("再次保存 ACP 会话");
+
+        let snapshot = cx
+            .update(|cx| load_snapshot(cx, "sess_acp_host"))
+            .expect("读回 ACP 快照");
+        assert_eq!(Some(host.clone()), snapshot.host);
+        assert_eq!(
+            Some(&host),
+            cx.update(|cx| list_summaries(cx))[0].host.as_ref()
+        );
     }
 
     #[gpui::test]

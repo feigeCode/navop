@@ -110,6 +110,10 @@ impl AgentChatView {
             agent_id: agent_id.to_string(),
             session_id,
         };
+        let had_meaningful_session = self.external_session_title(uid).is_some()
+            || self.acp_cached_transcripts.contains(uid)
+            || persistence::load_snapshot(cx, uid)
+                .is_some_and(|snapshot| !snapshot.history.is_empty() || snapshot.host.is_some());
         // 运行时会话也记住这个地址：之后任何一次本地落盘都不会把它抹掉，
         // 切到这条会话时也能凭它知道「这段对话归外部 agent 管」。
         let session_id = SessionId::from_string(uid.to_string());
@@ -145,11 +149,15 @@ impl AgentChatView {
             .unwrap_or_else(|| self.workspace_root.to_string_lossy().into_owned());
         // 落盘与 live 摘要用同一份时间：被动落盘（点开看一眼）时取回的是库里
         // 原有的时间，不会因为打开会话就把它顶到列表最前面；只有真有过动静才提。
-        if let Some((saved_title, updated_at)) = persistence::save_acp_session(
+        let host = had_meaningful_session
+            .then(|| self.session_host_for_save(uid))
+            .flatten();
+        if let Some((saved_title, updated_at)) = persistence::save_acp_session_with_context(
             cx,
             uid,
             &title,
             Some(&workspace_root),
+            host,
             reference,
             mark_active,
         ) {

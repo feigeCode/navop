@@ -290,6 +290,7 @@ impl TerminalView {
         _cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
         let view_copy = view.clone();
+        let view_search = view.clone();
         let view_paste_selection = view.clone();
         let view_paste = view.clone();
         let view_select_all = view.clone();
@@ -303,8 +304,26 @@ impl TerminalView {
         let paste_shortcut = terminal_shortcut_label(TERMINAL_PASTE_SHORTCUT);
         let select_all_shortcut = terminal_shortcut_label(TERMINAL_SELECT_ALL_SHORTCUT);
         let clear_screen_shortcut = terminal_shortcut_label(TERMINAL_CLEAR_SCREEN_SHORTCUT);
+        let search_shortcut = terminal_search_shortcut_label(_cx);
+        let search_label = if search_shortcut.is_empty() {
+            t!("Settings.search")
+        } else {
+            t!("ContextMenu.search_with_shortcut", shortcut = search_shortcut)
+        };
 
         let mut menu = menu
+            // 搜索是只读操作，实时终端与回放都应可用，且不依赖键盘。
+            .item(
+                PopupMenuItem::new(search_label)
+                .icon(IconName::Search)
+                .action(Box::new(SearchForward))
+                .on_click(move |_, window, cx| {
+                    let _ = view_search.update(cx, |this, cx| {
+                        this.open_search(window, cx);
+                    });
+                }),
+            )
+            .separator()
             // 复制
             .item(
                 PopupMenuItem::new(t!(

@@ -46,6 +46,18 @@ pub(super) fn terminal_shortcut_label(shortcut: &str) -> SharedString {
     .into()
 }
 
+/// 搜索入口展示当前生效的快捷键；用户禁用快捷键时不再展示无效提示。
+pub(crate) fn terminal_search_shortcut_label(cx: &App) -> SharedString {
+    shortcuts_for(
+        cx,
+        action_id::TERMINAL_SEARCH_FORWARD,
+        &[TERMINAL_SEARCH_FORWARD_SHORTCUT],
+    )
+    .first()
+    .map(|shortcut| terminal_shortcut_label(shortcut))
+    .unwrap_or_default()
+}
+
 /// 对路径进行简单 shell 转义（用单引号包裹，处理内部单引号）
 pub fn init(cx: &mut App) {
     crate::settings::init_settings(cx);
@@ -119,7 +131,19 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[TERMINAL_SEARCH_FORWARD_SHORTCUT],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, SearchForward, Some(TERMINAL_CONTEXT), cx)),
+        .flat_map(|key| {
+            [TERMINAL_CONTEXT, TERMINAL_SEARCH_CONTEXT]
+                .into_iter()
+                .map(|context| {
+                    one_core::keybindings::load_dynamic_keybinding(
+                        &key,
+                        SearchForward,
+                        Some(context),
+                        cx,
+                    )
+                })
+                .collect::<Vec<_>>()
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -128,7 +152,19 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[TERMINAL_SEARCH_BACKWARD_SHORTCUT],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, SearchBackward, Some(TERMINAL_CONTEXT), cx)),
+        .flat_map(|key| {
+            [TERMINAL_CONTEXT, TERMINAL_SEARCH_CONTEXT]
+                .into_iter()
+                .map(|context| {
+                    one_core::keybindings::load_dynamic_keybinding(
+                        &key,
+                        SearchBackward,
+                        Some(context),
+                        cx,
+                    )
+                })
+                .collect::<Vec<_>>()
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -258,20 +294,22 @@ pub(super) fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         Some(TERMINAL_CONTEXT),
         ClearSelection,
     ));
-    keybindings.extend(rebind_keybindings(
-        cx,
-        action_id::TERMINAL_SEARCH_FORWARD,
-        &[TERMINAL_SEARCH_FORWARD_SHORTCUT],
-        Some(TERMINAL_CONTEXT),
-        SearchForward,
-    ));
-    keybindings.extend(rebind_keybindings(
-        cx,
-        action_id::TERMINAL_SEARCH_BACKWARD,
-        &[TERMINAL_SEARCH_BACKWARD_SHORTCUT],
-        Some(TERMINAL_CONTEXT),
-        SearchBackward,
-    ));
+    for context in [TERMINAL_CONTEXT, TERMINAL_SEARCH_CONTEXT] {
+        keybindings.extend(rebind_keybindings(
+            cx,
+            action_id::TERMINAL_SEARCH_FORWARD,
+            &[TERMINAL_SEARCH_FORWARD_SHORTCUT],
+            Some(context),
+            SearchForward,
+        ));
+        keybindings.extend(rebind_keybindings(
+            cx,
+            action_id::TERMINAL_SEARCH_BACKWARD,
+            &[TERMINAL_SEARCH_BACKWARD_SHORTCUT],
+            Some(context),
+            SearchBackward,
+        ));
+    }
     keybindings.extend(rebind_keybindings(
         cx,
         action_id::TERMINAL_TOGGLE_VI_MODE,

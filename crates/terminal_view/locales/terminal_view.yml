@@ -706,10 +706,14 @@ Settings:
     en: Search...
     zh-CN: 搜索...
     zh-HK: 搜尋...
+  search_open_hint:
+    en: "Open with %{shortcut} or the terminal right-click menu."
+    zh-CN: "可按 %{shortcut}，或使用终端右键菜单打开。"
+    zh-HK: "可按 %{shortcut}，或使用終端右鍵選單開啟。"
   search_shortcuts_hint:
-    en: Press ⌘G for next, ⇧⌘G for previous
-    zh-CN: 按 ⌘G 跳到下一个，按 ⇧⌘G 跳到上一个
-    zh-HK: 按 ⌘G 跳到下一個，按 ⇧⌘G 跳到上一個
+    en: Press Enter for next, Shift+Enter for previous
+    zh-CN: 按 Enter 跳到下一个，按 Shift+Enter 跳到上一个
+    zh-HK: 按 Enter 跳到下一個，按 Shift+Enter 跳到上一個
   font_size:
     en: Font Size
     zh-CN: 字体大小
@@ -1056,6 +1060,10 @@ CustomHighlight:
 
 # 右键菜单
 ContextMenu:
+  search_with_shortcut:
+    en: "Search (%{shortcut})"
+    zh-CN: "搜索（%{shortcut}）"
+    zh-HK: "搜尋（%{shortcut}）"
   copy:
     en: Copy
     zh-CN: 复制

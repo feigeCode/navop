@@ -90,10 +90,7 @@ pub(crate) fn build_ai_workbench_shell(
 ) -> Entity<WorkbenchShell> {
     let theme = workspace_theme(cx);
     let workspace_root = workspace_root(cx);
-    // 工作区文件进 `@` 菜单：连接提及（调用方传入）之后追加，有界收集不拖慢输入框。
-    let mut mentions = mentions;
-    mentions
-        .extend(ai_chat_view::workspace_files::collect_workspace_files_default(&workspace_root));
+    // `@` 只负责连接资源；文件通过附件选择器引入，避免文件淹没连接列表。
     let editor = cx.new(|_| WorkspaceEditor::new(theme));
     let explorer = cx.new(|cx| {
         WorkspaceExplorer::new(

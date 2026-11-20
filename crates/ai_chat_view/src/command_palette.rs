@@ -114,6 +114,8 @@ pub struct PaletteItem {
     /// 右侧补充说明：会话的来源 agent 或所在工作区目录名。
     pub detail: Option<String>,
     pub action: PaletteAction,
+    /// 仅供检索、不额外占用候选项展示空间的主机名等关键词。
+    search_terms: Vec<String>,
 }
 
 impl PaletteItem {
@@ -122,6 +124,7 @@ impl PaletteItem {
             label,
             detail,
             action,
+            search_terms: Vec::new(),
         }
     }
 
@@ -131,6 +134,7 @@ impl PaletteItem {
             label: title,
             detail: Some(snippet),
             action: PaletteAction::OpenSessionAtMatch { uid, query },
+            search_terms: Vec::new(),
         }
     }
 }
@@ -172,6 +176,8 @@ pub struct PaletteSession {
     pub title: String,
     /// 来源 agent 短标识或工作区目录名。
     pub detail: Option<String>,
+    /// 主机名、连接 id 等只参与检索的补充关键词。
+    pub search_terms: Vec<String>,
 }
 
 /// 固定命令项。
@@ -212,6 +218,7 @@ pub fn session_items(sessions: &[PaletteSession]) -> Vec<PaletteItem> {
             label: session.title.clone(),
             detail: session.detail.clone(),
             action: PaletteAction::OpenSession(session.uid.clone()),
+            search_terms: session.search_terms.clone(),
         })
         .collect()
 }
@@ -253,6 +260,10 @@ fn matches_query(item: &PaletteItem, query: &str) -> bool {
             .detail
             .as_deref()
             .is_some_and(|detail| detail.to_lowercase().contains(query))
+        || item
+            .search_terms
+            .iter()
+            .any(|term| term.to_lowercase().contains(query))
 }
 
 /// 上下移动高亮，两端绕回。
@@ -556,17 +567,33 @@ mod tests {
     }
 
     #[test]
+    fn session_items_match_hidden_host_name_and_id() {
+        let items = session_items(&[PaletteSession {
+            uid: "session-1".into(),
+            title: "数据库巡检".into(),
+            detail: None,
+            search_terms: vec!["生产 API 主机".into(), "ssh-42".into()],
+        }]);
+
+        assert_eq!(1, visible_items(&items, "API 主机").len());
+        assert_eq!(1, visible_items(&items, "SSH-42").len());
+        assert!(visible_items(&items, "测试主机").is_empty());
+    }
+
+    #[test]
     fn sessions_become_open_actions() {
         let items = session_items(&[
             PaletteSession {
                 uid: "s-1".into(),
                 title: "预算审批".into(),
                 detail: Some("codex".into()),
+                search_terms: Vec::new(),
             },
             PaletteSession {
                 uid: "s-2".into(),
                 title: "发布说明".into(),
                 detail: None,
+                search_terms: Vec::new(),
             },
         ]);
 
