@@ -339,7 +339,7 @@ fn credential_row(
         .username
         .clone()
         .unwrap_or_else(|| t!("CredentialVault.username_not_set").to_string());
-    let chips = capability_chips(&summary);
+    let chips = capability_chips(&summary, cx);
     v_flex()
         .w_full()
         .gap_3()
@@ -410,38 +410,57 @@ fn credential_row(
         })
 }
 
-fn capability_chips(summary: &CredentialSummary) -> Vec<gpui::AnyElement> {
-    [
-        (
-            summary.has_password,
-            t!("CredentialVault.capability_password").to_string(),
-        ),
-        (
-            summary.has_private_key_path,
-            t!("CredentialVault.capability_private_key_path").to_string(),
-        ),
-        (
-            summary.has_private_key_content,
-            t!("CredentialVault.capability_private_key_content").to_string(),
-        ),
-        (
-            summary.has_passphrase,
-            t!("CredentialVault.capability_passphrase").to_string(),
-        ),
-    ]
-    .into_iter()
-    .filter(|(present, _)| *present)
-    .map(|(_, label)| {
-        div()
-            .rounded_full()
-            .bg(gpui::hsla(0.0, 0.0, 0.5, 0.08))
-            .px_2()
-            .py_0p5()
-            .text_xs()
-            .child(label)
-            .into_any_element()
-    })
-    .collect()
+fn capability_chips(summary: &CredentialSummary, cx: &gpui::App) -> Vec<gpui::AnyElement> {
+    let mut chips: Vec<gpui::AnyElement> = Vec::new();
+    // 有私钥却没有用户名是最常见的一次配置错误：连接时还得靠连接里的用户名兜底。
+    if summary.username.is_none()
+        && (summary.has_private_key_path || summary.has_private_key_content)
+    {
+        chips.push(
+            div()
+                .rounded_full()
+                .bg(cx.theme().warning.opacity(0.15))
+                .px_2()
+                .py_0p5()
+                .text_xs()
+                .text_color(cx.theme().warning)
+                .child(t!("CredentialVault.capability_missing_username").to_string())
+                .into_any_element(),
+        );
+    }
+    chips.extend(
+        [
+            (
+                summary.has_password,
+                t!("CredentialVault.capability_password").to_string(),
+            ),
+            (
+                summary.has_private_key_path,
+                t!("CredentialVault.capability_private_key_path").to_string(),
+            ),
+            (
+                summary.has_private_key_content,
+                t!("CredentialVault.capability_private_key_content").to_string(),
+            ),
+            (
+                summary.has_passphrase,
+                t!("CredentialVault.capability_passphrase").to_string(),
+            ),
+        ]
+        .into_iter()
+        .filter(|(present, _)| *present)
+        .map(|(_, label)| {
+            div()
+                .rounded_full()
+                .bg(gpui::hsla(0.0, 0.0, 0.5, 0.08))
+                .px_2()
+                .py_0p5()
+                .text_xs()
+                .child(label)
+                .into_any_element()
+        }),
+    );
+    chips
 }
 
 fn chip(label: impl Into<gpui::SharedString>, cx: &gpui::App) -> impl IntoElement {
@@ -470,6 +489,20 @@ mod tests {
         assert!(source.contains(".min_h_0()"));
         assert!(source.contains(".overflow_hidden()"));
         assert!(source.contains(".overflow_y_scrollbar()"));
+    }
+
+    #[test]
+    fn credential_rows_warn_about_key_credentials_without_username() {
+        let source = include_str!("render.rs");
+        let chips = source
+            .split("fn capability_chips(")
+            .nth(1)
+            .and_then(|source| source.split("#[cfg(test)]").next())
+            .expect("capability chips source");
+
+        assert!(chips.contains("CredentialVault.capability_missing_username"));
+        assert!(chips.contains("summary.username.is_none()"));
+        assert!(chips.contains("summary.has_private_key_path || summary.has_private_key_content"));
     }
 
     #[test]

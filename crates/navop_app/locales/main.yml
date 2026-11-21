@@ -6280,6 +6280,10 @@ CredentialVault:
     en: Private Key Passphrase
     zh-CN: 私钥密码
     zh-HK: 私鑰密碼
+  capability_missing_username:
+    en: No Username
+    zh-CN: 缺用户名
+    zh-HK: 缺使用者名稱
   not_found:
     en: The credential no longer exists. It may have been deleted.
     zh-CN: 凭据不存在，可能已被删除。
@@ -6366,6 +6370,10 @@ CredentialForm:
     en: Optional username
     zh-CN: 可选用户名
     zh-HK: 選填使用者名稱
+  username_hint:
+    en: SSH key login needs a username. Leave it empty only when you connect with a password.
+    zh-CN: 使用 SSH 密钥登录时需要用户名；只用密码连接时可以留空。
+    zh-HK: 使用 SSH 金鑰登入時需要使用者名稱；僅用密碼連線時可留空。
   password:
     en: Password
     zh-CN: 密码
@@ -6387,17 +6395,41 @@ CredentialForm:
     zh-CN: 生成 SSH 密钥
     zh-HK: 產生 SSH 金鑰
   generate_key_description:
-    en: Creates an Ed25519 key pair. The private key fills the form below and the public key goes to your clipboard.
-    zh-CN: 生成一对 Ed25519 密钥：私钥自动填入下方表单，公钥复制到剪贴板。
-    zh-HK: 產生一對 Ed25519 金鑰：私鑰會填入下方表單，公鑰複製到剪貼簿。
+    en: Choose an algorithm, then generate a key pair. The private key fills the form below and the public key goes to your clipboard.
+    zh-CN: 先选择算法，再生成一对密钥：私钥自动填入下方表单，公钥复制到剪贴板。
+    zh-HK: 先選擇演算法，再產生一對金鑰：私鑰會填入下方表單，公鑰複製到剪貼簿。
+  generate_key_algorithm_ed25519:
+    en: Ed25519 (recommended)
+    zh-CN: Ed25519（推荐）
+    zh-HK: Ed25519（推薦）
+  generate_key_algorithm_ecdsa_p256:
+    en: ECDSA P-256
+    zh-CN: ECDSA P-256
+    zh-HK: ECDSA P-256
+  generate_key_algorithm_ecdsa_p384:
+    en: ECDSA P-384
+    zh-CN: ECDSA P-384
+    zh-HK: ECDSA P-384
+  generate_key_algorithm_rsa3072:
+    en: RSA 3072 (slower)
+    zh-CN: RSA 3072（生成较慢）
+    zh-HK: RSA 3072（產生較慢）
   generate_key_action:
     en: Generate
     zh-CN: 生成
     zh-HK: 產生
+  generate_key_running:
+    en: Generating…
+    zh-CN: 生成中…
+    zh-HK: 產生中…
   generate_key_success:
     en: Key generated and public key copied. Fingerprint %{fingerprint}
     zh-CN: 已生成密钥并复制公钥，指纹：%{fingerprint}
     zh-HK: 已產生金鑰並複製公鑰，指紋：%{fingerprint}
+  generate_key_failed:
+    en: "Failed to generate the key: %{error}"
+    zh-CN: 生成密钥失败：%{error}
+    zh-HK: 產生金鑰失敗：%{error}
   private_key_path:
     en: Private Key Path
     zh-CN: 私钥路径
@@ -6406,6 +6438,26 @@ CredentialForm:
     en: e.g. ~/.ssh/id_ed25519 (local only)
     zh-CN: 例如：~/.ssh/id_ed25519（仅本机使用）
     zh-HK: 例如：~/.ssh/id_ed25519（僅供本機使用）
+  private_key_path_browse:
+    en: Choose a local private key file
+    zh-CN: 选择本地私钥文件
+    zh-HK: 選擇本機私鑰檔案
+  private_key_path_select:
+    en: Select a private key file
+    zh-CN: 选择私钥文件
+    zh-HK: 選擇私鑰檔案
+  ssh_key_username:
+    en: Username
+    zh-CN: 用户名
+    zh-HK: 使用者名稱
+  private_key_path_hint:
+    en: A local path such as ~/.ssh/id_ed25519 works, and you can drop the key file on the field. If key content is also filled in, the content wins.
+    zh-CN: 支持 ~/.ssh/id_ed25519 这类本机路径，也可以把私钥文件直接拖到这一行；若同时填写私钥内容，连接时优先使用内容。
+    zh-HK: 支援 ~/.ssh/id_ed25519 這類本機路徑，也可以把私鑰檔案直接拖到這一行；若同時填寫私鑰內容，連線時優先使用內容。
+  private_key_username_missing:
+    en: Key login still needs a username. Leave it empty only if you will type the username on the connection.
+    zh-CN: 密钥登录还需要一个用户名；留空时，需要在连接里单独填写用户名。
+    zh-HK: 金鑰登入還需要一個使用者名稱；留空時，需要在連線裡單獨填寫使用者名稱。
   private_key_content:
     en: Private Key Content
     zh-CN: 私钥内容

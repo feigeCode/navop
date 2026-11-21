@@ -1,20 +1,26 @@
-use gpui::{InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px};
+use gpui::prelude::FluentBuilder;
+use gpui::{
+    ExternalPaths, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
+};
 use gpui_component::{
-    ActiveTheme, Sizable, Size,
-    button::Button,
+    ActiveTheme, Disableable, Sizable, Size,
+    button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, Textarea},
     scroll::ScrollableElement,
+    select::Select,
     switch::Switch,
     tab::{Tab, TabBar},
     v_flex,
 };
+use one_assets::IconName;
 use rust_i18n::t;
 
 use super::form::CredentialForm;
 
 impl Render for CredentialForm {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        self.apply_pending_private_key_path(window, cx);
         let active_tab = self.active_tab;
 
         v_flex()
@@ -77,6 +83,10 @@ impl CredentialForm {
                 t!("CredentialForm.username").to_string(),
                 Input::new(&self.username_input).w_full(),
             ))
+            .child(form_hint(
+                t!("CredentialForm.username_hint").to_string(),
+                cx,
+            ))
             .child(form_field(
                 t!("CredentialForm.password").to_string(),
                 Input::new(&self.password_input).w_full().mask_toggle(),
@@ -85,6 +95,7 @@ impl CredentialForm {
     }
 
     fn render_ssh_key_tab(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let username_missing = self.username_input.read(cx).value().trim().is_empty();
         v_flex()
             .w_full()
             .gap_3()
@@ -94,9 +105,43 @@ impl CredentialForm {
                 cx,
             ))
             .child(self.render_generate_ssh_key(cx))
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(form_field(
+                        t!("CredentialForm.ssh_key_username").to_string(),
+                        Input::new(&self.username_input).w_full(),
+                    ))
+                    .when(username_missing, |this| {
+                        this.child(form_hint(
+                            t!("CredentialForm.private_key_username_missing").to_string(),
+                            cx,
+                        ))
+                    }),
+            )
             .child(form_field(
                 t!("CredentialForm.private_key_path").to_string(),
-                Input::new(&self.private_key_path_input).w_full(),
+                h_flex()
+                    .id("credential-private-key-drop")
+                    .w_full()
+                    .gap_2()
+                    .on_drop(cx.listener(|form, paths: &ExternalPaths, window, cx| {
+                        form.accept_dropped_private_key_path(paths, window, cx);
+                    }))
+                    .child(Input::new(&self.private_key_path_input).flex_1())
+                    .child(
+                        Button::new("credential-browse-private-key")
+                            .icon(IconName::FolderOpen)
+                            .ghost()
+                            .tooltip(t!("CredentialForm.private_key_path_browse").to_string())
+                            .on_click(
+                                cx.listener(|form, _, _, cx| form.browse_private_key_path(cx)),
+                            ),
+                    ),
+            ))
+            .child(form_hint(
+                t!("CredentialForm.private_key_path_hint").to_string(),
+                cx,
             ))
             .child(form_field(
                 t!("CredentialForm.private_key_content").to_string(),
@@ -113,7 +158,7 @@ impl CredentialForm {
             .child(self.render_forward_to_agent_setting(cx))
     }
 
-    /// 「生成密钥」入口：一键生成 Ed25519 密钥对，私钥填进表单、公钥复制到剪贴板。
+    /// 「生成密钥」入口：按所选算法生成密钥对，私钥填进表单、公钥复制到剪贴板。
     fn render_generate_ssh_key(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         h_flex()
             .w_full()
@@ -141,13 +186,25 @@ impl CredentialForm {
                     ),
             )
             .child(
-                Button::new("credential-generate-key")
-                    .small()
-                    .outline()
-                    .label(t!("CredentialForm.generate_key_action").to_string())
-                    .on_click(cx.listener(|form, _, window, cx| {
-                        form.generate_ed25519_key(window, cx);
-                    })),
+                h_flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_2()
+                    .child(Select::new(&self.algorithm_select).small())
+                    .child(
+                        Button::new("credential-generate-key")
+                            .small()
+                            .outline()
+                            .disabled(self.generating_key)
+                            .label(if self.generating_key {
+                                t!("CredentialForm.generate_key_running").to_string()
+                            } else {
+                                t!("CredentialForm.generate_key_action").to_string()
+                            })
+                            .on_click(cx.listener(|form, _, window, cx| {
+                                form.generate_key(window, cx);
+                            })),
+                    ),
             )
     }
 
@@ -273,6 +330,14 @@ fn info_panel(title: String, description: String, cx: &gpui::App) -> impl IntoEl
         )
 }
 
+fn form_hint(text: String, cx: &gpui::App) -> impl IntoElement {
+    div()
+        .w_full()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(text)
+}
+
 fn form_field(label: String, input: impl IntoElement) -> impl IntoElement {
     v_flex()
         .gap_1()
@@ -385,15 +450,19 @@ mod tests {
         assert!(ssh_key.contains("self.render_generate_ssh_key(cx)"));
         assert!(source.contains("credential-generate-key"));
         assert!(source.contains("CredentialForm.generate_key_action"));
-        assert!(source.contains("form.generate_ed25519_key(window, cx)"));
-        assert!(form.contains("pub(super) fn generate_ed25519_key"));
-        assert!(form.contains("one_core::storage::generate_ed25519_key(&comment)"));
+        assert!(source.contains("Select::new(&self.algorithm_select)"));
+        assert!(source.contains("form.generate_key(window, cx)"));
+        assert!(form.contains("pub(super) fn generate_key"));
+        assert!(form.contains("one_core::storage::generate_ssh_key(algorithm, &comment)"));
+        assert!(form.contains("cx.background_spawn("));
+        assert!(form.contains("SshKeyAlgorithm::ALL"));
         assert!(
             form.contains(
                 "cx.write_to_clipboard(ClipboardItem::new_string(key.public_key_openssh))"
             )
         );
         assert!(form.contains("CredentialForm.generate_key_success"));
+        assert!(form.contains("CredentialForm.generate_key_failed"));
     }
 
     #[test]
@@ -408,5 +477,28 @@ mod tests {
         assert!(!production.contains(".when(self.is_editing(),"));
         assert!(production.contains("self.render_sync_settings(cx)"));
         assert!(!production.contains("CredentialForm.tab_sync"));
+    }
+
+    #[test]
+    fn credential_form_explains_username_and_key_path_requirements() {
+        let source = include_str!("form_render.rs");
+        let basic = source
+            .split("fn render_basic_tab")
+            .nth(1)
+            .and_then(|source| source.split("fn render_ssh_key_tab").next())
+            .expect("basic tab");
+        let ssh_key = source
+            .split("fn render_ssh_key_tab")
+            .nth(1)
+            .and_then(|source| source.split("fn render_generate_ssh_key").next())
+            .expect("SSH key tab");
+
+        assert!(source.contains("fn form_hint("));
+        assert!(basic.contains("CredentialForm.username_hint"));
+        assert!(ssh_key.contains("CredentialForm.private_key_path_hint"));
+        assert!(ssh_key.contains("CredentialForm.private_key_username_missing"));
+        assert!(ssh_key.contains("CredentialForm.ssh_key_username"));
+        assert!(ssh_key.contains("Input::new(&self.username_input)"));
+        assert!(ssh_key.contains("username_missing"));
     }
 }

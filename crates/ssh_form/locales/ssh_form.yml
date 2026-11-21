@@ -253,6 +253,14 @@ SSH:
     en: Key Path
     zh-CN: 密钥路径
     zh-HK: 密鑰路徑
+  key_path_select_file:
+    en: Select a local private key file
+    zh-CN: 选择本地私钥文件
+    zh-HK: 選擇本機私鑰檔案
+  username_missing_in_keychain:
+    en: This keychain entry has no username. Fill it in here.
+    zh-CN: 该钥匙串条目没有用户名，请在这里填写
+    zh-HK: 該鑰匙圈條目沒有使用者名稱，請在這裡填寫
   key_path_placeholder:
     en: Enter private key path
     zh-CN: 请输入私钥路径

@@ -10,7 +10,8 @@ use connection_form::team::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, AsyncApp, ClickEvent, ClipboardEntry, Context, Div, Entity, FocusHandle,
+    App, AppContext, AsyncApp, ClickEvent, ClipboardEntry, Context, Div, Entity, ExternalPaths,
+    FocusHandle,
     Focusable, InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render,
     SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, img,
     px, relative,
@@ -863,6 +864,37 @@ pub enum ProxyTypeSelection {
     Http,
 }
 
+/// 私钥路径输入框的位置：主连接与跳板机各有一个，都需要能选文件。
+#[derive(Clone, Copy)]
+enum KeyPathTarget {
+    Primary,
+    Jump,
+}
+
+impl KeyPathTarget {
+    fn button_id(self) -> &'static str {
+        match self {
+            Self::Primary => "browse-key-path",
+            Self::Jump => "browse-jump-key-path",
+        }
+    }
+
+    /// 拖放目标 id：同一行既是输入框容器也是私钥文件落点。
+    fn drop_id(self) -> &'static str {
+        match self {
+            Self::Primary => "key-path-drop",
+            Self::Jump => "jump-key-path-drop",
+        }
+    }
+
+    fn input(self, form: &SshFormWindow) -> &Entity<InputState> {
+        match self {
+            Self::Primary => &form.key_path_input,
+            Self::Jump => &form.jump_key_path_input,
+        }
+    }
+}
+
 impl SshFormWindow {
     pub fn new(config: SshFormWindowConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let is_editing = config.is_editing();
@@ -1616,9 +1648,12 @@ impl SshFormWindow {
         let jump_host = self.jump_host_input.read(cx).text().to_string();
         let jump_username = self.jump_username_input.read(cx).text().to_string();
         let jump_picker = self.jump_credential_picker.read(cx);
-        // 选了钥匙串后用户名与认证方式都被隐藏，登录信息在连接时由钥匙串解析。
-        let jump_keychain_selected = jump_picker.selected_reference().is_some();
-        if jump_host.is_empty() || (jump_username.is_empty() && !jump_keychain_selected) {
+        // 钥匙串条目自带用户名时以记录为准；没有用户名时用这里保存的值（表单会把
+        // 这一栏放出来）。两边都空说明配置还不完整。
+        let jump_username_from_keychain = jump_picker.field_referenced(CredentialField::Username);
+        // 钥匙串没有用户名时这一栏必须填，两边都空就算配置不完整。
+        let jump_needs_username = !jump_username_from_keychain && jump_username.trim().is_empty();
+        if jump_host.is_empty() || jump_needs_username {
             return None;
         }
         let jump_port: u16 = self
@@ -1713,11 +1748,15 @@ impl SshFormWindow {
         let username = self.username_input.read(cx).text().to_string();
         let credential_picker = self.credential_picker.read(cx);
         let credential_reference = credential_picker.selected_reference();
-        // 选了钥匙串后用户名、认证方式、「连接时输入」选项都被隐藏，不再参与校验与保存；
-        // 用户名为空之类的问题在连接时由钥匙串解析给出明确提示。
+        // 认证方式与「连接时输入」由钥匙串记录决定；用户名在记录里没有时回退到
+        // 这里保存的值（表单在这种情况下会把用户名一栏放出来）。
         let keychain_selected = credential_reference.is_some();
+        let username_from_keychain = credential_picker.field_referenced(CredentialField::Username);
+        let needs_username = !username_from_keychain
+            && username.trim().is_empty()
+            && (keychain_selected || self.save_username);
 
-        if host.is_empty() || (username.is_empty() && self.save_username && !keychain_selected) {
+        if host.is_empty() || needs_username {
             return None;
         }
         // 堡垒机直连没有资产或账号就渲染不出「用户#账号#资产」登录名，拦住半成品配置。
@@ -2914,6 +2953,91 @@ impl SshFormWindow {
         .detach();
     }
 
+    /// 私钥路径一行：输入框 + 选择本机文件按钮（路径只在本机使用，选文件比手输可靠）。
+    fn render_key_path_row(
+        &self,
+        label: &str,
+        input: &Entity<InputState>,
+        target: KeyPathTarget,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        self.render_form_row(
+            label,
+            h_flex()
+                .id(target.drop_id())
+                .w_full()
+                .gap_2()
+                .on_drop(cx.listener(move |form, paths: &ExternalPaths, window, cx| {
+                    form.drop_key_path(target, paths, window, cx);
+                }))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .child(self.render_form_input(input)),
+                )
+                .child(
+                    Button::new(target.button_id())
+                        .icon(IconName::FolderOpen)
+                        .ghost()
+                        .on_click(cx.listener(move |form, _, window, cx| {
+                            form.browse_key_path(target, window, cx);
+                        }))
+                        .tooltip(t!("SSH.key_path_select_file").to_string()),
+                ),
+        )
+    }
+
+    /// 打开系统文件选择器挑一个本机私钥文件，选中后写回对应输入框。
+    fn browse_key_path(
+        &mut self,
+        target: KeyPathTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = target.input(self).clone();
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t!("SSH.key_path_select_file").to_string().into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = future.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let path = path.to_string_lossy().to_string();
+            let _ = this.update_in(cx, |_, window, cx| {
+                input.update(cx, |state, cx| {
+                    state.set_value(path, window, cx);
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// 把拖进窗口的私钥文件路径写进对应输入框。
+    fn drop_key_path(
+        &mut self,
+        target: KeyPathTarget,
+        paths: &ExternalPaths,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = paths.paths().first() else {
+            return;
+        };
+        let path = path.to_string_lossy().to_string();
+        let input = target.input(self).clone();
+        input.update(cx, |state, cx| {
+            state.set_value(path, window, cx);
+        });
+        cx.notify();
+    }
+
     fn render_icon_selection_indicator(
         &self,
         id: String,
@@ -3076,6 +3200,12 @@ impl SshFormWindow {
             .read(cx)
             .selected_reference()
             .is_none();
+        // 钥匙串条目自带用户名时用户名一栏保持隐藏；没有用户名时放出来让用户填，
+        // 解析时会回退到这个值，否则连接必然因为缺用户名失败。
+        let username_from_keychain = self
+            .credential_picker
+            .read(cx)
+            .field_referenced(CredentialField::Username);
         // 堡垒机直连时，基础信息的地址/端口/用户名/认证就是堡垒机登录信息。
         let host_label = match connection_mode {
             ConnectionMode::BastionDirect => t!("SSH.bastion_host"),
@@ -3150,7 +3280,7 @@ impl SshFormWindow {
                     Select::new(&self.auth_method_select).w_full(),
                 ))
             })
-            .when(credential_is_manual, |form| {
+            .when(!username_from_keychain, |form| {
                 form.child(
                     self.render_form_row(
                         &t!("SSH.username"),
@@ -3164,28 +3294,39 @@ impl SshFormWindow {
                                     .flex_1()
                                     .child(self.render_form_input(&self.username_input)),
                             )
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .flex_shrink_0()
-                                    .child(
-                                        Checkbox::new("save-username")
-                                            .label(t!("SSH.save_username_desc").to_string())
-                                            .checked(self.save_username)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.save_username = !this.save_username;
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("save-username-help")
-                                            .icon(IconName::Info)
-                                            .ghost()
-                                            .xsmall()
-                                            .tooltip(t!("SSH.save_username_hint").to_string()),
-                                    ),
-                            ),
+                            .when(credential_is_manual, |row| {
+                                row.child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .flex_shrink_0()
+                                        .child(
+                                            Checkbox::new("save-username")
+                                                .label(t!("SSH.save_username_desc").to_string())
+                                                .checked(self.save_username)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.save_username = !this.save_username;
+                                                    cx.notify();
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new("save-username-help")
+                                                .icon(IconName::Info)
+                                                .ghost()
+                                                .xsmall()
+                                                .tooltip(t!("SSH.save_username_hint").to_string()),
+                                        ),
+                                )
+                            })
+                            .when(!credential_is_manual, |row| {
+                                row.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(t!("SSH.username_missing_in_keychain").to_string()),
+                                )
+                            }),
                     ),
                 )
             })
@@ -3279,9 +3420,11 @@ impl SshFormWindow {
                                 ),
                         ),
                     )
-                    .child(self.render_form_row(
+                    .child(self.render_key_path_row(
                         &t!("SSH.key_path"),
-                        self.render_form_input(&self.key_path_input),
+                        &self.key_path_input,
+                        KeyPathTarget::Primary,
+                        cx,
                     ))
                     .child(self.render_form_row(
                         &t!("SSH.passphrase"),
@@ -3300,9 +3443,11 @@ impl SshFormWindow {
             .when(
                 credential_is_manual && auth_method == AuthMethodSelection::PrivateKey,
                 |this| {
-                    this.child(self.render_form_row(
+                    this.child(self.render_key_path_row(
                         &t!("SSH.key_path"),
-                        self.render_form_input(&self.key_path_input),
+                        &self.key_path_input,
+                        KeyPathTarget::Primary,
+                        cx,
                     ))
                     .child(self.render_form_row(
                         &t!("SSH.passphrase"),
@@ -3443,6 +3588,11 @@ impl SshFormWindow {
             .read(cx)
             .selected_reference()
             .is_none();
+        // 与主连接一致：钥匙串条目没有用户名时把这一栏放出来。
+        let jump_username_from_keychain = self
+            .jump_credential_picker
+            .read(cx)
+            .field_referenced(CredentialField::Username);
 
         v_flex()
             .w_full()
@@ -3467,11 +3617,33 @@ impl SshFormWindow {
                 .child(
                     self.render_form_row(&t!("SSH.keychain"), self.jump_credential_picker.clone()),
                 )
-                .when(jump_credential_is_manual, |form| {
-                    form.child(self.render_form_row(
-                        &t!("SSH.jump_username"),
-                        self.render_form_input(&self.jump_username_input),
-                    ))
+                .when(!jump_username_from_keychain, |form| {
+                    form.child(
+                        self.render_form_row(
+                            &t!("SSH.jump_username"),
+                            h_flex()
+                                .w_full()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .child(self.render_form_input(&self.jump_username_input)),
+                                )
+                                .when(!jump_credential_is_manual, |row| {
+                                    row.child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(
+                                                t!("SSH.username_missing_in_keychain").to_string(),
+                                            ),
+                                    )
+                                }),
+                        ),
+                    )
                 })
                 .child(self.render_form_row(
                     &t!("SSH.jump_auth_method"),
@@ -3500,9 +3672,11 @@ impl SshFormWindow {
                                     .mask_toggle(),
                             ),
                         )
-                        .child(self.render_form_row(
+                        .child(self.render_key_path_row(
                             &t!("SSH.jump_key_path"),
-                            self.render_form_input(&self.jump_key_path_input),
+                            &self.jump_key_path_input,
+                            KeyPathTarget::Jump,
+                            cx,
                         ))
                         .child(
                             self.render_form_row(
@@ -3525,9 +3699,11 @@ impl SshFormWindow {
                     jump_credential_is_manual
                         && jump_auth_method == AuthMethodSelection::PrivateKey,
                     |this| {
-                        this.child(self.render_form_row(
+                        this.child(self.render_key_path_row(
                             &t!("SSH.jump_key_path"),
-                            self.render_form_input(&self.jump_key_path_input),
+                            &self.jump_key_path_input,
+                            KeyPathTarget::Jump,
+                            cx,
                         ))
                         .child(
                             self.render_form_row(
@@ -4642,6 +4818,94 @@ mod tests {
                 "credential_is_manual && auth_method == AuthMethodSelection::AutoPublicKey"
             )
         );
+    }
+
+    #[gpui::test]
+    fn ssh_keychain_without_username_requires_the_connection_username(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let mut params = sample_params();
+        params.username = String::new();
+        params.credential_reference = Some(CredentialReference {
+            credential_id: 9,
+            username: false,
+            password: true,
+            ..Default::default()
+        });
+        let initial_connection = StoredConnection::new_ssh("no-username".to_string(), params, None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    initial_workspace_id: None,
+                    editing_connection: None,
+                    initial_connection: Some(initial_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        // 钥匙串条目没有用户名时，表单必须要求在这里补一个，不能带着空用户名保存。
+        assert!(
+            form.read_with(cx, |form, cx| form.build_ssh_params(cx))
+                .is_none(),
+            "empty username with a username-less keychain entry must block saving"
+        );
+
+        form.update_in(cx, |form, window, cx| {
+            form.username_input.update(cx, |state, cx| {
+                state.set_value("vault-fallback", window, cx)
+            });
+        });
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("填写用户名后应能构建参数");
+        assert_eq!(built.username, "vault-fallback");
+        assert!(built.credential_reference.is_some());
+    }
+
+    #[gpui::test]
+    fn ssh_keychain_with_username_keeps_the_username_optional(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let mut params = sample_params();
+        params.username = String::new();
+        params.credential_reference = Some(CredentialReference {
+            credential_id: 9,
+            username: true,
+            password: true,
+            ..Default::default()
+        });
+        let initial_connection =
+            StoredConnection::new_ssh("has-username".to_string(), params, None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    initial_workspace_id: None,
+                    editing_connection: None,
+                    initial_connection: Some(initial_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        // 钥匙串条目自带用户名时，连接表单里的用户名仍然可以不填。
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("钥匙串自带用户名时应能构建参数");
+        assert_eq!(built.username, "");
+        assert!(built.credential_reference.is_some());
     }
 
     #[test]

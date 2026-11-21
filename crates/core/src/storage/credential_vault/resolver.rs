@@ -55,9 +55,11 @@ impl CredentialRepository {
             return Ok(params);
         };
         let credential = self.resolve_reference_entry(reference)?;
-        // 选了钥匙串后表单里的用户名、认证方式、「连接时输入」都被隐藏，
-        // 保存下来的值不再参与：登录信息完全由钥匙串记录决定。
-        let login = ssh_login_from_credential(reference, credential.as_ref())?;
+        // 认证方式与「连接时输入」完全由钥匙串记录决定；用户名在记录里没有时
+        // 回退到连接上保存的值（表单会把这一栏放出来让用户填写）。
+        let manual_username = params.username.clone();
+        let login =
+            ssh_login_from_credential(reference, credential.as_ref(), Some(&manual_username))?;
         params.username = login.username;
         params.auth_method = login.auth_method;
         params.prompt_username = None;
@@ -289,8 +291,10 @@ impl CredentialRepository {
             return Ok(());
         };
         let credential = self.resolve_reference_entry(reference)?;
-        // 选了钥匙串后表单里的用户名与认证方式都被隐藏，保存值不再参与。
-        let login = ssh_login_from_credential(reference, credential.as_ref())?;
+        // 认证方式由钥匙串记录决定；用户名缺失时回退到跳板机自己保存的值。
+        let manual_username = jump.username.clone();
+        let login =
+            ssh_login_from_credential(reference, credential.as_ref(), Some(&manual_username))?;
         jump.username = login.username;
         jump.auth_method = login.auth_method;
         Ok(())
@@ -314,38 +318,26 @@ struct SshCredentialLogin {
     auth_method: SshAuthMethod,
 }
 
-/// 完全按钥匙串记录的内容得出 SSH 用户名与认证方式。
+/// 由钥匙串记录得出 SSH 用户名与认证方式。
 ///
-/// 选中钥匙串后，表单会隐藏用户名与认证方式，用户无法再改它们，所以连接里
-/// 残留的保存值不能参与；`credential_reference` 里的各个布尔标志同样由表单
-/// 根据当时隐藏的状态算出，也不作依据。规则只有两条：
+/// 认证方式完全按记录内容：只有密码用密码，只有私钥用私钥，两者都有时交给
+/// `SshAuthMethod::Chain`，由 SSH 层按服务器通告的方法决定试哪个（服务器只
+/// 接受其中一种就只用那一种，两种都接受则先密码）。
 ///
-/// - 用户名取记录里的用户名，为空就报错，绝不带着空用户名去连接；
-/// - 记录里有什么凭据就用什么：只有密码用密码，只有私钥用私钥，两者都有时
-///   交给 `SshAuthMethod::Chain`，由 SSH 层按服务器通告的方法决定试哪个
-///   （服务器只接受其中一种就只用那一种，两种都接受则按下面的顺序：先密码）。
+/// 用户名优先取记录里的用户名；记录里留空时回退到连接（或跳板机）上保存的
+/// 用户名 —— 表单在「钥匙串条目没有用户名」时会把用户名一栏放出来，让用户
+/// 随连接一起填写。两处都没有才报错，绝不带着空用户名去连接。
 fn ssh_login_from_credential(
     reference: &crate::storage::CredentialReference,
     credential: Option<&crate::storage::CredentialEntry>,
+    manual_username: Option<&str>,
 ) -> Result<SshCredentialLogin> {
     let credential_id = reference.credential_id;
     let credential = credential.ok_or_else(|| {
         anyhow::anyhow!(CredentialResolutionError::MissingCredential(credential_id))
     })?;
 
-    let username = credential
-        .username
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!(CredentialResolutionError::EmptyField {
-                credential_id,
-                credential_name: credential.name.clone(),
-                field: "username",
-            })
-        })?
-        .to_string();
+    let username = login_username(reference, credential, manual_username)?;
 
     let non_empty = |value: &Option<String>| value.clone().filter(|value| !value.is_empty());
     let passphrase = non_empty(&credential.passphrase);
@@ -380,6 +372,28 @@ fn ssh_login_from_credential(
         username,
         auth_method,
     })
+}
+
+/// 登录用户名：钥匙串记录优先，记录没有时用连接自己保存的用户名。
+fn login_username(
+    reference: &crate::storage::CredentialReference,
+    credential: &crate::storage::CredentialEntry,
+    manual_username: Option<&str>,
+) -> Result<String> {
+    let from_credential = credential.username.as_deref().and_then(trimmed);
+    let from_connection = manual_username.and_then(trimmed);
+    from_credential.or(from_connection).ok_or_else(|| {
+        anyhow::anyhow!(CredentialResolutionError::EmptyField {
+            credential_id: reference.credential_id,
+            credential_name: credential.name.clone(),
+            field: "username",
+        })
+    })
+}
+
+fn trimmed(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 fn telnet_login_script_from_credential(
@@ -437,7 +451,15 @@ mod ssh_login_tests {
         reference: &CredentialReference,
         entry: &CredentialEntry,
     ) -> anyhow::Result<(String, SshAuthMethod)> {
-        ssh_login_from_credential(reference, Some(entry))
+        resolve_with_connection_username(reference, entry, None)
+    }
+
+    fn resolve_with_connection_username(
+        reference: &CredentialReference,
+        entry: &CredentialEntry,
+        manual_username: Option<&str>,
+    ) -> anyhow::Result<(String, SshAuthMethod)> {
+        ssh_login_from_credential(reference, Some(entry), manual_username)
             .map(|login| (login.username, login.auth_method))
     }
 
@@ -469,6 +491,32 @@ mod ssh_login_tests {
                     credential_name,
                 }) if credential_name == "entry"
             ));
+        }
+    }
+
+    #[test]
+    fn username_falls_back_to_the_connection_when_the_credential_has_none() {
+        for username in [None, Some(""), Some("   ")] {
+            let (resolved, _) = resolve_with_connection_username(
+                &reference(false, false),
+                &entry(username, Some("pw"), None, None),
+                Some("  connection-user "),
+            )
+            .expect("resolve");
+            assert_eq!("connection-user", resolved);
+        }
+    }
+
+    #[test]
+    fn credential_username_still_wins_over_the_connection_username() {
+        for flags in [(false, false), (true, true)] {
+            let (resolved, _) = resolve_with_connection_username(
+                &reference(flags.0, flags.1),
+                &entry(Some("vault-user"), Some("pw"), None, None),
+                Some("connection-user"),
+            )
+            .expect("resolve");
+            assert_eq!("vault-user", resolved);
         }
     }
 
@@ -565,7 +613,7 @@ mod ssh_login_tests {
 
     #[test]
     fn a_missing_credential_keeps_the_dedicated_error_for_the_runtime_fallback() {
-        let error = ssh_login_from_credential(&reference(false, false), None)
+        let error = ssh_login_from_credential(&reference(false, false), None, None)
             .err()
             .expect("missing credential");
         assert!(matches!(

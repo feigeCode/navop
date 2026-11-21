@@ -1,12 +1,16 @@
 use gpui::{
-    App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, SharedString, Window,
+    App, AppContext, ClipboardItem, Context, Entity, ExternalPaths, FocusHandle, Focusable,
+    PathPromptOptions, SharedString, Window,
 };
 use gpui_component::{
-    WindowExt,
-    input::{InputState, TextareaState},
+    IndexPath, WindowExt,
+    input::{InputEvent, InputState, TextareaState},
     notification::Notification,
+    select::SelectState,
 };
-use one_core::storage::{CredentialEntry, SshAccountExpect, TerminalExpectSend};
+use one_core::storage::{
+    CredentialEntry, GeneratedSshKey, SshAccountExpect, SshKeyAlgorithm, TerminalExpectSend,
+};
 use regex::Regex;
 use rust_i18n::t;
 
@@ -39,32 +43,151 @@ pub(crate) struct CredentialForm {
     pub(super) password_send_input: Entity<InputState>,
     pub(super) sync_enabled: bool,
     pub(super) forward_to_agent: bool,
+    /// 「生成密钥」的算法下拉框，选项顺序与 [`SshKeyAlgorithm::ALL`] 一致。
+    pub(super) algorithm_select: Entity<SelectState<Vec<String>>>,
+    /// 后台正在生成密钥：期间禁用按钮，避免重复生成把表单覆盖掉。
+    pub(super) generating_key: bool,
+    /// 文件选择器挑中的私钥路径，等下一次渲染再写进输入框（写输入态需要 Window）。
+    pending_private_key_path: Option<String>,
 }
 
 impl CredentialForm {
-    /// 生成一对 Ed25519 密钥：私钥写进表单，公钥复制到剪贴板并提示指纹。
+    /// 按下拉框选中的算法生成密钥：私钥写进表单，公钥复制到剪贴板并提示指纹。
     ///
-    /// 使用凭据名称作为密钥注释，方便在 `authorized_keys` 里辨认来源。
-    pub(super) fn generate_ed25519_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// 使用凭据名称作为密钥注释，方便在 `authorized_keys` 里辨认来源。RSA 生成
+    /// 在慢机器上要几秒钟，所以统一放后台线程，避免卡住对话框。
+    pub(super) fn generate_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.generating_key {
+            return;
+        }
         let comment = self.name_input.read(cx).value().trim().to_string();
-        let key = one_core::storage::generate_ed25519_key(&comment);
+        let algorithm = self.selected_key_algorithm(cx);
+        self.generating_key = true;
 
-        self.private_key_content_input.update(cx, |state, cx| {
-            state.set_value(key.private_key_openssh.clone(), window, cx);
+        let task =
+            cx.background_spawn(
+                async move { one_core::storage::generate_ssh_key(algorithm, &comment) },
+            );
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |form, window, cx| {
+                form.apply_generated_key(result, window, cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// 生成结束：把密钥写进表单并恢复按钮；失败时只弹提示，表单保持原样。
+    fn apply_generated_key(
+        &mut self,
+        result: Result<GeneratedSshKey, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.generating_key = false;
+        match result {
+            Ok(key) => {
+                self.private_key_content_input.update(cx, |state, cx| {
+                    state.set_value(key.private_key_openssh.clone(), window, cx);
+                });
+                cx.write_to_clipboard(ClipboardItem::new_string(key.public_key_openssh));
+                window.push_notification(
+                    Notification::success(
+                        t!(
+                            "CredentialForm.generate_key_success",
+                            fingerprint = key.fingerprint
+                        )
+                        .to_string(),
+                    )
+                    .autohide(true),
+                    cx,
+                );
+            }
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(
+                        t!("CredentialForm.generate_key_failed", error = error).to_string(),
+                    )
+                    .autohide(true),
+                    cx,
+                );
+            }
+        }
+        cx.notify();
+    }
+
+    /// 下拉框当前选中项对应的算法；越界时回退到默认的 Ed25519。
+    fn selected_key_algorithm(&self, cx: &App) -> SshKeyAlgorithm {
+        let row = self
+            .algorithm_select
+            .read(cx)
+            .selected_index(cx)
+            .map_or(0, |index| index.row);
+        SshKeyAlgorithm::ALL
+            .get(row)
+            .copied()
+            .unwrap_or(SshKeyAlgorithm::Ed25519)
+    }
+
+    /// 打开系统文件选择器挑选本地私钥文件，选中后写回「私钥路径」。
+    pub(super) fn browse_private_key_path(&mut self, cx: &mut Context<Self>) {
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(
+                t!("CredentialForm.private_key_path_select")
+                    .to_string()
+                    .into(),
+            ),
         });
-        cx.write_to_clipboard(ClipboardItem::new_string(key.public_key_openssh));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = future.await else {
+                return;
+            };
+            let Some(path) = paths.first() else {
+                return;
+            };
+            let path = path.to_string_lossy().to_string();
+            let _ = this.update(cx, |form, cx| {
+                form.pending_private_key_path = Some(path);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
 
-        window.push_notification(
-            Notification::success(
-                t!(
-                    "CredentialForm.generate_key_success",
-                    fingerprint = key.fingerprint
-                )
-                .to_string(),
-            )
-            .autohide(true),
-            cx,
-        );
+    /// 渲染前应用浏览结果：写输入态必须拿到 `Window`，所以推迟到这里。
+    pub(super) fn apply_pending_private_key_path(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.pending_private_key_path.take() else {
+            return;
+        };
+        self.private_key_path_input.update(cx, |state, cx| {
+            state.set_value(path, window, cx);
+        });
+    }
+
+    /// 拖入私钥文件时，把路径写进「私钥路径」输入框。
+    ///
+    /// 与浏览按钮共用同一份输入态；拖放只是省去一次文件选择对话框。
+    pub(super) fn accept_dropped_private_key_path(
+        &mut self,
+        paths: &ExternalPaths,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = paths.paths().first() else {
+            return;
+        };
+        let path = path.to_string_lossy().to_string();
+        self.private_key_path_input.update(cx, |state, cx| {
+            state.set_value(path, window, cx);
+        });
         cx.notify();
     }
 
@@ -89,6 +212,13 @@ impl CredentialForm {
             window,
             cx,
         );
+        // 用户名同时出现在「基础信息」与「SSH 密钥」两页，这里订阅变化以便密钥页的提示实时刷新。
+        cx.subscribe(&username_input, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
         let password_input = text_input(
             existing
                 .as_ref()
@@ -168,6 +298,12 @@ impl CredentialForm {
         let forward_to_agent = existing
             .as_ref()
             .is_some_and(|entry| entry.forward_to_agent);
+        let algorithm_items: Vec<String> = SshKeyAlgorithm::ALL
+            .iter()
+            .map(|algorithm| generate_key_algorithm_label(*algorithm))
+            .collect();
+        let algorithm_select =
+            cx.new(|cx| SelectState::new(algorithm_items, Some(IndexPath::new(0)), window, cx));
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -185,6 +321,9 @@ impl CredentialForm {
             password_send_input,
             sync_enabled,
             forward_to_agent,
+            algorithm_select,
+            generating_key: false,
+            pending_private_key_path: None,
         }
     }
 
@@ -251,6 +390,20 @@ fn text_input(
 
 fn input_value(input: &Entity<InputState>, cx: &App) -> String {
     input.read(cx).value().to_string()
+}
+
+/// 「生成密钥」下拉框里展示的算法名称。
+fn generate_key_algorithm_label(algorithm: SshKeyAlgorithm) -> String {
+    match algorithm {
+        SshKeyAlgorithm::Ed25519 => t!("CredentialForm.generate_key_algorithm_ed25519").to_string(),
+        SshKeyAlgorithm::EcdsaP256 => {
+            t!("CredentialForm.generate_key_algorithm_ecdsa_p256").to_string()
+        }
+        SshKeyAlgorithm::EcdsaP384 => {
+            t!("CredentialForm.generate_key_algorithm_ecdsa_p384").to_string()
+        }
+        SshKeyAlgorithm::Rsa3072 => t!("CredentialForm.generate_key_algorithm_rsa3072").to_string(),
+    }
 }
 
 pub(super) fn build_entry(
@@ -362,6 +515,22 @@ mod tests {
             build_entry(None, values).unwrap_err(),
             t!("CredentialForm.error_name_required").to_string()
         );
+    }
+
+    #[test]
+    fn key_algorithm_labels_cover_every_generation_option() {
+        let labels: Vec<String> = SshKeyAlgorithm::ALL
+            .iter()
+            .map(|algorithm| generate_key_algorithm_label(*algorithm))
+            .collect();
+
+        assert_eq!(labels.len(), SshKeyAlgorithm::ALL.len());
+        assert!(labels.iter().all(|label| !label.trim().is_empty()));
+
+        let mut unique = labels.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), labels.len());
     }
 
     #[test]
