@@ -143,6 +143,13 @@ pub fn reset_restart_notifications_for_test() {
         .clear();
 }
 
+#[cfg(test)]
+pub(crate) fn reset_embedded_disable_reason_for_test() {
+    *EMBEDDED_DISABLE_REASON
+        .write()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+}
+
 pub fn embedded_disable_reason() -> Option<String> {
     EMBEDDED_DISABLE_REASON
         .read()
@@ -150,7 +157,7 @@ pub fn embedded_disable_reason() -> Option<String> {
         .clone()
 }
 
-/// 本次运行首次永久禁用的原始原因不被后续下载或回退覆盖。
+/// 本次运行首次永久禁用的原始原因不被后续修复或回退覆盖。
 pub fn disable_embedded(reason: String) -> String {
     let mut current = EMBEDDED_DISABLE_REASON
         .write()

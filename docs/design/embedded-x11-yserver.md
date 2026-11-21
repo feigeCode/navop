@@ -14,7 +14,7 @@
 2. `External`：只使用本机 X server。
 3. `Embedded`：只使用内置组件，失败时明确提示可改用外部 server。
 
-`crates/x11_component` 负责模式解析、清单、内嵌/下载安装、验签、版本目录、能力预检和进程监督；`crates/ssh` 只读取全局设置并取得解析结果。每个 `RusshClient` 保存自己的状态，避免并发会话相互覆盖。`X11Proxy::for_endpoint` 只替换本机 server 的来源，x11-req、回连通道、fake cookie、真实 cookie 改写和双向中继继续复用。
+`crates/x11_component` 负责模式解析、固定清单、内嵌包安装、验签、版本目录、能力预检和进程监督；`crates/ssh` 只读取全局设置并取得解析结果。每个 `RusshClient` 保存自己的状态，避免并发会话相互覆盖。`X11Proxy::for_endpoint` 只替换本机 server 的来源，x11-req、回连通道、fake cookie、真实 cookie 改写和双向中继继续复用。
 
 **本机 endpoint 与远端 DISPLAY 是两套语义。** 远端 DISPLAY 由 sshd 在 accepted x11-req 后分配；远端客户端通过 SSH 通道回连，不会把本机 TCP 端口号当作远端 display。本机使用 `127.0.0.1` 上随机 display 对应的 `6000 + display` 端口；发生冲突时在组件锁内轮换，不再宣称 yserver 支持任意 TCP 端口参数。
 
@@ -22,17 +22,17 @@
 
 组件版本为 `1.9.0-navop.1`，源码固定为 [feigeCode/yserver](https://github.com/feigeCode/yserver) 提交 `3b3c7f66fb9d9c80752af36b4948fad0b8760671`，发布物固定到 [navop-v1.9.0-1](https://github.com/feigeCode/yserver/releases/tag/navop-v1.9.0-1)。fork 基于上游 v1.9.0，只增加安全监听参数及 Windows 构建配置，不自动追踪 latest。
 
-清单使用 schema 1，按 `windows-x86_64`、`windows-aarch64` 选择 artifact。artifact 包含版本、URL、SHA-256、Ed25519 签名、最低 Vulkan 版本、`format` 和 `executable_path`；Windows zip 完整保留 `yserver.exe`、`xauth.exe`、`xkb/` 与 licenses。`pinned_for_navop` 匹配当前 Navop 版本，artifact 自身版本独立解析。签名原始字节是完整 zip，不是摘要文本或解压后的单个可执行文件。同一组件版本不得替换不同摘要，更新组件必须提升版本并同步固定清单。
+运行时清单使用 schema 1，按 `windows-x86_64`、`windows-aarch64` 选择 artifact。artifact 只包含版本、SHA-256、Ed25519 签名、最低 Vulkan 版本、`format` 和 `executable_path`，不包含 URL 等下载元数据；Windows zip 完整保留 `yserver.exe`、`xauth.exe`、`xkb/` 与 licenses。`pinned_for_navop` 匹配当前 Navop 版本，artifact 自身版本独立解析。签名原始字节是完整 zip，不是摘要文本或解压后的单个可执行文件。同一组件版本不得替换不同摘要，更新组件必须提升版本并同步固定清单和构建期地址。
 
-正式 Windows full 和 standalone-shell x86_64 构建前，`script/prepare-windows-x11-component.py` 从固定清单下载 zip、限制大小、校验 SHA-256 与 Ed25519 签名，再通过 `NAVOP_X11_BUNDLED_ARCHIVE` 交给 `crates/x11_component/build.rs` 编进 `navop.exe`。build script 不联网。这样 MSI、Burn、portable 和只替换 exe 的自更新都携带同一组件，不依赖旁置 zip。Win32 没有对应 yserver 产品，standalone-data 不嵌入；二者均不得误装 x64 包。当前 Navop 没有 Windows aarch64 产品 target，但组件安装器保留正确架构选择供后续产品接入。
+正式 Windows full 和 standalone-shell x86_64 构建前，`script/prepare-windows-x11-component.py` 从脚本内固定地址获取 zip、限制大小、按固定清单校验 SHA-256 与 Ed25519 签名，再通过 `NAVOP_X11_BUNDLED_ARCHIVE` 交给 `crates/x11_component/build.rs` 编进 `navop.exe`。网络访问只发生在构建机，build script 和成品运行时均不联网获取组件。这样 MSI、Burn、portable 和只替换 exe 的自更新都携带同一组件，不依赖旁置 zip。Win32 没有对应 yserver 产品，standalone-data 不嵌入；二者均不得误装 x64 包。当前 Navop 没有 Windows aarch64 产品 target，但组件安装器保留正确架构选择供后续产品接入。
 
-运行时安装和“重新下载/修复”优先读取内嵌 zip，仍完整执行灰度、摘要、签名、安全 zip 解压、staging 与原子提交，不创建 HTTP client。内嵌包损坏或目标不符时 fail-closed，不回退网络。开发构建没有内嵌包时可从同一固定 Release 下载；mock HTTP 测试必须保持无内嵌包环境。
+运行时安装和“修复/重新安装”只读取内嵌 zip，仍完整执行灰度、摘要、签名、安全 zip 解压、staging 与原子提交。crate 不包含 HTTP client、远程清单或下载重试逻辑；没有内嵌包、包损坏或目标不符时 fail-closed，不存在网络回退。
 
 安装进入 `<appdata>/components/x11/.tmp-<random>/`，校验后原子 rename 到 `<version>/`。验签公钥固定在仓库且独立于应用更新公钥，私钥只在 fork 仓库的 GitHub Actions secret。任何校验失败都删除临时目录并 fail closed。版本目录保留最近两个非活跃版本；current、本次安装版本和任何实例仍在使用的版本都受保护。重新安装不会杀掉活跃 server，提交前在组件锁内重新检查活跃版本。
 
-下载、验签、解压、目录替换与清理在 blocking 线程执行；开发下载的清单和 artifact 请求有明确超时。组件根目录的跨进程文件锁覆盖安装提交和 server 启动临界区；`instances/*` 记录各进程持有的 server，避免多实例并发覆盖 pidfile、误替换版本或误删记录。
+内嵌包验签、解压、目录替换与清理在 blocking 线程执行。组件根目录的跨进程文件锁覆盖安装提交和 server 启动临界区；`instances/*` 记录各进程持有的 server，避免多实例并发覆盖 pidfile、误替换版本或误删记录。
 
-远程清单同时承载灰度比例，缺省灰度为 0%；显式 Embedded 和手动二进制入口用于开发验收，不被 Auto 灰度拦截。`NAVOP_X11_YSERVER_PATH` 仍经过同一套 Vulkan、endpoint、进程和握手检查，但不能把上游原版的全网卡监听当作安全内置。
+内置清单同时承载灰度比例，缺省灰度为 0%；显式 Embedded 和手动二进制入口用于开发验收，不被 Auto 灰度拦截。`NAVOP_X11_YSERVER_PATH` 仍经过同一套 Vulkan、endpoint、进程和握手检查，但不能把上游原版的全网卡监听当作安全内置。
 
 ## 进程与健康检查
 
@@ -52,17 +52,17 @@ Navop fork 增加 `--listen IP`，只绑定明确给出的单个地址；保留�
 
 ## 用户可见状态
 
-设置页展示模式、已安装组件版本和“重新下载/修复”。会话信息显示以下结构化状态之一：外部 server 及其名称、内置 yserver 及版本、已停用及具体原因。
+设置页展示模式、已安装组件版本和“修复/重新安装”。会话信息显示以下结构化状态之一：外部 server 及其名称、内置 yserver 及版本、已停用及具体原因。
 
-下载失败、验签失败、Vulkan 不足、握手超时、平台/灰度不可用、远端拒绝 x11-req 都必须有对应文案。只有收到真实 CHANNEL_FAILURE 才显示远端拒绝诊断；本地发送失败、连接关闭和响应超时分别归类，成功响应恢复该会话此前的可用状态。远端拒绝时提示检查 `X11Forwarding yes`、`X11DisplayOffset`、xauth，并明确本应用使用 trusted (`-Y`)；不能拿不支持 SECURITY 扩展的 `ssh -X` 行为作为诊断依据。
+本地安装失败、验签失败、Vulkan 不足、握手超时、平台/灰度不可用、远端拒绝 x11-req 都必须有对应文案。只有收到真实 CHANNEL_FAILURE 才显示远端拒绝诊断；本地发送失败、连接关闭和响应超时分别归类，成功响应恢复该会话此前的可用状态。远端拒绝时提示检查 `X11Forwarding yes`、`X11DisplayOffset`、xauth，并明确本应用使用 trusted (`-Y`)；不能拿不支持 SECURITY 扩展的 `ssh -X` 行为作为诊断依据。
 
 X11 回连等待响应期间保留其他通道事件，每个 SSH 连接最多接受 32 条并发 X11 回连；本机连接、认证头读取和 setup 握手合计有 10 秒超时，已建立的正常双向中继不受这个总时长限制。
 
 ## 验证
 
 - 单元：manifest、artifact、版本、路径、签名正/负/截断/换公钥、cookie、命令安全闸门、崩溃窗口与灰度。
-- 集成：mock 清单和下载服务，覆盖断网、篡改、重复下载、握手失败、重启；内嵌路径额外覆盖离线安装、目标不匹配、损坏包和强制修复。
-- 构建：准备脚本校验真实固定 zip，CI 编译内嵌产物并运行内嵌字节与固定清单一致性测试；下载 mock 测试不注入内嵌包。
+- 集成：使用内存清单和 zip，覆盖篡改、重复安装、握手失败、重启，以及离线安装、目标不匹配、损坏包和强制修复。
+- 构建：准备脚本校验真实固定 zip，CI 编译内嵌产物并运行内嵌字节与固定清单一致性测试；普通运行时测试不访问组件网络。
 - 转发：setup 探针执行真实协议往返，并验证可变长度正文完整读取。
 - E2E：Windows 上真实 yserver + xterm/gtk3-demo 截图比对；该验收不能用 mock 替代。
 - 手动矩阵：有无 Vulkan、RDP、多显示器、HiDPI、与 VcXsrv 共存、Windows arm64。

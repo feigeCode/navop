@@ -3048,22 +3048,22 @@ Settings:
         en: not installed
         zh-CN: 未安装
         zh-HK: 未安裝
-      redownload:
+      reinstall:
         en: Repair / Reinstall
         zh-CN: 修复 / 重新安装
         zh-HK: 修復 / 重新安裝
-      downloading:
-        en: Preparing…
-        zh-CN: 正在准备…
-        zh-HK: 正在準備…
-      download_success:
+      installing:
+        en: Installing…
+        zh-CN: 正在安装…
+        zh-HK: 正在安裝…
+      install_success:
         en: "Built-in yserver %{version} is ready. Reconnect SSH to use it."
         zh-CN: "内置 yserver %{version} 已就绪，请重新连接 SSH 后使用。"
         zh-HK: "內置 yserver %{version} 已就緒，請重新連線 SSH 後使用。"
-      download_failed_retry:
-        en: "Could not prepare the built-in component; please retry. %{reason}"
-        zh-CN: "内置组件准备失败，可重试。%{reason}"
-        zh-HK: "內置元件準備失敗，可重試。%{reason}"
+      install_failed_retry:
+        en: "Could not install the built-in component; please retry. %{reason}"
+        zh-CN: "内置组件安装失败，可重试。%{reason}"
+        zh-HK: "內置元件安裝失敗，可重試。%{reason}"
       signature_failed_support:
         en: "Component signature verification failed; stop using this package and contact support. %{reason}"
         zh-CN: "组件验签失败，请停止使用此安装包并联系支持。%{reason}"

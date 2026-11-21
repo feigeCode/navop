@@ -179,11 +179,9 @@ pub fn default_config() -> Result<InstallConfig, X11ComponentError> {
     }
     Ok(InstallConfig {
         data_dir: configured_data_dir()?,
-        manifest_url: crate::DEFAULT_MANIFEST_URL.into(),
         public_key_base64: crate::X11_PUBLIC_KEY_BASE64.into(),
         navop_version: configured_navop_version()?,
         target: current_target()?.into(),
-        direct_http: false,
     })
 }
 

@@ -72,7 +72,6 @@ pub enum ArtifactFormat {
 #[serde(deny_unknown_fields)]
 pub struct Artifact {
     pub version: String,
-    pub url: String,
     pub sha256: String,
     pub signature: String,
     pub min_vulkan: String,
@@ -146,9 +145,6 @@ fn validate_artifact(artifact: &Artifact) -> Result<(), X11ComponentError> {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase());
     if !valid_sha {
         return invalid("sha256 必须为 64 位小写十六进制");
-    }
-    if !(artifact.url.starts_with("https://") || artifact.url.starts_with("http://")) {
-        return invalid("artifact URL 必须使用 HTTP(S)");
     }
     Ok(())
 }

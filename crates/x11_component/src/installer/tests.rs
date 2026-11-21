@@ -19,7 +19,7 @@ fn test_root(name: &str) -> PathBuf {
 }
 
 #[test]
-fn active_version_cannot_be_replaced_by_force_redownload() {
+fn active_version_cannot_be_replaced_by_force_reinstall() {
     let _guard = crate::test_support::global_state_lock();
     set_active_version(Some("1.9.0".into()));
     let root = test_root("local-active");
@@ -78,12 +78,9 @@ use crate::{InstallConfig, X11ServerMode};
 fn embedded_config(root: &std::path::Path, target: &str, signing: &SigningKey) -> InstallConfig {
     InstallConfig {
         data_dir: root.to_path_buf(),
-        // 离线分支不得读取这个地址；直连标志也必须无关紧要。
-        manifest_url: "http://127.0.0.1:1/must-not-be-requested.json".into(),
         public_key_base64: BASE64.encode(VerifyingKey::from(signing).to_bytes()),
         navop_version: semver::Version::new(0, 23, 4),
         target: target.into(),
-        direct_http: false,
     }
 }
 
@@ -103,10 +100,29 @@ fn zip_payload(executable: &[u8]) -> Vec<u8> {
     writer.finish().unwrap().into_inner()
 }
 
+fn malicious_zip_payload(entry_name: &str, symlink: bool) -> Vec<u8> {
+    use std::io::Write as _;
+
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    writer
+        .start_file("yserver.exe", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    writer.write_all(b"embedded").unwrap();
+    let options = zip::write::SimpleFileOptions::default();
+    if symlink {
+        writer
+            .add_symlink(entry_name, "../escape", options)
+            .unwrap();
+    } else {
+        writer.start_file(entry_name, options).unwrap();
+        writer.write_all(b"escape").unwrap();
+    }
+    writer.finish().unwrap().into_inner()
+}
+
 fn artifact_json(version: &str, payload: &[u8], signing: &SigningKey) -> serde_json::Value {
     serde_json::json!({
         "version": version,
-        "url": "https://example.invalid/must-not-be-requested.zip",
         "sha256": hex::encode(Sha256::digest(payload)),
         "signature": BASE64.encode(signing.sign(payload).to_bytes()),
         "min_vulkan": "1.3.0",
@@ -153,7 +169,27 @@ async fn install_test_archive(
 }
 
 #[tokio::test]
-async fn embedded_install_selects_target_without_http() {
+async fn missing_embedded_archive_fails_closed_without_network() {
+    if crate::bundle::archive().is_some() {
+        return;
+    }
+    let root = test_root("missing-embedded");
+    let config = InstallConfig {
+        data_dir: root.clone(),
+        public_key_base64: String::new(),
+        navop_version: semver::Version::new(0, 23, 4),
+        target: "windows-x86_64".into(),
+    };
+    let error = super::prepare(config, X11ServerMode::Embedded)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, X11ComponentError::Config(reason) if reason.contains("未内嵌")));
+    assert!(!root.join("components/x11").exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn embedded_install_selects_target_offline() {
     let root = test_root("embedded-offline");
     let signing = SigningKey::from_bytes(&[41; 32]);
     let payload = zip_payload(b"embedded-x64");
@@ -189,6 +225,40 @@ async fn embedded_install_selects_target_without_http() {
 }
 
 #[tokio::test]
+async fn embedded_archive_rejects_traversal_backslash_and_symlink() {
+    for (index, (entry_name, symlink)) in [
+        ("../escape", false),
+        ("..\\escape", false),
+        ("escape-link", true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let root = test_root(&format!("embedded-archive-{index}"));
+        let signing = SigningKey::from_bytes(&[47 + index as u8; 32]);
+        let payload = malicious_zip_payload(entry_name, symlink);
+        let manifest = embedded_manifest(&payload, &signing);
+        let config = embedded_config(&root, "windows-x86_64", &signing);
+        let error = install_test_archive(
+            &config,
+            super::InstallPurpose::Resolve(X11ServerMode::Embedded),
+            &manifest,
+            "windows-x86_64",
+            &payload,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, X11ComponentError::Install(_)),
+            "{entry_name}"
+        );
+        assert!(!root.join("components/x11/current").exists());
+        assert!(!root.join("escape").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[tokio::test]
 async fn embedded_target_mismatch_fails_closed() {
     let root = test_root("embedded-target");
     let signing = SigningKey::from_bytes(&[42; 32]);
@@ -211,6 +281,8 @@ async fn embedded_target_mismatch_fails_closed() {
 
 #[tokio::test]
 async fn embedded_bad_digest_does_not_commit() {
+    let _guard = crate::test_support::global_state_lock_async().await;
+    crate::state::reset_embedded_disable_reason_for_test();
     let root = test_root("embedded-digest");
     let signing = SigningKey::from_bytes(&[43; 32]);
     let payload = zip_payload(b"embedded");
@@ -231,10 +303,13 @@ async fn embedded_bad_digest_does_not_commit() {
     assert!(matches!(error, X11ComponentError::Sha256Mismatch { .. }));
     assert!(!root.join("components/x11/current").exists());
     std::fs::remove_dir_all(root).unwrap();
+    crate::state::reset_embedded_disable_reason_for_test();
 }
 
 #[tokio::test]
-async fn embedded_bad_signature_does_not_commit() {
+async fn embedded_bad_signature_disables_until_restart_and_does_not_commit() {
+    let _guard = crate::test_support::global_state_lock_async().await;
+    crate::state::reset_embedded_disable_reason_for_test();
     let root = test_root("embedded-signature");
     let signing = SigningKey::from_bytes(&[44; 32]);
     let wrong = SigningKey::from_bytes(&[45; 32]);
@@ -252,7 +327,44 @@ async fn embedded_bad_signature_does_not_commit() {
     .unwrap_err();
     assert!(matches!(error, X11ComponentError::SignatureInvalid(_)));
     assert!(!root.join("components/x11/current").exists());
+    let reason = crate::state::embedded_disable_reason().expect("验签失败应永久禁用内置");
+    assert!(reason.contains("验签"));
+    let previous_status = crate::current_status();
+    let resolution = crate::resolve_server(X11ServerMode::Embedded).await;
+    assert!(resolution.proxy.is_none());
+    let crate::X11ForwardingStatus::Disabled {
+        reason: ref status_reason,
+    } = resolution.status
+    else {
+        panic!("验签失败后 resolver 必须返回禁用状态");
+    };
+    assert!(status_reason.contains("验签"));
+    assert_eq!(crate::current_status(), resolution.status);
+
+    install_test_archive(
+        &config,
+        super::InstallPurpose::Resolve(X11ServerMode::Embedded),
+        &embedded_manifest(&payload, &signing),
+        "windows-x86_64",
+        &payload,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        crate::state::embedded_disable_reason().as_deref(),
+        Some(reason.as_str()),
+        "成功重装不得清除本次运行的安全禁用"
+    );
+    let resolution = crate::resolve_server(X11ServerMode::Embedded).await;
+    assert!(resolution.proxy.is_none());
+    assert_eq!(resolution.status, crate::current_status());
+    assert!(matches!(
+        resolution.status,
+        crate::X11ForwardingStatus::Disabled { reason: current } if current == *status_reason
+    ));
+    crate::state::update_status(previous_status);
     std::fs::remove_dir_all(root).unwrap();
+    crate::state::reset_embedded_disable_reason_for_test();
 }
 
 #[tokio::test]
@@ -276,7 +388,7 @@ async fn embedded_force_reinstall_verifies_and_replaces_existing_files() {
 
     install_test_archive(
         &config,
-        super::InstallPurpose::Redownload,
+        super::InstallPurpose::Repair,
         &manifest,
         "windows-x86_64",
         &payload,

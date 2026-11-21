@@ -1,4 +1,4 @@
-//! 构建期验证后嵌入的固定组件；空占位保留开发环境的在线安装路径。
+//! 构建期验证后嵌入的固定组件；运行时只接受这份内嵌归档。
 
 pub const PINNED_MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -61,11 +61,9 @@ mod tests {
         ));
         let config = crate::InstallConfig {
             data_dir: root.clone(),
-            manifest_url: "http://127.0.0.1:1/must-not-be-requested.json".into(),
             public_key_base64: crate::X11_PUBLIC_KEY_BASE64.into(),
             navop_version: semver::Version::new(0, 23, 4),
             target: archive.target.into(),
-            direct_http: false,
         };
         let result = crate::installer::prepare(config, crate::X11ServerMode::Embedded).await;
         let component = match result {

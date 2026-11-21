@@ -186,7 +186,7 @@ jobs:
           data_macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop-data","binary":"navop-data","archive":"navop-data-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
           data_macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","product":"navop-data","binary":"navop-data","archive":"navop-data-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
           data_linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","product":"navop-data","binary":"navop-data","archive":"navop-data-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
-          # standalone-data 与 full i686 一样保留在线组件路径，不准备、不内嵌。
+          # standalone-data 与 full i686 不准备、不内嵌；使用内置 X11 时明确失败，无网络回退。
           data_windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","product":"navop-data","binary":"navop-data.exe","archive":"navop-data-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x64","x11_target":""}'
 
           case "$RELEASE_PLATFORM" in

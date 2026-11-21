@@ -5543,14 +5543,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui-pre-http-client"
-version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.14#92e39d54a84c12f5f7118b6889aa7df28581bb60"
-dependencies = [
- "http-client",
-]
-
-[[package]]
 name = "gpui-pre-macros"
 version = "0.3.126"
 source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.14#92e39d54a84c12f5f7118b6889aa7df28581bb60"
@@ -17399,9 +17391,6 @@ dependencies = [
  "dirs 6.0.0",
  "ed25519-dalek 2.2.0",
  "fs2",
- "futures-util",
- "gpui-pre-http-client",
- "gpui-pre-reqwest-client",
  "hex",
  "libc",
  "libloading",
@@ -18244,6 +18233,11 @@ source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.1
 
 [[patch.unused]]
 name = "gpui-pre-derive-refineable"
+version = "0.3.126"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.14#92e39d54a84c12f5f7118b6889aa7df28581bb60"
+
+[[patch.unused]]
+name = "gpui-pre-http-client"
 version = "0.3.126"
 source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.14#92e39d54a84c12f5f7118b6889aa7df28581bb60"
 

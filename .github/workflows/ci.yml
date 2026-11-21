@@ -269,7 +269,7 @@ jobs:
         run: cargo check --workspace --all-targets
       # 只给 lib 测试注入真实组件：它同时编译内嵌构建并运行
       # configured_archive_matches_its_pinned_manifest，验证 SHA256 + Ed25519。
-      # 后续 workspace check / test-windows.ps1 不继承该 env，下载集成测试仍走 mock HTTP。
+      # 后续 workspace check / test-windows.ps1 不继承该 env；普通测试不访问组件网络。
       - name: Test Windows X11 component with real embedded archive
         if: ${{ matrix.platform == 'windows' }}
         shell: pwsh

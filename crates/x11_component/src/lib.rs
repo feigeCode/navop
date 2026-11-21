@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 mod archive;
 mod bundle;
 mod command;
-mod download;
 mod install_work;
 mod installer;
 mod launch;
@@ -26,18 +25,15 @@ mod test_support;
 mod vulkan;
 mod xauth;
 
-pub use installer::{install_with_config, install_with_config_for_mode, redownload_with_config};
+pub use installer::{install_with_config, install_with_config_for_mode, reinstall_with_config};
 pub use metrics::{X11ComponentMetrics, metrics};
-pub use resolver::{installed_version, redownload, resolve_server};
+pub use resolver::{installed_version, reinstall, resolve_server};
 pub use signature::verify_ed25519;
 pub use state::{
     configured_mode, current_status, resolution_generation, set_configured_mode, set_data_dir,
     set_navop_version, take_restart_notification, take_restart_notification_for,
 };
 
-/// 固定组件 Release 的清单地址，不发现 tag、不追踪 latest。
-pub const DEFAULT_MANIFEST_URL: &str =
-    "https://github.com/feigeCode/yserver/releases/download/navop-v1.9.0-1/navop-x11-manifest.json";
 /// 与程序更新公钥独立；可通过构建环境覆盖，仓库内固定公钥用于离线内嵌组件。
 pub const X11_PUBLIC_KEY_BASE64: &str = match option_env!("NAVOP_X11_PUBLIC_KEY_BASE64") {
     Some(key) => key,
@@ -81,8 +77,6 @@ pub enum X11ComponentError {
     InvalidManifest(String),
     #[error("当前平台没有 X11 组件：{0}")]
     MissingArtifact(String),
-    #[error("下载 X11 组件失败：{0}")]
-    Download(String),
     #[error("X11 组件 SHA256 不匹配")]
     Sha256Mismatch { expected: String, actual: String },
     #[error("X11 组件 Ed25519 验签失败：{0}")]
@@ -113,14 +107,11 @@ pub struct X11Resolution {
     pub status: X11ForwardingStatus,
 }
 
-/// 下载与安装所需配置；集成测试通过它注入隔离根目录与密钥。
+/// 内嵌安装所需配置；测试通过它注入隔离根目录与临时密钥。
 #[derive(Clone, Debug)]
 pub struct InstallConfig {
     pub data_dir: std::path::PathBuf,
-    pub manifest_url: String,
     pub public_key_base64: String,
     pub navop_version: semver::Version,
     pub target: String,
-    /// 测试使用直连客户端，生产配置必须保持 false 以继承系统代理。
-    pub direct_http: bool,
 }

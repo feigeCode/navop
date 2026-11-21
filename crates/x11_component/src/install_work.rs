@@ -1,4 +1,4 @@
-//! 下载后的 CPU 与目录 I/O 集中在 blocking 阶段执行。
+//! 内嵌包校验、解压与目录 I/O 集中在 blocking 阶段执行。
 use std::path::{Path, PathBuf};
 
 use rand::{RngCore as _, rngs::OsRng};
@@ -8,19 +8,6 @@ use crate::X11ComponentError;
 use crate::manifest::Artifact;
 
 pub async fn unpack_blocking(
-    payload: Vec<u8>,
-    artifact: Artifact,
-    public_key_base64: String,
-    staging: PathBuf,
-) -> Result<(), X11ComponentError> {
-    tokio::task::spawn_blocking(move || {
-        unpack_sync(&payload, &artifact, &public_key_base64, &staging)
-    })
-    .await
-    .map_err(join_error)?
-}
-
-pub async fn unpack_embedded_blocking(
     payload: &'static [u8],
     artifact: Artifact,
     public_key_base64: String,
@@ -118,7 +105,6 @@ mod tests {
     async fn sha256_does_not_block_the_async_worker() {
         let artifact = Artifact {
             version: "1.9.0".into(),
-            url: String::new(),
             sha256: "00".repeat(32),
             signature: String::new(),
             min_vulkan: "1.3.0".into(),
@@ -127,7 +113,7 @@ mod tests {
         };
         let staging = std::env::temp_dir().join("x11-blocking-test");
         let work = tokio::spawn(super::unpack_blocking(
-            vec![7; 64 * 1024 * 1024],
+            &[7; 64 * 1024 * 1024],
             artifact,
             String::new(),
             staging,

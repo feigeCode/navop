@@ -1,10 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use rand::{RngCore as _, rngs::OsRng};
-use reqwest_client::ReqwestClient;
 
 use crate::bundle::EmbeddedArchive;
-use crate::download::fetch;
 use crate::lock::ComponentLock;
 use crate::manifest::{Artifact, ComponentManifest};
 use crate::paths::{component_root, prune_versions_preserving, read_installed, write_current};
@@ -13,8 +11,6 @@ use crate::rollout::should_use_embedded;
 use crate::state::{active_version, disable_embedded, update_status};
 use crate::{InstallConfig, X11ComponentError, X11ServerMode};
 
-const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
-const MAX_ARTIFACT_BYTES: usize = 256 * 1024 * 1024;
 static INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Clone, Debug)]
@@ -24,7 +20,7 @@ pub(crate) struct InstalledComponent {
     pub min_vulkan: String,
 }
 
-/// 手动安装始终允许 dogfood，但下载仍强制 SHA256 与 Ed25519 校验。
+/// 显式安装内嵌组件，始终强制 SHA256 与 Ed25519 校验。
 pub async fn install_with_config(config: InstallConfig) -> Result<String, X11ComponentError> {
     install_with_config_for_mode(config, X11ServerMode::Embedded).await
 }
@@ -39,22 +35,12 @@ pub async fn install_with_config_for_mode(
         .map(|component| component.version)
 }
 
-/// 修复优先重建内嵌组件；没有内嵌包的开发构建才重新获取远端发布物。
-pub async fn redownload_with_config(config: InstallConfig) -> Result<String, X11ComponentError> {
+/// 使用同一份内嵌归档重新安装；不存在任何运行时网络回退。
+pub async fn reinstall_with_config(config: InstallConfig) -> Result<String, X11ComponentError> {
     let _guard = INSTALL_LOCK.lock().await;
-    let component = if let Some(archive) = crate::bundle::archive() {
-        install_embedded_manifest(
-            &config,
-            InstallPurpose::Redownload,
-            crate::bundle::PINNED_MANIFEST,
-            archive,
-        )
-        .await?
-    } else {
-        let client = http_client(&config)?;
-        install_using_client(&config, &client, InstallPurpose::Redownload).await?
-    };
-    Ok(component.version)
+    prepare_locked(config, InstallPurpose::Repair)
+        .await
+        .map(|component| component.version)
 }
 
 pub(crate) async fn prepare(
@@ -62,62 +48,34 @@ pub(crate) async fn prepare(
     mode: X11ServerMode,
 ) -> Result<InstalledComponent, X11ComponentError> {
     let _guard = INSTALL_LOCK.lock().await;
-    if let Some(archive) = crate::bundle::archive() {
-        install_embedded_manifest(
-            &config,
-            InstallPurpose::Resolve(mode),
-            crate::bundle::PINNED_MANIFEST,
-            archive,
-        )
-        .await
-    } else {
-        let client = http_client(&config)?;
-        install_using_client(&config, &client, InstallPurpose::Resolve(mode)).await
-    }
+    prepare_locked(config, InstallPurpose::Resolve(mode)).await
+}
+
+async fn prepare_locked(
+    config: InstallConfig,
+    purpose: InstallPurpose,
+) -> Result<InstalledComponent, X11ComponentError> {
+    let archive = crate::bundle::archive()
+        .ok_or_else(|| X11ComponentError::Config("当前构建未内嵌 X11 组件，无法离线安装".into()))?;
+    install_embedded_manifest(&config, purpose, crate::bundle::PINNED_MANIFEST, archive).await
 }
 
 enum InstallPurpose {
     Resolve(X11ServerMode),
-    Redownload,
+    Repair,
 }
 
 impl InstallPurpose {
     fn mode(&self) -> X11ServerMode {
         match self {
             Self::Resolve(mode) => *mode,
-            Self::Redownload => X11ServerMode::Embedded,
+            Self::Repair => X11ServerMode::Embedded,
         }
     }
 
     fn force(&self) -> bool {
-        matches!(self, Self::Redownload)
+        matches!(self, Self::Repair)
     }
-}
-
-fn http_client(config: &InstallConfig) -> Result<ReqwestClient, X11ComponentError> {
-    let client = if config.direct_http {
-        ReqwestClient::user_agent_direct("onetcli-x11-component-test")
-    } else {
-        ReqwestClient::user_agent("onetcli-x11-component")
-    };
-    client.map_err(|error| X11ComponentError::Download(error.to_string()))
-}
-
-async fn install_using_client(
-    config: &InstallConfig,
-    client: &ReqwestClient,
-    purpose: InstallPurpose,
-) -> Result<InstalledComponent, X11ComponentError> {
-    if config.public_key_base64.is_empty() {
-        return Err(X11ComponentError::Config(
-            "X11 组件发布公钥尚未配置，已 fail-closed".into(),
-        ));
-    }
-    let manifest_bytes = fetch(client, &config.manifest_url, MAX_MANIFEST_BYTES).await?;
-    let manifest_text = String::from_utf8(manifest_bytes)
-        .map_err(|error| X11ComponentError::InvalidManifest(error.to_string()))?;
-    let manifest = ComponentManifest::parse(&manifest_text, &config.navop_version)?;
-    install_selected_artifact(config, purpose, &manifest, ArtifactSource::Remote(client)).await
 }
 
 async fn install_embedded_manifest(
@@ -133,25 +91,14 @@ async fn install_embedded_manifest(
         )));
     }
     let manifest = ComponentManifest::parse(manifest_text, &config.navop_version)?;
-    install_selected_artifact(
-        config,
-        purpose,
-        &manifest,
-        ArtifactSource::Embedded(archive),
-    )
-    .await
-}
-
-enum ArtifactSource<'a> {
-    Remote(&'a ReqwestClient),
-    Embedded(EmbeddedArchive),
+    install_selected_artifact(config, purpose, &manifest, archive).await
 }
 
 async fn install_selected_artifact(
     config: &InstallConfig,
     purpose: InstallPurpose,
     manifest: &ComponentManifest,
-    source: ArtifactSource<'_>,
+    archive: EmbeddedArchive,
 ) -> Result<InstalledComponent, X11ComponentError> {
     if config.public_key_base64.is_empty() {
         return Err(X11ComponentError::Config(
@@ -178,15 +125,7 @@ async fn install_selected_artifact(
         ensure_replacement_allowed(&root, &artifact.version)?;
     }
     let staging = StagingDirectory::new(&root)?;
-    let result = match source {
-        ArtifactSource::Remote(client) => {
-            let context = DownloadContext { config, client };
-            download_and_install(context, &artifact, &staging.path).await
-        }
-        ArtifactSource::Embedded(archive) => {
-            embedded_install(config, &artifact, &staging.path, archive.bytes).await
-        }
-    };
+    let result = embedded_install(config, &artifact, &staging.path, archive.bytes).await;
     preserve_untrusted_disable_reason(&result);
     if result.is_ok() {
         staging.disarm();
@@ -232,35 +171,13 @@ fn already_installed(
     }))
 }
 
-struct DownloadContext<'a> {
-    config: &'a InstallConfig,
-    client: &'a ReqwestClient,
-}
-
-async fn download_and_install(
-    context: DownloadContext<'_>,
-    artifact: &Artifact,
-    staging: &Path,
-) -> Result<InstalledComponent, X11ComponentError> {
-    let DownloadContext { config, client } = context;
-    let payload = fetch(client, &artifact.url, MAX_ARTIFACT_BYTES).await?;
-    crate::install_work::unpack_blocking(
-        payload,
-        artifact.clone(),
-        config.public_key_base64.clone(),
-        staging.to_path_buf(),
-    )
-    .await?;
-    finish_install(config, artifact, staging).await
-}
-
 async fn embedded_install(
     config: &InstallConfig,
     artifact: &Artifact,
     staging: &Path,
     payload: &'static [u8],
 ) -> Result<InstalledComponent, X11ComponentError> {
-    crate::install_work::unpack_embedded_blocking(
+    crate::install_work::unpack_blocking(
         payload,
         artifact.clone(),
         config.public_key_base64.clone(),
@@ -315,7 +232,7 @@ pub(crate) fn commit_sync(
 fn ensure_replacement_allowed(root: &Path, version: &str) -> Result<(), X11ComponentError> {
     if active_version().as_deref() == Some(version) || active_versions(root)?.contains(version) {
         return Err(X11ComponentError::Install(
-            "内置组件正在运行，请重启应用后再重新下载".into(),
+            "内置组件正在运行，请重启应用后再重新安装".into(),
         ));
     }
     Ok(())

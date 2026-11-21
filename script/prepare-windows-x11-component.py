@@ -15,6 +15,10 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 RESOURCE_DIR = ROOT / "resources" / "windows" / "x11-component"
 EXPECTED_COMPONENT_VERSION = "1.9.0-navop.1"
+ARTIFACT_URLS = {
+    "windows-x86_64": "https://github.com/feigeCode/yserver/releases/download/navop-v1.9.0-1/yserver-1.9.0-navop.1-windows-x86_64.zip",
+    "windows-aarch64": "https://github.com/feigeCode/yserver/releases/download/navop-v1.9.0-1/yserver-1.9.0-navop.1-windows-arm64.zip",
+}
 MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
 ED25519_SPKI_DER_PREFIX = bytes.fromhex("302a300506032b6570032100")
 
@@ -37,7 +41,7 @@ def prepare(target: str, output: Path) -> dict:
         or executable_path.name != "yserver.exe"
     ):
         raise ValueError("随包组件必须声明安全的 yserver.exe 相对路径")
-    url = artifact["url"]
+    url = ARTIFACT_URLS[target]
     if not url.startswith("https://"):
         raise ValueError("组件下载必须使用 HTTPS")
     expected_sha256 = artifact["sha256"].lower()

@@ -28,7 +28,6 @@ fn valid_manifest() -> String {
 fn artifact() -> serde_json::Value {
     serde_json::json!({
         "version": "0.15.2",
-        "url": "https://example.com/yserver.zip",
         "sha256": "a".repeat(64),
         "signature": "c2ln",
         "min_vulkan": "1.3.0",
@@ -125,11 +124,22 @@ fn duplicate_target_is_rejected_instead_of_overwritten() {
 }
 
 #[test]
+fn runtime_manifest_rejects_legacy_url_metadata() {
+    let text = change_manifest(|value| {
+        value["components"]["x11-server"]["artifacts"]["windows-x86_64"]["url"] =
+            "https://example.invalid/yserver.zip".into();
+    });
+    assert!(matches!(
+        parse(&text),
+        Err(X11ComponentError::InvalidManifest(_))
+    ));
+}
+
+#[test]
 fn artifact_hash_vulkan_and_rollout_are_validated() {
     let cases = [
         ("sha256", "not-sha".into()),
         ("min_vulkan", "latest".into()),
-        ("url", "file:///tmp/yserver".into()),
     ];
     for (field, value) in cases {
         let text = change_manifest(|root| {

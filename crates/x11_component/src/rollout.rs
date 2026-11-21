@@ -31,7 +31,7 @@ pub fn persistent_rollout_id(root: &Path) -> Result<u64, X11ComponentError> {
     }
 }
 
-/// Auto 遵守远程灰度；显式 Embedded 是 dogfood 入口，External 不触发内置。
+/// Auto 遵守内置清单灰度；显式 Embedded 是 dogfood 入口，External 不触发内置。
 pub fn should_use_embedded(
     root: &Path,
     mode: X11ServerMode,

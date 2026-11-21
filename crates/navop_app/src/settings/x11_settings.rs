@@ -15,14 +15,14 @@ use gpui_component::{
 use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::settings::{
-    AppSettings, X11ForwardingStatus, X11ServerMode, current_status, installed_version, redownload,
+    AppSettings, X11ForwardingStatus, X11ServerMode, current_status, installed_version, reinstall,
     take_restart_notification_for,
 };
 use rust_i18n::t;
 use std::time::Duration;
 
 use super::x11_state::{
-    X11DownloadState, x11_disabled_guidance_key, x11_download_error_key, x11_status_label,
+    X11InstallState, x11_disabled_guidance_key, x11_install_error_key, x11_status_label,
 };
 
 const X11_RESTART_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -34,7 +34,7 @@ impl Global for GlobalX11SettingsState {}
 
 #[derive(Default)]
 pub(crate) struct X11SettingsView {
-    download: X11DownloadState,
+    install: X11InstallState,
 }
 
 pub(crate) fn x11_setting_group(default_mode: X11ServerMode) -> SettingGroup {
@@ -121,7 +121,7 @@ impl X11SettingsView {
                 let notification = take_restart_notification_for(consumer);
                 let alive = this
                     .update(cx, |this, cx| {
-                        this.download.record_restart(notification);
+                        this.install.record_restart(notification);
                         cx.notify();
                     })
                     .is_ok();
@@ -136,30 +136,30 @@ impl X11SettingsView {
         .detach();
     }
 
-    fn start_redownload(&mut self, cx: &mut Context<Self>) {
-        if !self.download.begin_download() {
+    fn start_reinstall(&mut self, cx: &mut Context<Self>) {
+        if !self.install.begin_install() {
             return;
         }
         cx.notify();
-        let task = Tokio::spawn(cx, async move { redownload().await });
+        let task = Tokio::spawn(cx, async move { reinstall().await });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = task
                 .await
                 .map_err(|error| {
                     t!(
-                        "Settings.General.X11.download_failed_retry",
+                        "Settings.General.X11.install_failed_retry",
                         reason = error.to_string()
                     )
                     .to_string()
                 })
                 .and_then(|result| {
                     result.map_err(|error| {
-                        let key = x11_download_error_key(&error);
+                        let key = x11_install_error_key(&error);
                         t!(key, reason = error.to_string()).to_string()
                     })
                 });
             let _ = this.update(cx, |this, cx| {
-                this.download.finish_download(result);
+                this.install.finish_install(result);
                 cx.notify();
             });
         })
@@ -184,7 +184,7 @@ impl X11SettingsView {
     }
 
     fn render_restart(&self, cx: &App) -> Option<AnyElement> {
-        let notification = self.download.restart_notification()?;
+        let notification = self.install.restart_notification()?;
         Some(
             div()
                 .text_xs()
@@ -200,12 +200,12 @@ impl X11SettingsView {
         )
     }
 
-    fn render_download(&self, cx: &mut Context<Self>) -> AnyElement {
-        let downloading = self.download.is_downloading();
-        let label = if downloading {
-            t!("Settings.General.X11.downloading")
+    fn render_install(&self, cx: &mut Context<Self>) -> AnyElement {
+        let installing = self.install.is_installing();
+        let label = if installing {
+            t!("Settings.General.X11.installing")
         } else {
-            t!("Settings.General.X11.redownload")
+            t!("Settings.General.X11.reinstall")
         };
         h_flex()
             .w_full()
@@ -213,15 +213,15 @@ impl X11SettingsView {
             .justify_between()
             .gap_3()
             .when_some(
-                self.download.message().map(str::to_owned),
+                self.install.message().map(str::to_owned),
                 |this, message| this.child(div().flex_1().min_w_0().text_sm().child(message)),
             )
             .child(
-                Button::new("settings-x11-redownload")
+                Button::new("settings-x11-reinstall")
                     .icon(IconName::Refresh)
                     .label(label)
-                    .loading(downloading)
-                    .on_click(cx.listener(|this, _, _, cx| this.start_redownload(cx))),
+                    .loading(installing)
+                    .on_click(cx.listener(|this, _, _, cx| this.start_reinstall(cx))),
             )
             .into_any_element()
     }
@@ -234,7 +234,7 @@ impl Render for X11SettingsView {
             .w_full()
             .gap_3()
             .child(self.render_summary(&status, cx))
-            .child(self.render_download(cx))
+            .child(self.render_install(cx))
             .when_some(self.render_restart(cx), |this, notification| {
                 this.child(notification)
             })

@@ -1,37 +1,37 @@
-//! X11 设置的状态映射与下载状态契约。
+//! X11 设置的状态映射与本地安装状态契约。
 
 use one_core::settings::{X11ComponentError, X11ForwardingStatus, X11RestartNotification};
 use rust_i18n::t;
 
 #[derive(Default)]
-pub(crate) struct X11DownloadState {
-    downloading: bool,
+pub(crate) struct X11InstallState {
+    installing: bool,
     message: Option<String>,
     restart_notification: Option<X11RestartNotification>,
 }
 
-impl X11DownloadState {
-    pub(crate) fn begin_download(&mut self) -> bool {
-        if self.downloading {
+impl X11InstallState {
+    pub(crate) fn begin_install(&mut self) -> bool {
+        if self.installing {
             return false;
         }
-        self.downloading = true;
+        self.installing = true;
         self.message = None;
         true
     }
 
-    pub(crate) fn finish_download(&mut self, result: Result<String, String>) {
-        self.downloading = false;
+    pub(crate) fn finish_install(&mut self, result: Result<String, String>) {
+        self.installing = false;
         self.message = Some(match result {
             Ok(version) => {
-                t!("Settings.General.X11.download_success", version = version).to_string()
+                t!("Settings.General.X11.install_success", version = version).to_string()
             }
             Err(error) => error,
         });
     }
 
-    pub(crate) fn is_downloading(&self) -> bool {
-        self.downloading
+    pub(crate) fn is_installing(&self) -> bool {
+        self.installing
     }
 
     pub(crate) fn message(&self) -> Option<&str> {
@@ -49,7 +49,7 @@ impl X11DownloadState {
     }
 }
 
-pub(crate) fn x11_download_error_key(error: &X11ComponentError) -> &'static str {
+pub(crate) fn x11_install_error_key(error: &X11ComponentError) -> &'static str {
     match error {
         X11ComponentError::Sha256Mismatch { .. } | X11ComponentError::SignatureInvalid(_) => {
             "Settings.General.X11.signature_failed_support"
@@ -60,7 +60,7 @@ pub(crate) fn x11_download_error_key(error: &X11ComponentError) -> &'static str 
         X11ComponentError::Handshake(_) | X11ComponentError::EmbeddedDisabled(_) => {
             "Settings.General.X11.handshake_failed_fallback"
         }
-        _ => "Settings.General.X11.download_failed_retry",
+        _ => "Settings.General.X11.install_failed_retry",
     }
 }
 
@@ -78,8 +78,8 @@ pub(crate) fn x11_disabled_guidance_key(status: &X11ForwardingStatus) -> Option<
     {
         return Some("Settings.General.X11.handshake_failed_fallback");
     }
-    if reason.contains("下载 X11 组件失败") {
-        return Some("Settings.General.X11.download_failed_retry");
+    if reason.contains("X11 组件安装失败") {
+        return Some("Settings.General.X11.install_failed_retry");
     }
     None
 }
@@ -103,12 +103,12 @@ mod tests {
     use one_core::settings::{X11ComponentError, X11ForwardingStatus, X11RestartNotification};
 
     use super::{
-        X11DownloadState, x11_disabled_guidance_key, x11_download_error_key, x11_status_label,
+        X11InstallState, x11_disabled_guidance_key, x11_install_error_key, x11_status_label,
     };
 
     #[test]
     fn restart_notice_requires_a_structured_event() {
-        let mut state = X11DownloadState::default();
+        let mut state = X11InstallState::default();
         state.record_restart(None);
         assert!(state.restart_notification().is_none());
 
@@ -124,37 +124,37 @@ mod tests {
     fn status_poll_refreshes_even_without_a_restart() {
         let source = include_str!("x11_settings.rs");
         assert!(source.contains(
-            "this.download.record_restart(notification);\n                        cx.notify();"
+            "this.install.record_restart(notification);\n                        cx.notify();"
         ));
     }
 
     #[test]
-    fn download_rejects_duplicate_clicks_and_finishes_visibly() {
-        let mut state = X11DownloadState::default();
-        assert!(state.begin_download());
-        assert!(!state.begin_download(), "下载中不得重复发起");
-        assert!(state.is_downloading());
+    fn install_rejects_duplicate_clicks_and_finishes_visibly() {
+        let mut state = X11InstallState::default();
+        assert!(state.begin_install());
+        assert!(!state.begin_install(), "安装中不得重复发起");
+        assert!(state.is_installing());
 
-        state.finish_download(Ok("1.2.3".to_string()));
-        assert!(!state.is_downloading());
+        state.finish_install(Ok("1.2.3".to_string()));
+        assert!(!state.is_installing());
         assert!(
             state
                 .message()
                 .is_some_and(|message| message.contains("1.2.3"))
         );
 
-        assert!(state.begin_download());
-        state.finish_download(Err("网络不可用".to_string()));
-        assert!(!state.is_downloading());
-        assert_eq!(Some("网络不可用"), state.message());
+        assert!(state.begin_install());
+        state.finish_install(Err("内嵌包不可用".to_string()));
+        assert!(!state.is_installing());
+        assert_eq!(Some("内嵌包不可用"), state.message());
     }
 
     #[test]
-    fn typed_download_errors_map_to_actionable_messages() {
+    fn typed_install_errors_map_to_actionable_messages() {
         let cases = [
             (
-                X11ComponentError::Download("timeout".to_string()),
-                "Settings.General.X11.download_failed_retry",
+                X11ComponentError::Install("timeout".to_string()),
+                "Settings.General.X11.install_failed_retry",
             ),
             (
                 X11ComponentError::SignatureInvalid("bad signature".to_string()),
@@ -181,7 +181,7 @@ mod tests {
         ];
 
         for (error, expected) in cases {
-            assert_eq!(expected, x11_download_error_key(&error));
+            assert_eq!(expected, x11_install_error_key(&error));
         }
     }
 
@@ -223,8 +223,8 @@ mod tests {
                 Some("Settings.General.X11.handshake_failed_fallback"),
             ),
             (
-                "下载 X11 组件失败",
-                Some("Settings.General.X11.download_failed_retry"),
+                "X11 组件安装失败",
+                Some("Settings.General.X11.install_failed_retry"),
             ),
             ("尚未解析 X11 服务", None),
             ("远程显示已重启", None),
@@ -248,7 +248,7 @@ mod tests {
         for language in ["en", "zh-CN", "zh-HK"] {
             rust_i18n::set_locale(language);
             for key in [
-                "Settings.General.X11.download_failed_retry",
+                "Settings.General.X11.install_failed_retry",
                 "Settings.General.X11.signature_failed_support",
                 "Settings.General.X11.vulkan_unavailable_use_external",
                 "Settings.General.X11.handshake_failed_fallback",

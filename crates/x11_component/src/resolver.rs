@@ -38,13 +38,13 @@ pub fn installed_version() -> Option<String> {
     read_installed(&component_root(&data_dir))
 }
 
-pub async fn redownload() -> Result<String, X11ComponentError> {
+pub async fn reinstall() -> Result<String, X11ComponentError> {
     if !cfg!(target_os = "windows") {
         return Err(X11ComponentError::UnsupportedPlatform(
             std::env::consts::OS.into(),
         ));
     }
-    crate::redownload_with_config(default_config()?).await
+    crate::reinstall_with_config(default_config()?).await
 }
 
 async fn external() -> Result<X11Resolution, X11ComponentError> {
@@ -60,13 +60,13 @@ async fn external() -> Result<X11Resolution, X11ComponentError> {
 }
 
 async fn embedded(mode: X11ServerMode) -> Result<X11Resolution, X11ComponentError> {
+    if let Some(reason) = embedded_disable_reason() {
+        return Err(X11ComponentError::EmbeddedDisabled(reason));
+    }
     if !cfg!(target_os = "windows") {
         return Err(X11ComponentError::UnsupportedPlatform(
             std::env::consts::OS.into(),
         ));
-    }
-    if let Some(reason) = embedded_disable_reason() {
-        return Err(X11ComponentError::EmbeddedDisabled(reason));
     }
     let spec = match manual_binary() {
         Some(executable) => LaunchSpec::manual(configured_data_dir()?, executable)?,

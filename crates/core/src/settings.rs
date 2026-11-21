@@ -31,7 +31,7 @@ pub use remote_file_editor::{
 };
 pub use x11_component::{
     X11ComponentError, X11ForwardingStatus, X11RestartNotification, X11ServerMode, configured_mode,
-    current_status, installed_version, redownload, take_restart_notification,
+    current_status, installed_version, reinstall, take_restart_notification,
     take_restart_notification_for,
 };
 
