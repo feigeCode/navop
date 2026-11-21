@@ -584,6 +584,10 @@ Mfa:
     en: Please fill in every field.
     zh-CN: 请填写所有字段。
     zh-HK: 請填寫所有欄位。
+  auth_keyboard_interactive_cancelled:
+    en: MFA/keyboard-interactive authentication was cancelled
+    zh-CN: 已取消 MFA/keyboard-interactive 二次认证
+    zh-HK: 已取消 MFA/keyboard-interactive 二次認證
   submit:
     en: Continue
     zh-CN: 继续

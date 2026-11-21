@@ -131,10 +131,10 @@ impl KeyboardInteractiveResponder for SftpMfaResponder {
                 prompts,
                 response_tx,
             })
-            .map_err(|_| anyhow!(t!("Ssh.auth_keyboard_interactive_cancelled").to_string()))?;
+            .map_err(|_| anyhow!(t!("Mfa.auth_keyboard_interactive_cancelled").to_string()))?;
         let responses = response_rx
             .await
-            .map_err(|_| anyhow!(t!("Ssh.auth_keyboard_interactive_cancelled").to_string()))?;
+            .map_err(|_| anyhow!(t!("Mfa.auth_keyboard_interactive_cancelled").to_string()))?;
         answers_from_manual_responses(&request.prompts, &responses, password)
     }
 }
