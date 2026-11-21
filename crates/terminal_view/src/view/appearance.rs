@@ -198,10 +198,13 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.current_theme == *theme {
+        let theme = theme
+            .clone()
+            .with_window_opacity(AppSettings::global(cx).window_opacity);
+        if self.current_theme == theme {
             return;
         }
-        self.current_theme = theme.clone();
+        self.current_theme = theme;
         self.sync_sidebar_theme(window, cx);
         cx.emit(TabContentEvent::StateChanged);
         cx.notify();

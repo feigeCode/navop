@@ -38,7 +38,8 @@ impl TerminalView {
 
         // 终端主题需要在创建侧边栏之前解析，以便所有终端子面板使用一致配色。
         let initial_settings = current_settings(cx);
-        let default_theme = TerminalTheme::resolve(&initial_settings.theme, cx.theme());
+        let default_theme = TerminalTheme::resolve(&initial_settings.theme, cx.theme())
+            .with_window_opacity(AppSettings::global(cx).window_opacity);
         let default_font_size = px(TERMINAL_RESET_FONT_SIZE);
         let default_font_family: SharedString = default_monospace_font().into();
         let default_font_fallbacks = default_font_fallbacks();
