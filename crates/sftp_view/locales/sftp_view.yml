@@ -570,6 +570,25 @@ Credentials:
     zh-CN: 请输入密码。
     zh-HK: 請輸入密碼。
 
+# Keyboard-interactive / MFA
+Mfa:
+  title:
+    en: Keyboard-interactive authentication
+    zh-CN: 键盘交互认证
+    zh-HK: 鍵盤互動認證
+  response_placeholder:
+    en: MFA response
+    zh-CN: MFA 响应
+    zh-HK: MFA 回應
+  response_required:
+    en: Please fill in every field.
+    zh-CN: 请填写所有字段。
+    zh-HK: 請填寫所有欄位。
+  submit:
+    en: Continue
+    zh-CN: 继续
+    zh-HK: 繼續
+
 # 终端
 Terminal:
   open_here:

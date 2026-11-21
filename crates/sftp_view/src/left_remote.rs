@@ -97,15 +97,38 @@ impl SftpView {
             return;
         }
         let generation = self.next_left_connection_generation();
-        let Some(endpoint) = self.left_remote.as_mut() else {
+        self.clear_sftp_mfa_for_left();
+        let Some((connection_id, connection, mut config, ftp_config, initial_directory)) =
+            self.left_remote.as_ref().map(|endpoint| {
+                (
+                    endpoint.connection.id,
+                    endpoint.connection.clone(),
+                    endpoint.config.clone(),
+                    endpoint.remote_file_ftp.clone(),
+                    endpoint.sftp_initial_directory.clone(),
+                )
+            })
+        else {
             return;
         };
-        endpoint.state = LeftRemoteConnectionState::Connecting;
-        endpoint.loading = false;
-        let config = endpoint.config.clone();
-        let ftp_config = endpoint.remote_file_ftp.clone();
-        let initial_directory = endpoint.sftp_initial_directory.clone();
-        let connection_id = endpoint.connection.id;
+        if let Some(connection_id) = connection_id {
+            config.keyboard_interactive_responder = self
+                .sftp_mfa_responder_for(
+                    &connection,
+                    &config,
+                    ftp_config.is_some(),
+                    crate::mfa::SftpMfaTarget::Left {
+                        connection_id,
+                        generation,
+                    },
+                )
+                .map(|responder| Arc::new(responder) as Arc<dyn ssh::KeyboardInteractiveResponder>);
+        }
+        if let Some(endpoint) = self.left_remote.as_mut() {
+            endpoint.config = config.clone();
+            endpoint.state = LeftRemoteConnectionState::Connecting;
+            endpoint.loading = false;
+        }
         let window_handle = self.window_handle.clone();
         let task = Tokio::spawn(cx, async move {
             let mut client: Box<dyn RemoteFileClient> = match ftp_config {
@@ -425,6 +448,7 @@ impl SftpView {
     ) -> Option<SharedRemoteFileClient> {
         self.left_connection_generation.advance();
         self.left_credential_inputs = None;
+        self.clear_sftp_mfa_for_left();
         let mut endpoint = self.left_remote.take()?;
         self.set_left_connection_active_for(endpoint.connection.id, false, cx);
         endpoint.client.take()

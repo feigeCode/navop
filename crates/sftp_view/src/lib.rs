@@ -13,6 +13,7 @@ mod left_credential_prompt;
 mod left_remote;
 mod left_remote_state;
 mod local_volume;
+mod mfa;
 mod ssh_config;
 
 use context_menu_handler::ContextMenuHandler;
@@ -100,6 +101,7 @@ use tokio::sync::Mutex;
 use host_key_prompt::{HostKeyPromptTarget, host_key_prompt_request};
 use left_credential_prompt::LeftCredentialInputs;
 use left_remote_state::{LeftRemoteConnectionState, LeftRemoteEndpoint};
+use mfa::{SftpMfaEvent, SftpMfaInputs, SftpMfaResponder, SftpMfaTarget};
 
 actions!(
     sftp_view,
@@ -1607,6 +1609,12 @@ pub struct SftpView {
     credential_inputs: Option<SftpCredentialInputs>,
     /// 左侧端点切换时用于录入临时凭据的弹窗状态；`None` 表示不需要提示。
     left_credential_inputs: Option<LeftCredentialInputs>,
+    /// 当前展示的 keyboard-interactive/MFA 弹窗。
+    sftp_mfa_inputs: Option<SftpMfaInputs>,
+    /// 多个传输连接同时要求 MFA 时按到达顺序逐个提示。
+    pending_sftp_mfa_events: VecDeque<SftpMfaEvent>,
+    sftp_mfa_event_tx: Option<tokio::sync::mpsc::UnboundedSender<SftpMfaEvent>>,
+    _sftp_mfa_event_task: Option<gpui::Task<()>>,
     /// 远程文件协议为 FTP 时的独立 FTP 连接配置；`None` 表示走 SFTP。
     remote_file_ftp: Option<FtpConnectConfig>,
     sftp_client: Option<SharedRemoteFileClient>,
@@ -1962,6 +1970,7 @@ impl SftpView {
                 .unwrap_or_else(|| TransferClientSource::Ssh(config.clone())),
             MAX_CONCURRENT_TRANSFERS,
         ));
+        let (sftp_mfa_event_tx, mut sftp_mfa_event_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let mut view = Self {
             window_handle: window.window_handle(),
@@ -1976,6 +1985,10 @@ impl SftpView {
             remote_file_ftp,
             credential_inputs,
             left_credential_inputs: None,
+            sftp_mfa_inputs: None,
+            pending_sftp_mfa_events: VecDeque::new(),
+            sftp_mfa_event_tx: Some(sftp_mfa_event_tx),
+            _sftp_mfa_event_task: None,
             sftp_client: None,
             connection_generation: ConnectionGeneration::default(),
             left_connection_generation: ConnectionGeneration::default(),
@@ -2029,6 +2042,23 @@ impl SftpView {
             tab_index,
         };
 
+        let mfa_window_handle = window.window_handle();
+        let mfa_view = cx.entity().downgrade();
+        view._sftp_mfa_event_task = Some(cx.spawn(
+            async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+                while let Some(event) = sftp_mfa_event_rx.recv().await {
+                    let updated = cx.update_window(mfa_window_handle, |_, window, cx| {
+                        let _ = mfa_view.update(cx, |this, cx| {
+                            this.receive_sftp_mfa_event(event, window, cx);
+                        });
+                    });
+                    if updated.is_err() {
+                        break;
+                    }
+                }
+            },
+        ));
+
         view.refresh_local_dir(cx);
         if let Some(input) = view
             .credential_inputs
@@ -2052,6 +2082,29 @@ impl SftpView {
         self.connection_generation.is_current(generation)
     }
 
+    fn sftp_mfa_responder_for(
+        &self,
+        connection: &StoredConnection,
+        config: &SshConnectConfig,
+        is_ftp: bool,
+        target: SftpMfaTarget,
+    ) -> Option<SftpMfaResponder> {
+        if is_ftp {
+            return None;
+        }
+        let params = connection.to_ssh_params().ok()?;
+        if !params.keyboard_interactive_enabled() {
+            return None;
+        }
+        Some(SftpMfaResponder::new(
+            target,
+            self.sftp_mfa_event_tx.clone()?,
+            mfa::jump_password(config),
+            mfa::password_from_ssh_auth(&config.auth),
+            params.otp.clone(),
+        ))
+    }
+
     fn next_left_connection_generation(&mut self) -> u64 {
         self.left_connection_generation.advance()
     }
@@ -2065,9 +2118,20 @@ impl SftpView {
             return;
         }
         let generation = self.next_connection_generation();
+        self.clear_sftp_mfa_for_main();
         self.set_connection_state(ConnectionState::Connecting, cx);
-        let config = self.sftp_config.clone();
+        let mut config = self.sftp_config.clone();
         let ftp_config = self.remote_file_ftp.clone();
+        config.keyboard_interactive_responder = self
+            .sftp_mfa_responder_for(
+                &self.stored_connection,
+                &config,
+                ftp_config.is_some(),
+                SftpMfaTarget::Main { generation },
+            )
+            .map(|responder| Arc::new(responder) as Arc<dyn ssh::KeyboardInteractiveResponder>);
+        self.sftp_config = config.clone();
+        self.replace_transfer_client_pool(cx);
         let window_handle = self.window_handle.clone();
         let initial_directory = self.sftp_initial_directory.clone();
 
@@ -2252,7 +2316,6 @@ impl SftpView {
             Tokio::spawn(cx, disconnect_sftp_client(old_client)).detach();
         }
         self.remote_loading = false;
-        self.replace_transfer_client_pool(cx);
         self.connect(cx);
     }
 
@@ -2301,7 +2364,6 @@ impl SftpView {
                     if let Some(inputs) = self.credential_inputs.as_mut() {
                         inputs.error = None;
                     }
-                    self.replace_transfer_client_pool(cx);
                     self.connect(cx);
                 }
                 Err(error) => {
@@ -2328,7 +2390,6 @@ impl SftpView {
                 if let Some(inputs) = self.credential_inputs.as_mut() {
                     inputs.error = None;
                 }
-                self.replace_transfer_client_pool(cx);
                 self.connect(cx);
             }
             Err(error) => {
