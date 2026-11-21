@@ -898,8 +898,12 @@ where
         self.selection.contains(row_ix, col_ix)
     }
 
+    fn row_has_selection(&self, row_ix: usize) -> bool {
+        self.selection.contains_row(row_ix)
+    }
+
     fn is_row_in_selection(&self, row_ix: usize) -> bool {
-        self.selection_state == SelectionState::Row && self.selection.contains_row(row_ix)
+        self.selection_state == SelectionState::Row && self.row_has_selection(row_ix)
     }
 
     /// 获取活动单元格
@@ -3635,6 +3639,7 @@ where
         let horizontal_scroll_handle = self.horizontal_scroll_handle.clone();
         let is_stripe_row = self.options.stripe && row_ix % 2 != 0;
         let is_selected = self.is_row_in_selection(row_ix);
+        let row_has_selection = self.row_has_selection(row_ix);
         let is_row_deleted = self.delegate.is_row_deleted(row_ix, cx);
         let is_row_added = self.delegate.is_row_added(row_ix, cx);
         let _view = cx.entity().clone();
@@ -3665,11 +3670,17 @@ where
                 .when(is_row_added && !is_row_deleted, |this| {
                     this.bg(cx.theme().success.opacity(0.1))
                 })
+                // 单元格选择模式下，活动格可能已横向滚出视口；整行浅浅保留
+                // 选中底色，宽表里仍能一眼认出当前记录。整行选择模式继续由下方
+                // 的覆盖层绘制，避免同一底色叠加两次。
+                .when(row_has_selection && !is_selected, |this| {
+                    this.bg(cx.theme().table_active)
+                })
                 .refine_style(&style)
                 .hover(|this| {
                     if is_row_deleted {
                         this
-                    } else if is_selected || self.right_clicked_row == Some(row_ix) {
+                    } else if row_has_selection || self.right_clicked_row == Some(row_ix) {
                         this
                     } else {
                         this.bg(cx.theme().table_hover)
@@ -4087,6 +4098,39 @@ mod tests {
             vec![(1, 0, "7".to_string()), (1, 2, "7".to_string())],
             changes
         );
+    }
+
+    #[test]
+    fn a_selected_cell_keeps_its_row_washed_while_scrolling() {
+        let source = include_str!("state.rs").replace("\r\n", "\n");
+        let implementation = source
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("tests 模块起始标记")
+            .0;
+
+        let row = slice_between(
+            implementation,
+            "fn render_table_row(",
+            "\n    fn render_vertical_scrollbar(",
+        );
+
+        // 单元格选择模式下整行也要保留选中底色：宽表横向滚动后，活动单元格
+        // 可能已经离开视口，只剩整行底色还能告诉用户当前在看哪条记录。
+        assert!(row.contains("let row_has_selection = self.row_has_selection(row_ix);"));
+        assert!(row.contains(".when(row_has_selection && !is_selected, |this| {"));
+        assert!(row.contains(".bg(cx.theme().table_active)"));
+
+        // hover 不能盖掉持久选中底色。
+        assert!(
+            row.contains("else if row_has_selection || self.right_clicked_row == Some(row_ix)")
+        );
+
+        let row_has_selection = slice_between(
+            implementation,
+            "fn row_has_selection(",
+            "\n    fn is_row_in_selection(",
+        );
+        assert!(row_has_selection.contains("self.selection.contains_row(row_ix)"));
     }
 
     #[test]
