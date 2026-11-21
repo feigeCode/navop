@@ -35,6 +35,17 @@ pub enum CellEditor {
     },
 }
 
+/// 单元格显示层已经提供了表格内边距，内联 Input 不能再叠加组件自己的
+/// `input_px` / `input_py`；否则进入编辑态时文字会向右、向下跳一段。
+fn cell_input(input: &Entity<InputState>) -> Input {
+    Input::new(input)
+        .w_full()
+        .h_full()
+        .appearance(false)
+        .px_0()
+        .py_0()
+}
+
 impl CellEditor {
     pub fn render(&self, window: &mut Window, cx: &mut App) -> AnyElement {
         match self {
@@ -47,7 +58,7 @@ impl CellEditor {
                         .w_full()
                         .h(window.line_height())
                         .overflow_hidden()
-                        .child(Input::new(input).w_full().h_full().appearance(false)),
+                        .child(cell_input(input)),
                 )
                 .into_any_element(),
             CellEditor::DatePicker(picker) => DatePicker::new(picker)
@@ -73,7 +84,7 @@ impl CellEditor {
                     .h_full()
                     .items_center()
                     .gap_1()
-                    .child(Input::new(input).flex_1().h_full().appearance(false))
+                    .child(cell_input(input).flex_1())
                     .child(
                         div()
                             .id(SharedString::from("date-picker-popup"))
@@ -115,7 +126,7 @@ impl CellEditor {
                     .h_full()
                     .items_center()
                     .gap_1()
-                    .child(Input::new(input).flex_1().h_full().appearance(false))
+                    .child(cell_input(input).flex_1())
                     .child(
                         div()
                             .id(SharedString::from("date-time-picker-popup"))
@@ -156,7 +167,7 @@ impl CellEditor {
                     .h_full()
                     .items_center()
                     .gap_1()
-                    .child(Input::new(input).flex_1().h_full().appearance(false))
+                    .child(cell_input(input).flex_1())
                     .child(
                         div()
                             .id(SharedString::from("time-picker-popup"))
@@ -544,5 +555,38 @@ pub trait EditTableDelegate: Sized + 'static {
     /// 获取指定列的名称
     fn get_column_name(&self, col_ix: usize, cx: &App) -> SharedString {
         self.column(col_ix, cx).name.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn inline_cell_inputs_do_not_add_component_padding() {
+        let source = include_str!("delegate.rs").replace("\r\n", "\n");
+        let implementation = source
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("tests 模块起始标记")
+            .0;
+
+        // 单元格本身已经提供左右内边距。Input 组件默认还会再加一层
+        // `input_px`/`input_py`，进入编辑态时文字会整体向右跳约 10px。
+        assert!(implementation.contains("fn cell_input(input: &Entity<InputState>) -> Input"));
+        assert_eq!(
+            1,
+            implementation.matches("Input::new(input)").count(),
+            "所有内联单元格输入框都应经过统一的零内边距构造函数"
+        );
+        assert_eq!(
+            4,
+            implementation.matches("cell_input(input)").count(),
+            "普通、日期、日期时间、时间输入框都必须复用统一构造函数"
+        );
+
+        let helper_start = implementation
+            .find("fn cell_input(")
+            .expect("cell_input 构造函数");
+        let helper = &implementation[helper_start..];
+        assert!(helper.contains(".px_0()"));
+        assert!(helper.contains(".py_0()"));
     }
 }
