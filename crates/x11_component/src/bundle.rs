@@ -122,8 +122,12 @@ mod tests {
         // GitHub 的 Apple Silicon runner 可能没有 Metal 设备。CI 先用随包
         // loader/ICD 独立运行 vulkaninfo，确认设备存在后才设置这个门禁；
         // 探测成功后若 yserver 启动失败，测试仍然失败，不能掩盖生产回归。
-        if std::env::var_os("CI").is_some() && std::env::var_os("NAVOP_X11_REAL_GPU_TEST").is_none()
-        {
+        let gpu_test_enabled = std::env::var("NAVOP_X11_REAL_GPU_TEST")
+            .map(|value| matches!(value.as_str(), "1" | "true"))
+            .unwrap_or(false);
+        let in_ci =
+            std::env::var_os("CI").is_some() || std::env::var_os("GITHUB_ACTIONS").is_some();
+        if in_ci && !gpu_test_enabled {
             eprintln!("跳过真实 Metal 启动：CI 的 Vulkan 能力探测未通过");
             return;
         }
