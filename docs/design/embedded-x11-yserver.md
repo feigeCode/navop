@@ -40,7 +40,7 @@ Windows 组件版本为 `1.9.0-navop.1`，源码固定为 [feigeCode/yserver](ht
 
 启动后必须完成一次真实 X11 setup 握手：发送 MIT-MAGIC-COOKIE-1 ClientHello，读取完整 setup reply，并限制应答大小和总超时。仅等待进程或端口可连接不算健康。macOS 的 Vulkan/Metal 首次初始化需要数秒，supervisor 在有界 15 秒内每 100ms 重试握手并检查 child 提前退出，不能在 socket 尚未出现时立即杀进程。Windows 保留原有单次 2 秒握手预算，避免 macOS 冷启动条件改变其他平台的失败时延。
 
-macOS ICD manifest 使用 `@@YSERVER_ROOT@@` 占位，安装时不写 staging 绝对路径；启动前按最终 executable 目录重写，同一路径重启幂等，安装根目录移动后也会更新到新的 KosmicKrisp 路径。ICD 通过同目录临时文件、`sync_all` 和原子 rename 替换，写入失败不能破坏上一份完整 JSON。随包 loader、ICD、XKB 和动态库由环境变量显式指定，不依赖用户 Homebrew。KosmicKrisp 真实渲染条件为 Apple Silicon + macOS 26+，不满足时用户可选择 External 使用 XQuartz。
+macOS ICD manifest 使用 `@@YSERVER_ROOT@@` 占位，安装时不写 staging 绝对路径；启动前按最终 executable 目录重写，同一路径重启幂等，安装根目录移动后也会更新到新的 KosmicKrisp 路径。ICD 通过同目录临时文件、`sync_all` 和原子 rename 替换，写入失败不能破坏上一份完整 JSON。随包 loader、ICD、XKB 和动态库由环境变量显式指定，不依赖用户 Homebrew。KosmicKrisp 真实渲染条件为 Apple Silicon + macOS 26+ + 可用 Metal 设备，不满足时用户可选择 External 使用 XQuartz。
 
 进程退出由 supervisor 记录并重启，窗口为 10 分钟最多 3 次；超限后本次运行禁用内置，成功、失败和永久禁用都会留下供界面消费的崩溃通知。pidfile 必须同时校验 pid、进程启动时间和可执行文件身份，不能仅按 pid 杀进程。启动在组件锁内同时检查共享 pidfile 和 `instances/*`：另一 Navop 实例仍持有的活跃 server 不能当作孤儿清理；owner 已退出且 child 身份一致的进程才按孤儿回收。首次启动遇到 endpoint 冲突会在锁内轮换随机 identity，崩溃重启保持原 endpoint/cookie。Windows 子进程统一经过 `process-util` 的后台进程配置。
 
@@ -66,7 +66,7 @@ X11 回连等待响应期间保留其他通道事件，每个 SSH 连接最多�
 - 集成：使用内存清单和 zip，覆盖篡改、重复安装、握手失败、重启，以及离线安装、目标不匹配、损坏包和强制修复。
 - 构建：准备脚本校验真实固定 zip，CI 编译内嵌产物并运行内嵌字节与固定清单一致性测试；普通运行时测试不访问组件网络。
 - 转发：setup 探针执行真实协议往返，并验证可变长度正文完整读取。
-- macOS 实机：真实固定 zip 经安装器解压后，由生产 supervisor 启动并完成 X11 setup；另跑 XQuartz 探测和真实握手。macOS 26+ arm64 CI 执行同一真实包测试，不依赖开发者机器的 Homebrew Vulkan。
+- macOS 实机：真实固定 zip 经安装器解压后，由生产 supervisor 启动并完成 X11 setup；另跑 XQuartz 探测和真实握手。macOS 26+ arm64 CI 先用随包 loader/ICD 运行 `vulkaninfo --summary`，仅在发现设备后启用真实握手；无 Metal 的托管虚拟机仍执行下载、验签、离线安装和结构测试，真实 GUI 启动明确留作实机验收，不通过跳过逻辑掩盖探测成功后的启动回归。
 - E2E：Windows 上真实 yserver + xterm/gtk3-demo 截图比对；该验收不能用 mock 替代。
 - 手动矩阵：Windows 有无 Vulkan、RDP、多显示器、HiDPI、与 VcXsrv 共存、Windows arm64；macOS 26+ 内置与外置 XQuartz 的 X11 GUI、远程 SSH 转发和安装/更新。
 
