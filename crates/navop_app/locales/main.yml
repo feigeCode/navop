@@ -2820,6 +2820,14 @@ Settings:
         en: Let Navop handle ssh:// and sftp:// links from browsers and documents. These schemes usually belong to the terminal or file manager, so they stay off until enabled here.
         zh-CN: 允许 Navop 处理来自浏览器和文档的 ssh:// 与 sftp:// 链接。这些协议通常由终端或文件管理器接管，因此在勾选前保持关闭。
         zh-HK: 允許 Navop 處理來自瀏覽器與文件的 ssh:// 與 sftp:// 連結。這些協定通常由終端機或檔案管理器接管，因此在勾選前保持關閉。
+      ssh_group_description:
+        en: Let Navop handle ssh:// links from browsers and documents. They normally belong to the terminal, so this stays off until enabled here.
+        zh-CN: 允许 Navop 处理来自浏览器和文档的 ssh:// 链接。这类链接通常由终端接管，因此在勾选前保持关闭。
+        zh-HK: 允許 Navop 處理來自瀏覽器與文件的 ssh:// 連結。這類連結通常由終端機接管，因此在勾選前保持關閉。
+      sftp_group_description:
+        en: Let Navop handle sftp:// links from browsers and documents. They normally belong to the file manager, so this stays off until enabled here.
+        zh-CN: 允许 Navop 处理来自浏览器和文档的 sftp:// 链接。这类链接通常由文件管理器接管，因此在勾选前保持关闭。
+        zh-HK: 允許 Navop 處理來自瀏覽器與文件的 sftp:// 連結。這類連結通常由檔案管理器接管，因此在勾選前保持關閉。
       ssh:
         en: Handle ssh:// links
         zh-CN: 接管 ssh:// 链接
@@ -4333,6 +4341,24 @@ Settings:
       en: Agent
       zh-CN: Agent
       zh-HK: Agent
+
+  Ai:
+    title:
+      en: AI
+      zh-CN: AI
+      zh-HK: AI
+
+  Ssh:
+    title:
+      en: SSH
+      zh-CN: SSH
+      zh-HK: SSH
+
+  Sftp:
+    title:
+      en: SFTP
+      zh-CN: SFTP
+      zh-HK: SFTP
 
   AcpAgents:
     title:

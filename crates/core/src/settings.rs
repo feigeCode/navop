@@ -1759,6 +1759,60 @@ pub fn is_installed_font_family(font: &str, installed_font_names: &[String]) -> 
             .any(|installed| installed.trim().eq_ignore_ascii_case(font))
 }
 
+/// 等宽字体下拉选项：内置精选 + 用户导入的等宽家族 + 系统已装字体。
+///
+/// 设置中心里「SQL 编辑器字体」「表格预览字体」「终端字体」共用这一份逻辑，
+/// 免得三处各自维护一套合并规则、选到不一样的字体。
+///
+/// 返回 `(家族名, 是否已安装)`；标签文案（尤其是「未安装」提示）交给调用方，
+/// 因为设置页分属不同 crate，i18n 方式不一样。
+pub fn monospace_font_options(
+    builtin_families: &[&str],
+    installed_font_names: &[String],
+    custom_monospace_families: &[String],
+) -> Vec<(String, bool)> {
+    let mut options = Vec::new();
+
+    for family in builtin_families {
+        let family = family.trim();
+        if is_supported_grid_monospace_font(family)
+            && !options.iter().any(|(value, _)| value == family)
+        {
+            options.push((
+                family.to_string(),
+                is_installed_font_family(family, installed_font_names),
+            ));
+        }
+    }
+
+    for family in custom_monospace_families {
+        let family = family.trim();
+        if is_supported_grid_monospace_font(family)
+            && !options.iter().any(|(value, _)| value == family)
+        {
+            options.push((
+                family.to_string(),
+                is_installed_font_family(family, installed_font_names),
+            ));
+        }
+    }
+
+    for family in installed_font_names {
+        let family = family.trim();
+        // 系统字体集合里混着 fallback-only 的 CJK 界面字体，选进去会被
+        // `normalize_grid_monospace_font_family` 静默改回默认值，直接不列。
+        if is_supported_grid_monospace_font(family)
+            && !options
+                .iter()
+                .any(|(value, _)| value.eq_ignore_ascii_case(family))
+        {
+            options.push((family.to_string(), true));
+        }
+    }
+
+    options
+}
+
 pub fn resolve_installed_grid_monospace_font_family(
     font_family: &str,
     installed_font_names: &[String],
@@ -2548,7 +2602,8 @@ mod tests {
         SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider, TableViewMode,
         UpdateChannel, UpdateMirror, default_grid_font_fallback_families,
         default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
-        is_installed_font_family, resolve_installed_grid_monospace_font_family,
+        is_installed_font_family, monospace_font_options,
+        resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -3989,6 +4044,58 @@ mod tests {
 
         assert!(is_installed_font_family(" jetbrains mono ", &installed));
         assert!(!is_installed_font_family("Fira Code", &installed));
+    }
+
+    #[test]
+    fn monospace_font_options_skip_fallback_only_cjk_fonts() {
+        let options = monospace_font_options(
+            &["Menlo", "Noto Sans Mono CJK SC", "PingFang SC", "SimSun"],
+            &[],
+            &[],
+        );
+        let values = options
+            .into_iter()
+            .map(|(value, _)| value)
+            .collect::<Vec<_>>();
+
+        assert_eq!(values, vec!["Menlo".to_string()]);
+    }
+
+    #[test]
+    fn monospace_font_options_append_custom_and_installed_families() {
+        let options = monospace_font_options(
+            &["Menlo"],
+            &["menlo".to_string(), "Sarasa Mono SC".to_string()],
+            &[
+                "Custom Mono".to_string(),
+                "Noto Sans Mono CJK SC".to_string(),
+                "Custom Mono".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            options,
+            vec![
+                ("Menlo".to_string(), true),
+                ("Custom Mono".to_string(), false),
+                // 系统里已装的字体不再标未安装；内置项大小写不同也不重复列。
+                ("Sarasa Mono SC".to_string(), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn monospace_font_options_report_installed_state_for_builtins() {
+        let installed = vec!["Menlo".to_string()];
+        let options = monospace_font_options(&["Menlo", "Fira Code"], &installed, &[]);
+
+        assert_eq!(
+            options,
+            vec![
+                ("Menlo".to_string(), true),
+                ("Fira Code".to_string(), false),
+            ]
+        );
     }
 
     #[test]

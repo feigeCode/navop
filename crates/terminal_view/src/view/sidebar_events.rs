@@ -137,7 +137,9 @@ impl TerminalView {
     ) {
         match event {
             TerminalSettingsEvent::Changed { current, .. } => {
-                self.apply_settings_snapshot(current, window, cx);
+                // 全局默认值变了：已经有会话覆盖的项保持不变，其余跟着全局走。
+                let settings = self.session_overrides.merged_into(current);
+                self.apply_settings_snapshot(&settings, window, cx);
             }
         }
     }
@@ -147,7 +149,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let settings = current_settings(cx);
+        let settings = self.effective_terminal_settings(cx);
         self.apply_settings_snapshot(&settings, window, cx);
         // 停靠位置也存在设置里：别的终端标签里改过「移动到」后，本标签跟着复位。
         self.sidebar.update(cx, |sidebar, cx| {
@@ -156,7 +158,7 @@ impl TerminalView {
     }
 
     pub(super) fn handle_app_theme_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let settings = current_settings(cx);
+        let settings = self.effective_terminal_settings(cx);
         let theme = TerminalTheme::resolve(&settings.theme, cx.theme());
         self.apply_theme(&theme, window, cx);
     }
@@ -207,25 +209,28 @@ impl TerminalView {
                 cx.emit(TabContentEvent::StateChanged);
                 cx.notify();
             }
+            TerminalSidebarEvent::ResetSessionDefaults => {
+                self.reset_session_overrides(window, cx);
+            }
             TerminalSidebarEvent::FontSizeChanged(size) => {
                 self.set_font_size(*size, cx);
             }
             TerminalSidebarEvent::FontFamilyChanged(family) => {
                 let family = family.clone();
-                let _ = update_settings(cx, move |settings| {
-                    settings.font_family = family;
+                self.update_session_overrides(window, cx, move |overrides| {
+                    overrides.font_family = Some(family);
                 });
             }
             TerminalSidebarEvent::ThemeChanged(theme) => {
                 let theme_name = theme.name.to_string();
-                let _ = update_settings(cx, move |settings| {
-                    settings.theme = theme_name;
+                self.update_session_overrides(window, cx, move |overrides| {
+                    overrides.theme = Some(theme_name);
                 });
             }
             TerminalSidebarEvent::ScrollbackLinesChanged(lines) => {
                 let lines = *lines;
-                let _ = update_settings(cx, move |settings| {
-                    settings.scrollback_lines = lines;
+                self.update_session_overrides(window, cx, move |overrides| {
+                    overrides.scrollback_lines = Some(lines);
                 });
             }
             TerminalSidebarEvent::ExecuteCommand(command) => {
@@ -248,46 +253,41 @@ impl TerminalView {
             }
             TerminalSidebarEvent::CursorBlinkChanged(enabled) => {
                 let enabled = *enabled;
-                let _ = update_settings(cx, move |settings| {
-                    settings.cursor_blink = enabled;
+                self.update_session_overrides(window, cx, move |overrides| {
+                    overrides.cursor_blink = Some(enabled);
                 });
             }
             TerminalSidebarEvent::SelectionHighlightChanged(enabled) => {
                 let enabled = *enabled;
-                let _ = update_settings(cx, move |settings| {
-                    settings.selection_highlight = enabled;
+                self.update_session_overrides(window, cx, move |overrides| {
+                    overrides.selection_highlight = Some(enabled);
                 });
             }
             TerminalSidebarEvent::ShowLineTimestampsChanged(enabled) => {
                 let enabled = *enabled;
-                let _ = update_settings(cx, move |settings| {
-                    settings.show_line_timestamps = enabled;
+                self.update_session_overrides(window, cx, move |overrides| {
+                    overrides.show_line_timestamps = Some(enabled);
                 });
             }
             TerminalSidebarEvent::ShowLineNumbersChanged(enabled) => {
                 let enabled = *enabled;
-                let _ = update_settings(cx, move |settings| {
-                    settings.show_line_numbers = enabled;
+                self.update_session_overrides(window, cx, move |overrides| {
+                    overrides.show_line_numbers = Some(enabled);
                 });
             }
             TerminalSidebarEvent::ConfirmMultilinePasteChanged(enabled) => {
                 let enabled = *enabled;
-                let _ = update_settings(cx, move |settings| {
-                    settings.confirm_multiline_paste = enabled;
+                self.update_session_overrides(window, cx, move |overrides| {
+                    overrides.confirm_multiline_paste = Some(enabled);
                 });
             }
             TerminalSidebarEvent::ConfirmHighRiskCommandChanged(enabled) => {
                 let enabled = *enabled;
-                let _ = update_settings(cx, move |settings| {
-                    settings.confirm_high_risk_command = enabled;
+                self.update_session_overrides(window, cx, move |overrides| {
+                    overrides.confirm_high_risk_command = Some(enabled);
                 });
             }
-            TerminalSidebarEvent::AutoSessionLoggingChanged(enabled) => {
-                let enabled = *enabled;
-                let _ = update_settings(cx, move |settings| {
-                    settings.auto_session_logging = enabled;
-                });
-            }
+
             TerminalSidebarEvent::AutoCopyChanged(enabled) => {
                 self.set_auto_copy(*enabled, cx);
             }
@@ -314,14 +314,8 @@ impl TerminalView {
             }
             TerminalSidebarEvent::SyncPathChanged(enabled) => {
                 let enabled = *enabled;
-                let _ = update_settings(cx, move |settings| {
-                    settings.sync_path_with_terminal = enabled;
-                });
-            }
-            TerminalSidebarEvent::PaneToolbarChanged(enabled) => {
-                let enabled = *enabled;
-                AppSettings::update_and_save(cx, |settings| {
-                    settings.terminal_show_pane_toolbar = enabled;
+                self.update_session_overrides(window, cx, move |overrides| {
+                    overrides.sync_path_with_terminal = Some(enabled);
                 });
             }
             TerminalSidebarEvent::CustomHighlightsChanged(rules) => {

@@ -9,7 +9,7 @@ use crate::settings::acp_agents_settings::AcpAgentsView;
 use crate::settings::agent_settings::agent_setting_group;
 use crate::settings::appearance::render as render_appearance_settings;
 use crate::settings::connection_display_settings::connection_display_setting_group;
-use crate::settings::deeplink_settings::deeplink_setting_group;
+use crate::settings::deeplink_settings::{sftp_deeplink_setting_group, ssh_deeplink_setting_group};
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::mcp_settings::mcp_setting_group;
 use crate::settings::notes_settings::notes_setting_group;
@@ -58,36 +58,17 @@ use one_core::llm::manager::GlobalProviderState;
 use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
 pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
-/// 「同步」页在固定尾巴里的偏移。
-///
-/// 页面顺序：通用 → 领域页（数据库 / SQL 格式化 / 终端，由领域注册表提供，数量随
-/// 参与编译的领域变化）→ Agent、ACP、MCP、**同步**、快捷键、LLM 提供商 → 账户、关于。
-/// 领域页数量不固定，同步页的绝对下标只能在拼接时现算，所以这里只记录它在固定尾巴
-/// 里的偏移：Agent、ACP、MCP 三页之后。
-const SYNC_PAGE_OFFSET_IN_REST: usize = 3;
-/// 「LLM 提供商」页在固定尾巴里的偏移（Agent、ACP、MCP、同步、快捷键之后）。
-const LLM_PROVIDERS_PAGE_OFFSET_IN_REST: usize = 5;
-
-/// 「通用 + 领域页」这些前置页之后，「同步」页在整份页面列表里的下标。
-fn sync_page_index(pages_before_rest: usize) -> usize {
-    pages_before_rest + SYNC_PAGE_OFFSET_IN_REST
-}
-
-fn llm_providers_page_index(pages_before_rest: usize) -> usize {
-    pages_before_rest + LLM_PROVIDERS_PAGE_OFFSET_IN_REST
-}
-
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
     AppSettings, CloseButtonBehavior, CustomFont, GlobalCurrentUser, GlobalProxySettings,
     LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, LogLevel, MasterKeyStorage,
     PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, StartupDefaultPage, SyncProvider,
-    effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
+    effective_locale_for_setting, is_installed_font_family,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
 use one_core::window_close::close_window_for_reuse;
-use one_ui::{MAX_FONT_SIZE, MIN_FONT_SIZE, available_monospace_fonts};
+use one_ui::available_monospace_fonts;
 use reqwest_client::ReqwestClient;
 use rust_i18n::t;
 use tracing_subscriber::layer::SubscriberExt;
@@ -117,65 +98,54 @@ fn app_font_options(
     let mut options = merge_font_options_with_custom_fonts(
         builtin_app_font_options(),
         custom_fonts,
-        FontFamilyKind::Any,
         Some(installed_font_names),
     );
-    merge_installed_font_options(&mut options, installed_font_names, FontFamilyKind::Any);
+    merge_installed_font_options(&mut options, installed_font_names);
     options
 }
 
-fn builtin_monospace_font_options() -> Vec<(SharedString, SharedString)> {
-    available_monospace_fonts()
-        .into_iter()
-        .map(|font| (font.into(), font.into()))
-        .collect()
-}
-
+/// 等宽字体下拉选项：内置精选 + 用户导入的等宽家族 + 系统已装字体。
+///
+/// 合并规则在 `one_core::settings::monospace_font_options`，设置中心的
+/// 「SQL 编辑器字体」「表格预览字体」「终端字体」用的是同一份实现。
 fn monospace_font_options(
     installed_font_names: &[String],
     custom_fonts: &[CustomFont],
 ) -> Vec<(SharedString, SharedString)> {
-    let mut options = merge_font_options_with_custom_fonts(
-        builtin_monospace_font_options(),
-        custom_fonts,
-        FontFamilyKind::Monospace,
-        Some(installed_font_names),
-    );
-    merge_installed_font_options(
-        &mut options,
-        installed_font_names,
-        FontFamilyKind::Monospace,
-    );
-    options
-}
+    let custom_families = custom_fonts
+        .iter()
+        .flat_map(|font| font.monospace_families.iter().cloned())
+        .collect::<Vec<_>>();
 
-#[derive(Clone, Copy)]
-enum FontFamilyKind {
-    Any,
-    Monospace,
+    one_core::settings::monospace_font_options(
+        &available_monospace_fonts(),
+        installed_font_names,
+        &custom_families,
+    )
+    .into_iter()
+    .map(|(family, installed)| {
+        let label = if installed {
+            SharedString::from(family.clone())
+        } else {
+            missing_font_label(&family)
+        };
+        (SharedString::from(family), label)
+    })
+    .collect()
 }
 
 fn merge_font_options_with_custom_fonts(
     mut options: Vec<(SharedString, SharedString)>,
     custom_fonts: &[CustomFont],
-    kind: FontFamilyKind,
     installed_font_names: Option<&[String]>,
 ) -> Vec<(SharedString, SharedString)> {
     if let Some(installed_font_names) = installed_font_names {
         mark_missing_font_options(&mut options, installed_font_names);
     }
 
-    let custom_families = custom_fonts.iter().flat_map(|font| match kind {
-        FontFamilyKind::Any => font.families.iter(),
-        FontFamilyKind::Monospace => font.monospace_families.iter(),
-    });
-    for family in custom_families {
+    for family in custom_fonts.iter().flat_map(|font| font.families.iter()) {
         let family = family.trim();
-        if family.is_empty()
-            || matches!(kind, FontFamilyKind::Monospace)
-                && !is_supported_grid_monospace_font(family)
-            || options.iter().any(|(value, _)| value.as_ref() == family)
-        {
+        if family.is_empty() || options.iter().any(|(value, _)| value.as_ref() == family) {
             continue;
         }
         let label =
@@ -208,21 +178,14 @@ fn mark_missing_font_options(
 /// （Windows 走 DirectWrite 系统字体集 + 已注册的自定义字体集），
 /// 系统里装好的字体本来就能被 GPUI 解析，直接合并进下拉即可。
 ///
-/// 两个刻意的取舍：
-/// - 内置精选列表始终排在前面，常用项不用在几百条里翻。
-/// - 等宽场景（`FontFamilyKind::Monospace`）仍然过滤掉「只适合当 fallback 的
-///   CJK 界面字体」，否则会给出一个会被
-///   `normalize_grid_monospace_font_family` 静默重置回默认值的无效选项。
+/// 内置精选列表始终排在前面，常用项不用在几百条里翻。
 fn merge_installed_font_options(
     options: &mut Vec<(SharedString, SharedString)>,
     installed_font_names: &[String],
-    kind: FontFamilyKind,
 ) {
     for family in installed_font_names {
         let family = family.trim();
         if family.is_empty()
-            || matches!(kind, FontFamilyKind::Monospace)
-                && !is_supported_grid_monospace_font(family)
             || options
                 .iter()
                 .any(|(value, _)| value.as_ref().eq_ignore_ascii_case(family))
@@ -678,6 +641,7 @@ impl SettingsPanel {
     /// 缓存键只用 `custom_fonts`：枚举系统字体是这条路径上最贵的动作，绝不能放在
     /// 每帧都会走的地方。导入 / 移除自定义字体本身会改变 `custom_fonts`，
     /// 而 `all_font_names()` 的结果同样随之变化，所以这一个键就够覆盖两种失效来源。
+    ///
     fn cached_font_options(
         &mut self,
         cx: &App,
@@ -703,12 +667,14 @@ impl SettingsPanel {
         (app_options, monospace_options)
     }
 
-    /// 组装设置页，返回 `(页面列表, 「同步」页下标)`。
+    /// 组装设置页，返回 `(页面列表, 「同步」页下标, 「AI」页下标)`。
     ///
-    /// 顺序：通用 → 领域页（数据库 / SQL 格式化 / 终端）→ Agent、ACP、MCP、同步、
-    /// 快捷键、LLM 提供商 → 账户、关于。数据库与终端是日常最常用的功能，放在前面；
-    /// 账户与关于收尾。领域页来自注册表，数量随参与编译的领域变化，所以同步页的
-    /// 绝对下标要在拼接完之后才算得出来。
+    /// 顺序（十一类）：通用 → 数据库、终端（领域注册表）→ SSH、SFTP、AI、Agent、
+    /// MCP、同步、快捷键、关于。原来的 SQL 格式化并入数据库页、ACP 并入 Agent 页、
+    /// LLM 提供商并入 AI 页、账户并入同步页，不再单独占入口。
+    ///
+    /// 领域页数量随参与编译的领域变化，SSH/SFTP 还要看产品是否带 shell 领域，
+    /// 因此同步页与 AI 页的绝对下标都在拼接完之后现算。
     fn setting_pages(
         &mut self,
         _window: &mut Window,
@@ -719,6 +685,12 @@ impl SettingsPanel {
         let default_settings = AppSettings::default();
         let default_system_hotkey = AppSettings::default().current_system_hotkey().to_string();
         let (app_font_options, font_options) = self.cached_font_options(cx);
+        // 「通用」页会把一部分默认值字符串移进控件，所以 SFTP/SSH 页用到的默认值
+        // 必须在这里提前取出来，拼页面时只搬组装好的分组。
+        let file_transfer_group = file_transfer_setting_group(&default_settings);
+        let remote_file_editor_group =
+            remote_file_editor_setting_group(&default_settings.remote_file_editor, cx);
+        let x11_group = x11_setting_group(default_settings.x11_server_mode);
         let is_portable = one_core::app_paths::is_portable();
         let master_key_setting_title = if is_portable {
             t!("Settings.General.Startup.remember_portable_master_key").to_string()
@@ -760,65 +732,66 @@ impl SettingsPanel {
                 .resettable(true)
                 .default_open(true)
                 .groups({
-                    let mut groups =
-                        vec![
-                    SettingGroup::new()
-                        .title(t!("Settings.General.Language.group_title"))
-                        .items(vec![
-                            SettingItem::new(
-                                t!("Settings.General.Language.ui_language"),
-                                SettingField::dropdown(
-                                    vec![
-                                        (
-                                            LOCALE_SYSTEM.into(),
-                                            t!("Settings.General.Language.system").into(),
-                                        ),
-                                        (
-                                            LOCALE_ZH_CN.into(),
-                                            t!("Settings.General.Language.zh_cn").into(),
-                                        ),
-                                        (
-                                            LOCALE_ZH_HK.into(),
-                                            t!("Settings.General.Language.zh_hk").into(),
-                                        ),
-                                        (
-                                            LOCALE_EN.into(),
-                                            t!("Settings.General.Language.en").into(),
-                                        ),
-                                    ],
-                                    |cx: &App| {
-                                        SharedString::from(AppSettings::global(cx).locale.clone())
-                                    },
-                                    |val: SharedString, cx: &mut App| {
-                                        let locale = val.to_string();
-                                        let effective_locale =
-                                            effective_locale_for_setting(&locale);
-                                        gpui_component::set_locale(effective_locale);
-                                        notes::set_markdown_editor_locale(effective_locale, cx);
-                                        // 扩展页自己带词条表，语言由宿主通过
-                                        // `AppView::set_locale` 交给页面（v2 不再有
-                                        // `navop.i18n.locale()`）；而页面描述重建不会
-                                        // 因为 set_locale 自己发生 —— 必须显式叫醒
-                                        // 它们，否则页面停在旧语言上。
-                                        universal_plugins::refresh_shell_apps(cx);
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.locale = locale;
-                                        });
-                                    },
+                    let mut groups = vec![
+                        SettingGroup::new()
+                            .title(t!("Settings.General.Language.group_title"))
+                            .items(vec![
+                                SettingItem::new(
+                                    t!("Settings.General.Language.ui_language"),
+                                    SettingField::dropdown(
+                                        vec![
+                                            (
+                                                LOCALE_SYSTEM.into(),
+                                                t!("Settings.General.Language.system").into(),
+                                            ),
+                                            (
+                                                LOCALE_ZH_CN.into(),
+                                                t!("Settings.General.Language.zh_cn").into(),
+                                            ),
+                                            (
+                                                LOCALE_ZH_HK.into(),
+                                                t!("Settings.General.Language.zh_hk").into(),
+                                            ),
+                                            (
+                                                LOCALE_EN.into(),
+                                                t!("Settings.General.Language.en").into(),
+                                            ),
+                                        ],
+                                        |cx: &App| {
+                                            SharedString::from(
+                                                AppSettings::global(cx).locale.clone(),
+                                            )
+                                        },
+                                        |val: SharedString, cx: &mut App| {
+                                            let locale = val.to_string();
+                                            let effective_locale =
+                                                effective_locale_for_setting(&locale);
+                                            gpui_component::set_locale(effective_locale);
+                                            notes::set_markdown_editor_locale(effective_locale, cx);
+                                            // 扩展页自己带词条表，语言由宿主通过
+                                            // `AppView::set_locale` 交给页面（v2 不再有
+                                            // `navop.i18n.locale()`）；而页面描述重建不会
+                                            // 因为 set_locale 自己发生 —— 必须显式叫醒
+                                            // 它们，否则页面停在旧语言上。
+                                            universal_plugins::refresh_shell_apps(cx);
+                                            AppSettings::update_and_save(cx, |settings| {
+                                                settings.locale = locale;
+                                            });
+                                        },
+                                    )
+                                    .default_value(SharedString::from(default_settings.locale)),
                                 )
-                                .default_value(SharedString::from(default_settings.locale)),
-                            )
-                            .description(
-                                t!("Settings.General.Language.ui_language_desc").to_string(),
-                            ),
-                        ]),
-                    SettingGroup::new()
-                        .title(t!("Settings.General.Startup.group_title"))
-                        .items(vec![
-                            SettingItem::new(
-                                t!("Settings.General.Startup.default_page"),
-                                SettingField::dropdown(
-                                    vec![
+                                .description(
+                                    t!("Settings.General.Language.ui_language_desc").to_string(),
+                                ),
+                            ]),
+                        SettingGroup::new()
+                            .title(t!("Settings.General.Startup.group_title"))
+                            .items(vec![
+                                SettingItem::new(
+                                    t!("Settings.General.Startup.default_page"),
+                                    SettingField::dropdown(
+                                        vec![
                                         (
                                             SharedString::from(StartupDefaultPage::Home.as_str()),
                                             t!("Settings.General.Startup.default_page_home").into(),
@@ -833,345 +806,114 @@ impl SettingsPanel {
                                             .into(),
                                         ),
                                     ],
-                                    |cx: &App| {
+                                        |cx: &App| {
+                                            SharedString::from(
+                                                AppSettings::global(cx)
+                                                    .startup_default_page
+                                                    .as_str(),
+                                            )
+                                        },
+                                        |value: SharedString, cx: &mut App| {
+                                            let page = StartupDefaultPage::from_str(value.as_ref());
+                                            AppSettings::update_and_save(cx, |settings| {
+                                                settings.startup_default_page = page;
+                                            });
+                                        },
+                                    )
+                                    .default_value(
                                         SharedString::from(
-                                            AppSettings::global(cx)
-                                                .startup_default_page
-                                                .as_str(),
-                                        )
-                                    },
-                                    |value: SharedString, cx: &mut App| {
-                                        let page = StartupDefaultPage::from_str(value.as_ref());
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.startup_default_page = page;
-                                        });
-                                    },
+                                            default_settings.startup_default_page.as_str(),
+                                        ),
+                                    ),
                                 )
-                                .default_value(SharedString::from(
-                                    default_settings.startup_default_page.as_str(),
-                                )),
-                            )
-                            .description(
-                                t!("Settings.General.Startup.default_page_desc").to_string(),
-                            ),
-                            SettingItem::new(
-                                master_key_setting_title,
-                                SettingField::switch(
-                                    move |cx: &App| {
-                                        master_key_setting_enabled(
-                                            AppSettings::global(cx),
-                                            is_portable,
-                                        )
-                                    },
-                                    move |val: bool, cx: &mut App| {
-                                        update_master_key_setting(is_portable, val, cx);
-                                    },
+                                .description(
+                                    t!("Settings.General.Startup.default_page_desc").to_string(),
+                                ),
+                                SettingItem::new(
+                                    master_key_setting_title,
+                                    SettingField::switch(
+                                        move |cx: &App| {
+                                            master_key_setting_enabled(
+                                                AppSettings::global(cx),
+                                                is_portable,
+                                            )
+                                        },
+                                        move |val: bool, cx: &mut App| {
+                                            update_master_key_setting(is_portable, val, cx);
+                                        },
+                                    )
+                                    .default_value(default_master_key_setting),
                                 )
-                                .default_value(default_master_key_setting),
-                            )
-                            .description(master_key_setting_description),
-                            SettingItem::new(
-                                t!("Settings.General.Startup.master_key_storage"),
-                                SettingField::dropdown(
-                                    master_key_storage_select_options(),
-                                    |cx: &App| {
+                                .description(master_key_setting_description),
+                                SettingItem::new(
+                                    t!("Settings.General.Startup.master_key_storage"),
+                                    SettingField::dropdown(
+                                        master_key_storage_select_options(),
+                                        |cx: &App| {
+                                            SharedString::from(master_key_storage_value(
+                                                AppSettings::global(cx).master_key_storage,
+                                            ))
+                                        },
+                                        |value: SharedString, cx: &mut App| {
+                                            update_master_key_storage(
+                                                master_key_storage_from_value(&value),
+                                                cx,
+                                            );
+                                        },
+                                    )
+                                    .default_value(
                                         SharedString::from(master_key_storage_value(
-                                            AppSettings::global(cx).master_key_storage,
-                                        ))
-                                    },
-                                    |value: SharedString, cx: &mut App| {
-                                        update_master_key_storage(
-                                            master_key_storage_from_value(&value),
-                                            cx,
-                                        );
-                                    },
+                                            default_master_key_storage(),
+                                        )),
+                                    ),
                                 )
-                                .default_value(SharedString::from(
-                                    master_key_storage_value(default_master_key_storage()),
-                                )),
-                            )
-                            .description(master_key_storage_description),
-                        ]),
-                    SettingGroup::new()
-                        .title(t!("Settings.General.FileTransfer.group_title"))
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.FileTransfer.direct_server_transfer"),
-                                SettingField::switch(
-                                    |cx: &App| {
-                                        AppSettings::global(cx).direct_server_transfer_enabled
-                                    },
-                                    |value: bool, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.direct_server_transfer_enabled = value;
-                                        });
-                                    },
+                                .description(master_key_storage_description),
+                            ]),
+                        close_behavior_setting_group(default_settings.close_button_behavior),
+                        notes_setting_group(font_options.clone()),
+                        SettingGroup::new()
+                            .title(t!("Settings.General.Appearance.group_title"))
+                            .item(SettingItem::render(render_appearance_settings)),
+                        SettingGroup::new()
+                            .title(t!("Settings.General.Font.group_title"))
+                            .item(
+                                SettingItem::new(
+                                    t!("Settings.General.Font.font_family"),
+                                    // 选项里已包含系统已装字体，数量可达数百条，必须用可滚动菜单。
+                                    SettingField::scrollable_dropdown(
+                                        app_font_options,
+                                        |cx: &App| {
+                                            SharedString::from(
+                                                AppSettings::global(cx).font_family.clone(),
+                                            )
+                                        },
+                                        |val: SharedString, cx: &mut App| {
+                                            AppSettings::update_and_save(cx, |settings| {
+                                                settings.font_family = val.to_string();
+                                            });
+                                            AppSettings::current(cx).apply_font_family(cx);
+                                            cx.refresh_windows();
+                                        },
+                                    )
+                                    .default_value(
+                                        SharedString::from(default_settings.font_family),
+                                    ),
                                 )
-                                .default_value(default_settings.direct_server_transfer_enabled),
-                            )
-                            .description(
-                                t!("Settings.General.FileTransfer.direct_server_transfer_desc")
-                                    .to_string(),
-                            ),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.FileTransfer.prefer_merge_for_directories"),
-                                SettingField::switch(
-                                    |cx: &App| {
-                                        AppSettings::global(cx)
-                                            .transfer_prefer_merge_for_directories
-                                    },
-                                    |value: bool, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.transfer_prefer_merge_for_directories = value;
-                                        });
-                                    },
-                                )
-                                .default_value(
-                                    default_settings.transfer_prefer_merge_for_directories,
+                                .description(
+                                    t!("Settings.General.Font.font_family_desc").to_string(),
                                 ),
                             )
-                            .description(
-                                t!(
-                                    "Settings.General.FileTransfer.prefer_merge_for_directories_desc"
-                                )
-                                .to_string(),
-                            ),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.FileTransfer.prefer_overwrite_for_files"),
-                                SettingField::switch(
-                                    |cx: &App| {
-                                        AppSettings::global(cx)
-                                            .transfer_prefer_overwrite_for_files
-                                    },
-                                    |value: bool, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.transfer_prefer_overwrite_for_files = value;
-                                        });
-                                    },
-                                )
-                                .default_value(
-                                    default_settings.transfer_prefer_overwrite_for_files,
-                                ),
-                            )
-                            .description(
-                                t!(
-                                    "Settings.General.FileTransfer.prefer_overwrite_for_files_desc"
-                                )
-                                .to_string(),
-                            ),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.FileTransfer.default_local_directory"),
-                                SettingField::input(
-                                    |cx: &App| {
-                                        SharedString::from(
-                                            AppSettings::global(cx)
-                                                .transfer_default_local_directory
-                                                .clone(),
-                                        )
-                                    },
-                                    |val: SharedString, cx: &mut App| {
-                                        let directory = val.trim().to_string();
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.transfer_default_local_directory = directory;
-                                        });
-                                    },
-                                )
-                                .default_value(SharedString::from(
-                                    default_settings.transfer_default_local_directory.clone(),
-                                )),
-                            )
-                            .description(
-                                t!("Settings.General.FileTransfer.default_local_directory_desc")
-                                    .to_string(),
-                            ),
-                        ),
-                    close_behavior_setting_group(default_settings.close_button_behavior),
-                    deeplink_setting_group(),
-                    notes_setting_group(font_options.clone()),
-                    SettingGroup::new()
-                        .title(t!("Settings.General.Appearance.group_title"))
-                        .item(SettingItem::render(render_appearance_settings)),
-                    SettingGroup::new()
-                        .title(t!("Settings.General.Font.group_title"))
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.Font.font_family"),
-                                // 选项里已包含系统已装字体，数量可达数百条，必须用可滚动菜单。
-                                SettingField::scrollable_dropdown(
-                                    app_font_options,
-                                    |cx: &App| {
-                                        SharedString::from(
-                                            AppSettings::global(cx).font_family.clone(),
-                                        )
-                                    },
-                                    |val: SharedString, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.font_family = val.to_string();
-                                        });
-                                        AppSettings::current(cx).apply_font_family(cx);
-                                        cx.refresh_windows();
-                                    },
-                                )
-                                .default_value(SharedString::from(default_settings.font_family)),
-                            )
-                            .description(t!("Settings.General.Font.font_family_desc").to_string()),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.Font.sql_editor_font_family"),
-                                SettingField::scrollable_dropdown(
-                                    font_options.clone(),
-                                    |cx: &App| {
-                                        SharedString::from(
-                                            AppSettings::global(cx).sql_editor_font_family.clone(),
-                                        )
-                                    },
-                                    |val: SharedString, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.sql_editor_font_family = val.to_string();
-                                        });
-                                    },
-                                )
-                                .default_value(SharedString::from(
-                                    default_settings.sql_editor_font_family,
-                                )),
-                            )
-                            .description(
-                                t!("Settings.General.Font.sql_editor_font_family_desc").to_string(),
-                            ),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.Font.sql_editor_font_size"),
-                                SettingField::number_input(
-                                    NumberFieldOptions {
-                                        min: 8.0,
-                                        max: 72.0,
-                                        ..Default::default()
-                                    },
-                                    |cx: &App| AppSettings::global(cx).sql_editor_font_size,
-                                    |val: f64, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.sql_editor_font_size = val;
-                                        });
-                                        cx.refresh_windows();
-                                    },
-                                )
-                                .default_value(default_settings.sql_editor_font_size),
-                            )
-                            .description(
-                                t!("Settings.General.Font.sql_editor_font_size_desc").to_string(),
-                            ),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.Font.sql_editor_hover_enabled"),
-                                SettingField::switch(
-                                    |cx: &App| AppSettings::global(cx).sql_editor_hover_enabled,
-                                    |value: bool, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.sql_editor_hover_enabled = value;
-                                        });
-                                        cx.refresh_windows();
-                                    },
-                                )
-                                .default_value(default_settings.sql_editor_hover_enabled),
-                            )
-                            .description(
-                                t!("Settings.General.Font.sql_editor_hover_enabled_desc")
-                                    .to_string(),
-                            ),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.Font.table_preview_font_family"),
-                                SettingField::scrollable_dropdown(
-                                    font_options.clone(),
-                                    |cx: &App| {
-                                        SharedString::from(
-                                            AppSettings::global(cx)
-                                                .table_preview_font_family
-                                                .clone(),
-                                        )
-                                    },
-                                    |val: SharedString, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.table_preview_font_family = val.to_string();
-                                        });
-                                    },
-                                )
-                                .default_value(SharedString::from(
-                                    default_settings.table_preview_font_family,
-                                )),
-                            )
-                            .description(
-                                t!("Settings.General.Font.table_preview_font_family_desc")
-                                    .to_string(),
-                            ),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.Font.terminal_font_family"),
-                                SettingField::scrollable_dropdown(
-                                    font_options.clone(),
-                                    |cx: &App| {
-                                        SharedString::from(
-                                            AppSettings::global(cx).terminal_font_family.clone(),
-                                        )
-                                    },
-                                    |val: SharedString, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.terminal_font_family = val.to_string();
-                                        });
-                                    },
-                                )
-                                .default_value(SharedString::from(
-                                    default_settings.terminal_font_family,
-                                )),
-                            )
-                            .description(
-                                t!("Settings.General.Font.terminal_font_family_desc").to_string(),
-                            ),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.Font.terminal_font_size"),
-                                SettingField::number_input(
-                                    NumberFieldOptions {
-                                        min: MIN_FONT_SIZE as f64,
-                                        max: MAX_FONT_SIZE as f64,
-                                        ..Default::default()
-                                    },
-                                    |cx: &App| AppSettings::global(cx).terminal_font_size,
-                                    |val: f64, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.terminal_font_size = val;
-                                        });
-                                    },
-                                )
-                                .default_value(default_settings.terminal_font_size),
-                            )
-                            .description(
-                                t!("Settings.General.Font.terminal_font_size_desc").to_string(),
-                            ),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.Font.custom_fonts"),
-                                SettingField::render(|options, _window, _cx| {
-                                    Button::new("settings-import-custom-fonts")
-                                        .icon(IconName::File)
-                                        .label(t!("Settings.General.Font.import_custom_fonts"))
-                                        .with_size(options.size())
-                                        .on_click(|_, window, cx| {
-                                            let target_window = window.window_handle();
-                                            let future = cx.prompt_for_paths(PathPromptOptions {
+                            .item(
+                                SettingItem::new(
+                                    t!("Settings.General.Font.custom_fonts"),
+                                    SettingField::render(|options, _window, _cx| {
+                                        Button::new("settings-import-custom-fonts")
+                                            .icon(IconName::File)
+                                            .label(t!("Settings.General.Font.import_custom_fonts"))
+                                            .with_size(options.size())
+                                            .on_click(|_, window, cx| {
+                                                let target_window = window.window_handle();
+                                                let future = cx.prompt_for_paths(PathPromptOptions {
                                                 files: true,
                                                 directories: false,
                                                 multiple: true,
@@ -1182,172 +924,178 @@ impl SettingsPanel {
                                                 ),
                                             });
 
-                                            window
-                                                .spawn(cx, async move |cx| {
-                                                    if let Ok(Ok(Some(paths))) = future.await {
-                                                        let _ = cx.update(|_view, cx: &mut App| {
-                                                            let message =
-                                                                import_custom_fonts(paths, cx);
-                                                            let _ = cx.update_window(
-                                                                target_window,
-                                                                |_, window, cx| {
-                                                                    window.push_notification(
-                                                                        message, cx,
+                                                window
+                                                    .spawn(cx, async move |cx| {
+                                                        if let Ok(Ok(Some(paths))) = future.await {
+                                                            let _ =
+                                                                cx.update(|_view, cx: &mut App| {
+                                                                    let message =
+                                                                        import_custom_fonts(
+                                                                            paths, cx,
+                                                                        );
+                                                                    let _ = cx.update_window(
+                                                                        target_window,
+                                                                        |_, window, cx| {
+                                                                            window
+                                                                                .push_notification(
+                                                                                    message, cx,
+                                                                                );
+                                                                            window.refresh();
+                                                                        },
                                                                     );
-                                                                    window.refresh();
-                                                                },
-                                                            );
-                                                        });
-                                                    }
-                                                })
-                                                .detach();
-                                        })
-                                }),
-                            )
-                            .description(t!("Settings.General.Font.custom_fonts_desc").to_string()),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.Font.font_size"),
-                                SettingField::number_input(
-                                    NumberFieldOptions {
-                                        min: 8.0,
-                                        max: 72.0,
-                                        ..Default::default()
-                                    },
-                                    |cx: &App| AppSettings::global(cx).font_size,
-                                    |val: f64, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.font_size = val;
-                                        });
-                                        AppSettings::current(cx).apply_font_size(cx);
-                                        cx.refresh_windows();
-                                    },
+                                                                });
+                                                        }
+                                                    })
+                                                    .detach();
+                                            })
+                                    }),
                                 )
-                                .default_value(default_settings.font_size),
+                                .description(
+                                    t!("Settings.General.Font.custom_fonts_desc").to_string(),
+                                ),
                             )
-                            .description(t!("Settings.General.Font.font_size_desc").to_string()),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.Font.ui_scale"),
-                                SettingField::dropdown(
-                                    vec![
-                                        ("100".into(), "100%".into()),
-                                        ("110".into(), "110%".into()),
-                                        ("125".into(), "125%".into()),
-                                        ("150".into(), "150%".into()),
-                                        ("175".into(), "175%".into()),
-                                        ("200".into(), "200%".into()),
-                                    ],
-                                    |cx: &App| {
+                            .item(
+                                SettingItem::new(
+                                    t!("Settings.General.Font.font_size"),
+                                    SettingField::number_input(
+                                        NumberFieldOptions {
+                                            min: 8.0,
+                                            max: 72.0,
+                                            ..Default::default()
+                                        },
+                                        |cx: &App| AppSettings::global(cx).font_size,
+                                        |val: f64, cx: &mut App| {
+                                            AppSettings::update_and_save(cx, |settings| {
+                                                settings.font_size = val;
+                                            });
+                                            AppSettings::current(cx).apply_font_size(cx);
+                                            cx.refresh_windows();
+                                        },
+                                    )
+                                    .default_value(default_settings.font_size),
+                                )
+                                .description(
+                                    t!("Settings.General.Font.font_size_desc").to_string(),
+                                ),
+                            )
+                            .item(
+                                SettingItem::new(
+                                    t!("Settings.General.Font.ui_scale"),
+                                    SettingField::dropdown(
+                                        vec![
+                                            ("100".into(), "100%".into()),
+                                            ("110".into(), "110%".into()),
+                                            ("125".into(), "125%".into()),
+                                            ("150".into(), "150%".into()),
+                                            ("175".into(), "175%".into()),
+                                            ("200".into(), "200%".into()),
+                                        ],
+                                        |cx: &App| {
+                                            SharedString::from(
+                                                AppSettings::global(cx)
+                                                    .ui_scale_percent
+                                                    .to_string(),
+                                            )
+                                        },
+                                        |val: SharedString, cx: &mut App| {
+                                            let percent = val.trim().parse::<u32>().unwrap_or(100);
+                                            AppSettings::update_and_save(cx, |settings| {
+                                                settings.ui_scale_percent = percent;
+                                            });
+                                            // rem 基准长度取自主题字号，因此改缩放后需重新应用字体设置。
+                                            AppSettings::current(cx).apply_font_size(cx);
+                                            cx.refresh_windows();
+                                        },
+                                    )
+                                    .default_value(
                                         SharedString::from(
-                                            AppSettings::global(cx).ui_scale_percent.to_string(),
-                                        )
-                                    },
-                                    |val: SharedString, cx: &mut App| {
-                                        let percent = val.trim().parse::<u32>().unwrap_or(100);
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.ui_scale_percent = percent;
-                                        });
-                                        // rem 基准长度取自主题字号，因此改缩放后需重新应用字体设置。
-                                        AppSettings::current(cx).apply_font_size(cx);
-                                        cx.refresh_windows();
-                                    },
+                                            default_settings.ui_scale_percent.to_string(),
+                                        ),
+                                    ),
                                 )
-                                .default_value(SharedString::from(
-                                    default_settings.ui_scale_percent.to_string(),
-                                )),
+                                .description(t!("Settings.General.Font.ui_scale_desc").to_string()),
+                            ),
+                        SettingGroup::new()
+                            .title(t!("Settings.General.Log.group_title"))
+                            .item(
+                                SettingItem::new(
+                                    t!("Settings.General.Log.file_path"),
+                                    SettingField::input(
+                                        |cx: &App| {
+                                            SharedString::from(
+                                                AppSettings::global(cx).log_file_path.clone(),
+                                            )
+                                        },
+                                        |val: SharedString, cx: &mut App| {
+                                            let log_file_path = val.trim().to_string();
+                                            AppSettings::update_and_save(cx, |settings| {
+                                                settings.log_file_path = log_file_path;
+                                            });
+                                        },
+                                    )
+                                    .default_value(SharedString::from("")),
+                                )
+                                .description(t!("Settings.General.Log.file_path_desc").to_string()),
                             )
-                            .description(t!("Settings.General.Font.ui_scale_desc").to_string()),
-                        ),
-                    SettingGroup::new()
-                        .title(t!("Settings.General.Log.group_title"))
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.Log.file_path"),
-                                SettingField::input(
-                                    |cx: &App| {
+                            .item(
+                                SettingItem::new(
+                                    t!("Settings.General.Log.level"),
+                                    SettingField::dropdown(
+                                        vec![
+                                            (
+                                                LogLevel::Error.as_directive().into(),
+                                                t!("Settings.General.Log.level_error")
+                                                    .to_string()
+                                                    .into(),
+                                            ),
+                                            (
+                                                LogLevel::Warn.as_directive().into(),
+                                                t!("Settings.General.Log.level_warn")
+                                                    .to_string()
+                                                    .into(),
+                                            ),
+                                            (
+                                                LogLevel::Info.as_directive().into(),
+                                                t!("Settings.General.Log.level_info")
+                                                    .to_string()
+                                                    .into(),
+                                            ),
+                                            (
+                                                LogLevel::Debug.as_directive().into(),
+                                                t!("Settings.General.Log.level_debug")
+                                                    .to_string()
+                                                    .into(),
+                                            ),
+                                            (
+                                                LogLevel::Trace.as_directive().into(),
+                                                t!("Settings.General.Log.level_trace")
+                                                    .to_string()
+                                                    .into(),
+                                            ),
+                                        ],
+                                        |cx: &App| {
+                                            SharedString::from(
+                                                AppSettings::global(cx).log_level.as_directive(),
+                                            )
+                                        },
+                                        |val: SharedString, cx: &mut App| {
+                                            let level = LogLevel::from_directive(&val);
+                                            AppSettings::update_and_save(cx, |settings| {
+                                                settings.log_level = level;
+                                            });
+                                            // 过滤器包在 reload 层里，改完立即生效，不需要重启。
+                                            apply_log_level(level);
+                                        },
+                                    )
+                                    .default_value(
                                         SharedString::from(
-                                            AppSettings::global(cx).log_file_path.clone(),
-                                        )
-                                    },
-                                    |val: SharedString, cx: &mut App| {
-                                        let log_file_path = val.trim().to_string();
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.log_file_path = log_file_path;
-                                        });
-                                    },
+                                            default_settings.log_level.as_directive(),
+                                        ),
+                                    ),
                                 )
-                                .default_value(SharedString::from("")),
-                            )
-                            .description(t!("Settings.General.Log.file_path_desc").to_string()),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.Log.level"),
-                                SettingField::dropdown(
-                                    vec![
-                                        (
-                                            LogLevel::Error.as_directive().into(),
-                                            t!("Settings.General.Log.level_error")
-                                                .to_string()
-                                                .into(),
-                                        ),
-                                        (
-                                            LogLevel::Warn.as_directive().into(),
-                                            t!("Settings.General.Log.level_warn")
-                                                .to_string()
-                                                .into(),
-                                        ),
-                                        (
-                                            LogLevel::Info.as_directive().into(),
-                                            t!("Settings.General.Log.level_info")
-                                                .to_string()
-                                                .into(),
-                                        ),
-                                        (
-                                            LogLevel::Debug.as_directive().into(),
-                                            t!("Settings.General.Log.level_debug")
-                                                .to_string()
-                                                .into(),
-                                        ),
-                                        (
-                                            LogLevel::Trace.as_directive().into(),
-                                            t!("Settings.General.Log.level_trace")
-                                                .to_string()
-                                                .into(),
-                                        ),
-                                    ],
-                                    |cx: &App| {
-                                        SharedString::from(
-                                            AppSettings::global(cx).log_level.as_directive(),
-                                        )
-                                    },
-                                    |val: SharedString, cx: &mut App| {
-                                        let level = LogLevel::from_directive(&val);
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.log_level = level;
-                                        });
-                                        // 过滤器包在 reload 层里，改完立即生效，不需要重启。
-                                        apply_log_level(level);
-                                    },
-                                )
-                                .default_value(SharedString::from(
-                                    default_settings.log_level.as_directive(),
-                                )),
-                            )
-                            .description(t!("Settings.General.Log.level_desc").to_string()),
-                        ),
+                                .description(t!("Settings.General.Log.level_desc").to_string()),
+                            ),
                     ];
-                    // 远程文件编辑器属于终端（SFTP）领域，数据库产品里没有意义。
-                    if crate::product::supports_shell_domain() {
-                        groups.push(remote_file_editor_setting_group(
-                            &default_settings.remote_file_editor,
-                            cx,
-                        ));
-                        groups.push(x11_setting_group(default_settings.x11_server_mode));
-                    }
                     groups.push(connection_display_setting_group());
                     groups.push(
                         SettingGroup::new()
@@ -1372,56 +1120,35 @@ impl SettingsPanel {
         // 因为数据库和终端是使用频率最高的两块设置。
         let domain_pages = app_kit::registry().settings_pages(cx);
         let pages_before_rest = pages.len() + domain_pages.len();
-        let sync_page_ix = sync_page_index(pages_before_rest);
-        let llm_providers_page_ix = llm_providers_page_index(pages_before_rest);
         pages.extend(domain_pages);
-        pages.extend(vec![
-            // Agent 设置页
-            SettingPage::new(t!("Settings.Agent.title"))
-                .resettable(true)
-                .groups(vec![
-                    agent_setting_group(&default_settings.ai_chat),
-                    agent_tool_exposure_setting_group(&default_settings.tool_exposure),
-                ]),
-            // ACP 智能体设置页（插在 Agent 与 MCP 之间；改页面顺序要同步 SYNC_PAGE_OFFSET_IN_REST）
-            SettingPage::new(t!("Settings.AcpAgents.title")).group(
-                SettingGroup::new().item(
-                    SettingItem::render(move |_options, _window, _cx| {
-                        acp_view.clone().into_any_element()
-                    })
-                    .keywords([
-                        t!("Settings.AcpAgents.title").to_string(),
-                        t!("Settings.AcpAgents.group_title").to_string(),
-                        t!("Settings.AcpAgents.description").to_string(),
+
+        // 固定尾巴：SSH、SFTP、AI、Agent、MCP、同步、快捷键、关于。
+        // 领域页与会话/平台相关的页数量会变，所以「同步」「AI」的绝对下标在这里现算，
+        // 供 InitialPage 深链定位使用。
+        let mut rest: Vec<SettingPage> = Vec::new();
+        if crate::product::supports_shell_domain() {
+            rest.push(
+                SettingPage::new(t!("Settings.Ssh.title"))
+                    .resettable(true)
+                    .groups(vec![ssh_deeplink_setting_group(), x11_group.clone()]),
+            );
+            rest.push(
+                SettingPage::new(t!("Settings.Sftp.title"))
+                    .resettable(true)
+                    .groups(vec![
+                        file_transfer_group.clone(),
+                        remote_file_editor_group.clone(),
+                        sftp_deeplink_setting_group(),
                     ]),
-                ),
-            ),
-            // MCP 设置页
-            SettingPage::new(t!("Settings.Mcp.title"))
-                .resettable(true)
-                .groups(vec![
-                    mcp_tool_exposure_setting_group(&default_settings.tool_exposure),
-                    mcp_setting_group(&default_settings.mcp),
-                ]),
-            SettingPage::new(t!("Settings.Sync.title"))
-                .resettable(true)
-                .group(sync_setting_group(
-                    default_settings.sync_enabled,
-                    default_settings.sync_provider,
-                    &default_settings.personal_sync,
-                    AppSettings::global(cx).personal_sync.backend,
-                )),
-            // 快捷键页面
-            SettingPage::new(t!("Settings.Shortcuts.title")).group(
-                SettingGroup::new().item(
-                    SettingItem::render(move |_options, window, cx| {
-                        render_shortcuts_section(default_system_hotkey.clone(), window, cx)
-                    })
-                    .keywords(shortcut_search_texts()),
-                ),
-            ),
-            SettingPage::new(t!("LlmProviders.title"))
+            );
+        }
+
+        // AI 页：原来的「LLM 提供商」独立页并入这一页，不再单独占一个入口。
+        let llm_providers_page_ix = pages_before_rest + rest.len();
+        rest.push(
+            SettingPage::new(t!("Settings.Ai.title"))
                 .description(t!("LlmProviders.description"))
+                .resettable(true)
                 .group(
                     SettingGroup::new().item(
                         SettingItem::render(move |_options, _window, _cx| {
@@ -1430,10 +1157,59 @@ impl SettingsPanel {
                         .keywords([t!("LlmProviders.title").to_string()]),
                     ),
                 ),
-            // 账户设置页：账户信息与主密钥是两件独立的事——没有账户也可以有主密钥，
-            // 所以拆成两个并列分组，关系与「关于 / 更新」一致。
-            SettingPage::new(t!("Settings.Account.title"))
+        );
+
+        // Agent 页：运行限制、工具暴露，外加原来独立的「ACP 智能体」。
+        rest.push(
+            SettingPage::new(t!("Settings.Agent.title"))
+                .resettable(true)
+                .groups(vec![
+                    agent_setting_group(&default_settings.ai_chat),
+                    agent_tool_exposure_setting_group(&default_settings.tool_exposure),
+                ])
                 .group(
+                    SettingGroup::new()
+                        .title(t!("Settings.AcpAgents.title"))
+                        .description(t!("Settings.AcpAgents.description"))
+                        .item(
+                            SettingItem::render(move |_options, _window, _cx| {
+                                acp_view.clone().into_any_element()
+                            })
+                            .keywords([
+                                t!("Settings.AcpAgents.title").to_string(),
+                                t!("Settings.AcpAgents.group_title").to_string(),
+                                t!("Settings.AcpAgents.description").to_string(),
+                            ]),
+                        ),
+                ),
+        );
+
+        rest.push(
+            SettingPage::new(t!("Settings.Mcp.title"))
+                .resettable(true)
+                .groups(vec![
+                    mcp_tool_exposure_setting_group(&default_settings.tool_exposure),
+                    mcp_setting_group(&default_settings.mcp),
+                ]),
+        );
+
+        // 同步页：只管云同步本身。
+        let sync_page_ix = pages_before_rest + rest.len();
+        rest.push(
+            SettingPage::new(t!("Settings.Sync.title"))
+                .resettable(true)
+                .group(sync_setting_group(
+                    default_settings.sync_enabled,
+                    default_settings.sync_provider,
+                    &default_settings.personal_sync,
+                    AppSettings::global(cx).personal_sync.backend,
+                )),
+        );
+
+        // 账户页：登录状态、许可与主密钥管理，独立成一页。
+        rest.push(
+            SettingPage::new(t!("Settings.Account.title"))
+                .groups([
                     SettingGroup::new()
                         .title(t!("Settings.Account.title"))
                         .item(
@@ -1449,8 +1225,6 @@ impl SettingsPanel {
                                 t!("License.import_offline").to_string(),
                             ]),
                         ),
-                )
-                .group(
                     SettingGroup::new()
                         .title(t!("Settings.Account.master_key_section"))
                         .item(
@@ -1463,8 +1237,21 @@ impl SettingsPanel {
                                 t!("Encryption.reset_master_key").to_string(),
                             ]),
                         ),
+                ]),
+        );
+
+        rest.push(
+            SettingPage::new(t!("Settings.Shortcuts.title")).group(
+                SettingGroup::new().item(
+                    SettingItem::render(move |_options, window, cx| {
+                        render_shortcuts_section(default_system_hotkey.clone(), window, cx)
+                    })
+                    .keywords(shortcut_search_texts()),
                 ),
-            // 关于页面
+            ),
+        );
+
+        rest.push(
             SettingPage::new(t!("Settings.About.title"))
                 .group(
                     SettingGroup::new().title(t!("Settings.About.title")).item(
@@ -1482,7 +1269,9 @@ impl SettingsPanel {
                     default_settings.auto_update,
                     self.update_check_state.clone(),
                 )),
-        ]);
+        );
+
+        pages.extend(rest);
         (pages, sync_page_ix, llm_providers_page_ix)
     }
 }
@@ -3988,13 +3777,12 @@ mod tests {
     use rust_i18n::t;
 
     use super::{
-        AppSettings, CustomFont, DATABASE_SHORTCUTS, FontFamilyKind, GlobalProxySettings,
-        ProxyType, WINDOW_SHORTCUTS, app_font_options, build_app_http_client,
-        builtin_monospace_font_options, default_master_key_storage, is_supported_font_file,
-        master_key_setting_enabled, master_key_storage_from_value,
-        master_key_storage_select_options, master_key_storage_value,
-        merge_font_options_with_custom_fonts, monospace_font_options, parse_font_families,
-        personal_sync_backend_options, personal_sync_status_label, personal_sync_status_view_model,
+        AppSettings, DATABASE_SHORTCUTS, GlobalProxySettings, ProxyType,
+        WINDOW_SHORTCUTS, app_font_options, build_app_http_client, default_master_key_storage,
+        is_supported_font_file, master_key_setting_enabled, master_key_storage_from_value,
+        master_key_storage_select_options, master_key_storage_value, monospace_font_options,
+        parse_font_families, personal_sync_backend_options, personal_sync_status_label,
+        personal_sync_status_view_model,
     };
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
     use one_core::settings::MasterKeyStorage;
@@ -4006,6 +3794,24 @@ mod tests {
             .split_once("\n#[cfg(test)]\nmod tests {")
             .map(|(implementation, _)| implementation)
             .expect("setting_tab.rs has a tests module")
+    }
+
+    #[test]
+    fn editor_and_table_fonts_live_on_the_database_page_only() {
+        // 通用页只留 UI 字体；SQL 编辑器、表格预览的字体跟着数据库设置走，
+        // 否则同一项会在两处出现、还可能互相覆盖。
+        let source = implementation_source();
+        for key in [
+            concat!("sql_editor_font", "_family"),
+            concat!("sql_editor_font", "_size"),
+            concat!("sql_editor_hover", "_enabled"),
+            concat!("table_preview_font", "_family"),
+        ] {
+            assert!(
+                !source.contains(key),
+                "通用设置页不应再出现 {key}，它属于数据库页"
+            );
+        }
     }
 
     /// 截出 `signature` 开头、到同一 impl 块里下一个方法（或该 impl 块结尾）为止的源码。
@@ -4455,140 +4261,31 @@ mod tests {
         assert!(!is_supported_font_file(Path::new("font.zip")));
     }
 
+    /// 账户必须单独成页：登录状态、许可与主密钥不再挂在同步页里。
     #[test]
-    fn monospace_font_options_exclude_fallback_only_cjk_fonts() {
-        let values = builtin_monospace_font_options()
-            .into_iter()
-            .map(|(value, _)| value.to_string())
-            .collect::<Vec<_>>();
-
-        assert!(!values.iter().any(|value| value == "Noto Sans Mono CJK SC"));
-        assert!(!values.iter().any(|value| value == "Source Han Mono SC"));
-        assert!(!values.iter().any(|value| value == "Noto Sans CJK SC"));
-        assert!(!values.iter().any(|value| value == "Source Han Sans SC"));
-        assert!(!values.iter().any(|value| value == "Microsoft YaHei"));
-        assert!(!values.iter().any(|value| value == "PingFang SC"));
-        assert!(!values.iter().any(|value| value == "SimSun"));
-    }
-
-    #[test]
-    fn imported_font_families_are_added_to_font_options() {
-        let options = merge_font_options_with_custom_fonts(
-            builtin_monospace_font_options(),
-            &[CustomFont {
-                path: "/tmp/NotoSansCJK-Regular.ttc".to_string(),
-                families: vec![
-                    "Noto Sans Mono CJK SC".to_string(),
-                    "Custom Mono SC".to_string(),
-                ],
-                monospace_families: vec![
-                    "Noto Sans Mono CJK SC".to_string(),
-                    "Custom Mono SC".to_string(),
-                ],
-            }],
-            FontFamilyKind::Monospace,
-            None,
-        );
-
-        let values = options
-            .into_iter()
-            .map(|(value, _)| value.to_string())
-            .collect::<Vec<_>>();
-
-        assert!(values.iter().any(|value| value == "Custom Mono SC"));
-        assert!(!values.iter().any(|value| value == "Noto Sans Mono CJK SC"));
-    }
-
-    #[test]
-    fn monospace_font_options_filter_custom_fonts_unsuitable_for_grid_preview() {
-        let options = merge_font_options_with_custom_fonts(
-            builtin_monospace_font_options(),
-            &[CustomFont {
-                path: "/tmp/CjkFonts.ttc".to_string(),
-                families: vec!["PingFang SC".to_string()],
-                monospace_families: vec![
-                    "Noto Sans Mono CJK SC".to_string(),
-                    "PingFang SC".to_string(),
-                    "Table Safe Mono".to_string(),
-                ],
-            }],
-            FontFamilyKind::Monospace,
-            None,
-        );
-
-        let values = options
-            .into_iter()
-            .map(|(value, _)| value.to_string())
-            .collect::<Vec<_>>();
-
-        assert!(values.iter().any(|value| value == "Table Safe Mono"));
-        assert!(!values.iter().any(|value| value == "Noto Sans Mono CJK SC"));
-        assert!(!values.iter().any(|value| value == "PingFang SC"));
-    }
-
-    #[test]
-    fn monospace_font_options_ignore_non_monospace_custom_fonts() {
-        let options = merge_font_options_with_custom_fonts(
-            builtin_monospace_font_options(),
-            &[CustomFont {
-                path: "/tmp/NotoSansSC-VF.ttf".to_string(),
-                families: vec!["Noto Sans SC".to_string()],
-                monospace_families: Vec::new(),
-            }],
-            FontFamilyKind::Monospace,
-            None,
-        );
-
-        let values = options
-            .into_iter()
-            .map(|(value, _)| value.to_string())
-            .collect::<Vec<_>>();
-
-        assert!(!values.iter().any(|value| value == "Noto Sans SC"));
-    }
-
-    #[test]
-    fn monospace_font_options_mark_missing_fonts_without_changing_values() {
-        let options = merge_font_options_with_custom_fonts(
-            vec![
-                ("Menlo".into(), "Menlo".into()),
-                ("Fira Code".into(), "Fira Code".into()),
-            ],
-            &[CustomFont {
-                path: "/tmp/CustomMono.ttf".to_string(),
-                families: vec!["Custom Mono".to_string()],
-                monospace_families: vec!["Custom Mono".to_string()],
-            }],
-            FontFamilyKind::Monospace,
-            Some(&["Menlo".to_string()]),
-        );
+    fn account_page_is_standalone_and_sync_page_stays_focused() {
+        let source = include_str!("setting_tab.rs");
+        let pages = source
+            .split("fn setting_pages(")
+            .nth(1)
+            .expect("setting_pages 必须存在");
+        let sync_start = pages
+            .find("\"Settings.Sync.title\"")
+            .expect("同步页必须存在");
+        let account_start = pages
+            .find("\"Settings.Account.title\"")
+            .expect("账户页必须存在");
 
         assert!(
-            options
-                .iter()
-                .any(|(value, label)| { value.as_ref() == "Menlo" && label.as_ref() == "Menlo" })
+            account_start > sync_start,
+            "账户页应排在同步页之后，与原型里的顺序一致"
         );
-        assert!(options.iter().any(|(value, label)| {
-            value.as_ref() == "Fira Code" && label.as_ref() == "Fira Code (未安装)"
-        }));
-        assert!(options.iter().any(|(value, label)| {
-            value.as_ref() == "Custom Mono" && label.as_ref() == "Custom Mono (未安装)"
-        }));
-    }
-
-    #[test]
-    fn sync_page_index_follows_the_domain_pages() {
-        // 通用页 1 页 + 数据库 / SQL 格式化 / 终端 3 页，其后是 Agent、ACP、MCP，
-        // 所以同步页下标是 7；领域页少几个时整条链跟着前移。
-        assert_eq!(super::sync_page_index(4), 7);
-        assert_eq!(super::sync_page_index(1), 4);
-    }
-
-    #[test]
-    fn llm_providers_page_index_follows_the_domain_pages() {
-        // Agent、ACP、MCP、同步、快捷键之后：4 + 5 = 9。
-        assert_eq!(super::llm_providers_page_index(4), 9);
-        assert_eq!(super::llm_providers_page_index(1), 6);
+        // 同步页在账户页之前就已经 push 完，说明两者是并列的两个页面，
+        // 而不是把账户并进同步页的 groups。
+        assert!(
+            pages[sync_start..account_start].contains("rest.push("),
+            "同步页必须是独立条目，账户页不能并进它的 groups"
+        );
     }
 
     #[test]
@@ -4964,4 +4661,87 @@ fn render_about_section(cx: &App) -> gpui::AnyElement {
                 ),
         )
         .into_any_element()
+}
+
+/// 「设置 → SFTP → 文件传输」：直连传输、目录合并/文件覆盖偏好与本地默认目录。
+fn file_transfer_setting_group(defaults: &AppSettings) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.General.FileTransfer.group_title"))
+        .item(
+            SettingItem::new(
+                t!("Settings.General.FileTransfer.direct_server_transfer"),
+                SettingField::switch(
+                    |cx: &App| AppSettings::global(cx).direct_server_transfer_enabled,
+                    |value: bool, cx: &mut App| {
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings.direct_server_transfer_enabled = value;
+                        });
+                    },
+                )
+                .default_value(defaults.direct_server_transfer_enabled),
+            )
+            .description(
+                t!("Settings.General.FileTransfer.direct_server_transfer_desc").to_string(),
+            ),
+        )
+        .item(
+            SettingItem::new(
+                t!("Settings.General.FileTransfer.prefer_merge_for_directories"),
+                SettingField::switch(
+                    |cx: &App| AppSettings::global(cx).transfer_prefer_merge_for_directories,
+                    |value: bool, cx: &mut App| {
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings.transfer_prefer_merge_for_directories = value;
+                        });
+                    },
+                )
+                .default_value(defaults.transfer_prefer_merge_for_directories),
+            )
+            .description(
+                t!("Settings.General.FileTransfer.prefer_merge_for_directories_desc").to_string(),
+            ),
+        )
+        .item(
+            SettingItem::new(
+                t!("Settings.General.FileTransfer.prefer_overwrite_for_files"),
+                SettingField::switch(
+                    |cx: &App| AppSettings::global(cx).transfer_prefer_overwrite_for_files,
+                    |value: bool, cx: &mut App| {
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings.transfer_prefer_overwrite_for_files = value;
+                        });
+                    },
+                )
+                .default_value(defaults.transfer_prefer_overwrite_for_files),
+            )
+            .description(
+                t!("Settings.General.FileTransfer.prefer_overwrite_for_files_desc").to_string(),
+            ),
+        )
+        .item(
+            SettingItem::new(
+                t!("Settings.General.FileTransfer.default_local_directory"),
+                SettingField::input(
+                    |cx: &App| {
+                        SharedString::from(
+                            AppSettings::global(cx)
+                                .transfer_default_local_directory
+                                .clone(),
+                        )
+                    },
+                    |val: SharedString, cx: &mut App| {
+                        let directory = val.trim().to_string();
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings.transfer_default_local_directory = directory;
+                        });
+                    },
+                )
+                .default_value(SharedString::from(
+                    defaults.transfer_default_local_directory.clone(),
+                )),
+            )
+            .description(
+                t!("Settings.General.FileTransfer.default_local_directory_desc").to_string(),
+            ),
+        )
 }

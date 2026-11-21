@@ -3,18 +3,29 @@
 //! 独立产品没有主产品的设置系统，因此这里自建一页终端设置，直接读写
 //! `one_core::settings::AppSettings`。终端视图通过 `observe_global_in::<AppSettings>`
 //! 监听全局设置，保存后立即生效，不需要额外的应用钩子。
+//!
+//! 这一页是终端所有**全局默认值**的唯一落脚点：终端侧边栏只管当前会话，
+//! 想改「以后新开的终端长什么样」必须回到这里。
 
 use domain_api::SettingsSectionProvider;
 
 mod local_terminal;
 mod local_terminal_profiles;
-use gpui::{App, SharedString};
+use gpui::{
+    AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, div, px,
+};
+use gpui_component::ActiveTheme;
 use gpui_component::setting::{
     NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage,
 };
-use one_core::settings::AppSettings;
+use gpui_component::{h_flex, v_flex};
+use one_core::settings::{AppSettings, monospace_font_options};
 use rust_i18n::t;
-use terminal_view::{MAX_FONT_SIZE, MIN_FONT_SIZE, available_monospace_fonts};
+use terminal_view::{
+    MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, available_monospace_fonts, current_settings,
+    update_vim_scroll_to_arrow_keys,
+};
 
 /// 终端设置页在设置列表中的排序（排在数据领域之后）。
 const TERMINAL_SETTINGS_ORDER: i32 = 20;
@@ -28,38 +39,198 @@ impl SettingsSectionProvider for ShellSettingsProvider {
     }
 }
 
-/// 终端设置页：终端外观/行为 + 本地终端默认 shell 与自定义终端。
+/// 终端设置页：外观、回滚与日志、剪贴板、输入辅助、危险操作确认、界面与按键，
+/// 最后是本地终端默认 shell 与自定义终端。
 fn terminal_settings_page(cx: &mut App) -> SettingPage {
     let profile = AppSettings::global(cx).local_terminal_profile.clone();
+    let defaults = AppSettings::default();
     SettingPage::new(t!("Settings.terminal.title"))
         .default_open(true)
         .resettable(true)
         .groups([
-            terminal_setting_group(),
+            terminal_appearance_group(cx, &defaults),
+            terminal_scrolling_group(&defaults),
+            terminal_clipboard_group(&defaults),
+            terminal_input_group(&defaults),
+            terminal_safety_group(&defaults),
+            terminal_interface_group(&defaults),
             local_terminal::local_terminal_setting_group(&profile),
         ])
 }
 
-/// 终端设置分组：字体、字号、回滚行数与剪贴板/补全开关。
-fn terminal_setting_group() -> SettingGroup {
-    let defaults = AppSettings::default();
+/// 外观：字体、字号、配色、光标与行内的辅助标记。
+fn terminal_appearance_group(cx: &mut App, defaults: &AppSettings) -> SettingGroup {
     SettingGroup::new()
-        .title(t!("Settings.terminal.group_title"))
+        .title(t!("Settings.terminal.appearance_group"))
         .items(vec![
-            font_family_item(&defaults),
-            font_size_item(&defaults),
-            scrollback_lines_item(&defaults),
-            auto_copy_item(&defaults),
-            autocomplete_item(&defaults),
+            font_family_item(cx, defaults),
+            font_size_item(defaults),
+            theme_item(defaults),
+            bool_item(
+                "cursor_blink",
+                defaults.terminal_cursor_blink,
+                |settings| settings.terminal_cursor_blink,
+                |settings, value| settings.terminal_cursor_blink = value,
+            ),
+            bool_item(
+                "selection_highlight",
+                defaults.terminal_selection_highlight,
+                |settings| settings.terminal_selection_highlight,
+                |settings, value| settings.terminal_selection_highlight = value,
+            ),
+            bool_item(
+                "show_line_numbers",
+                defaults.terminal_show_line_numbers,
+                |settings| settings.terminal_show_line_numbers,
+                |settings, value| settings.terminal_show_line_numbers = value,
+            ),
+            bool_item(
+                "show_line_timestamps",
+                defaults.terminal_show_timestamps,
+                |settings| settings.terminal_show_timestamps,
+                |settings, value| settings.terminal_show_timestamps = value,
+            ),
         ])
 }
 
-/// 终端等宽字体下拉；选项来自终端视图导出的可用字体列表。
-fn font_family_item(defaults: &AppSettings) -> SettingItem {
-    let options = available_monospace_fonts()
-        .into_iter()
-        .map(|font| (SharedString::from(font), SharedString::from(font)))
-        .collect();
+/// 回滚行数与自动会话日志。
+fn terminal_scrolling_group(defaults: &AppSettings) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.terminal.scrolling_group"))
+        .items(vec![
+            scrollback_lines_item(defaults),
+            bool_item(
+                "auto_session_logging",
+                defaults.terminal_auto_session_logging,
+                |settings| settings.terminal_auto_session_logging,
+                |settings, value| settings.terminal_auto_session_logging = value,
+            ),
+        ])
+}
+
+/// 剪贴板：选中复制、中键/右键粘贴、粘贴图片上传、路径与终端同步。
+fn terminal_clipboard_group(defaults: &AppSettings) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.terminal.clipboard_group"))
+        .items(vec![
+            bool_item(
+                "auto_copy",
+                defaults.terminal_auto_copy,
+                |settings| settings.terminal_auto_copy,
+                |settings, value| settings.terminal_auto_copy = value,
+            ),
+            bool_item(
+                "middle_click_paste",
+                defaults.terminal_middle_click_paste,
+                |settings| settings.terminal_middle_click_paste,
+                |settings, value| settings.terminal_middle_click_paste = value,
+            ),
+            bool_item(
+                "right_click_paste",
+                defaults.terminal_right_click_paste,
+                |settings| settings.terminal_right_click_paste,
+                |settings, value| settings.terminal_right_click_paste = value,
+            ),
+            bool_item(
+                "paste_image_upload",
+                defaults.terminal_paste_image_upload,
+                |settings| settings.terminal_paste_image_upload,
+                |settings, value| settings.terminal_paste_image_upload = value,
+            ),
+            bool_item(
+                "sync_path",
+                defaults.terminal_sync_path_with_terminal,
+                |settings| settings.terminal_sync_path_with_terminal,
+                |settings, value| settings.terminal_sync_path_with_terminal = value,
+            ),
+        ])
+}
+
+/// 输入辅助：命令补全与候选弹层。
+fn terminal_input_group(defaults: &AppSettings) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.terminal.input_group"))
+        .items(vec![
+            bool_item(
+                "autocomplete",
+                defaults.terminal_enable_autocomplete,
+                |settings| settings.terminal_enable_autocomplete,
+                |settings, value| settings.terminal_enable_autocomplete = value,
+            ),
+            bool_item(
+                "suggestion_popup",
+                defaults.terminal_show_suggestion_popup,
+                |settings| settings.terminal_show_suggestion_popup,
+                |settings, value| settings.terminal_show_suggestion_popup = value,
+            ),
+            suggestion_popup_opacity_item(defaults),
+        ])
+}
+
+/// 危险操作的二次确认。
+fn terminal_safety_group(defaults: &AppSettings) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.terminal.safety_group"))
+        .items(vec![
+            bool_item(
+                "confirm_multiline_paste",
+                defaults.terminal_confirm_multiline_paste,
+                |settings| settings.terminal_confirm_multiline_paste,
+                |settings, value| settings.terminal_confirm_multiline_paste = value,
+            ),
+            bool_item(
+                "confirm_high_risk_command",
+                defaults.terminal_confirm_high_risk_command,
+                |settings| settings.terminal_confirm_high_risk_command,
+                |settings, value| settings.terminal_confirm_high_risk_command = value,
+            ),
+        ])
+}
+
+/// 界面与按键：悬浮工具条、vim/TUI 滚轮映射。
+fn terminal_interface_group(defaults: &AppSettings) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.terminal.interface_group"))
+        .items(vec![
+            bool_item(
+                "show_pane_toolbar",
+                defaults.terminal_show_pane_toolbar,
+                |settings| settings.terminal_show_pane_toolbar,
+                |settings, value| settings.terminal_show_pane_toolbar = value,
+            ),
+            vim_scroll_to_arrow_keys_item(),
+        ])
+}
+
+/// 终端等宽字体下拉。
+///
+/// 选项 = 终端精选的内置等宽字体 + 用户导入的等宽家族 + 系统已装字体，
+/// 合并规则与「SQL 编辑器字体」「表格预览字体」共用
+/// `one_core::settings::monospace_font_options`；没装的字体在标签上标出来，
+/// 否则用户会选到一个渲染时被静默改回默认值的家族。
+fn font_family_item(cx: &App, defaults: &AppSettings) -> SettingItem {
+    let installed_font_names = cx.text_system().all_font_names();
+    let custom_font_families = AppSettings::global(cx)
+        .custom_fonts
+        .iter()
+        .flat_map(|font| font.monospace_families.iter().cloned())
+        .collect::<Vec<_>>();
+    let missing_suffix = t!("Settings.terminal.font_family_missing").to_string();
+    let options = monospace_font_options(
+        &available_monospace_fonts(),
+        &installed_font_names,
+        &custom_font_families,
+    )
+    .into_iter()
+    .map(|(family, installed)| {
+        let label = if installed {
+            SharedString::from(family.clone())
+        } else {
+            format!("{family}{missing_suffix}").into()
+        };
+        (SharedString::from(family), label)
+    })
+    .collect();
     SettingItem::new(
         t!("Settings.terminal.font_family"),
         SettingField::scrollable_dropdown(
@@ -99,6 +270,98 @@ fn font_size_item(defaults: &AppSettings) -> SettingItem {
     .description(t!("Settings.terminal.font_size_description").to_string())
 }
 
+/// 终端配色：渲染成一排主题卡片，与应用外观页的调色板同构。
+///
+/// 列表来自 `TerminalTheme::all`：「跟随应用」排第一，跟随当前应用主题动态取色，
+/// 其余是终端自带的调色板。卡片背景/前景/圆点都用该主题自己的颜色，
+/// 选中项用应用主色描边，点一下即写入并立刻生效。
+fn theme_item(defaults: &AppSettings) -> SettingItem {
+    let default_theme = defaults.terminal_theme.clone();
+    let reset_theme = default_theme.clone();
+    SettingItem::render(move |_options, _window, cx| render_terminal_theme_picker(cx))
+        .keywords([t!("Settings.terminal.theme").to_string()])
+        .on_reset(
+            move |cx| AppSettings::global(cx).terminal_theme != default_theme,
+            move |_window, cx| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.terminal_theme = reset_theme.clone();
+                });
+            },
+        )
+}
+
+/// 主题卡片尺寸与应用外观页保持一致，避免两处配色选择器观感不同。
+const THEME_CARD_WIDTH: f32 = 132.0;
+const THEME_CARD_HEIGHT: f32 = 64.0;
+const THEME_MARKER_SIZE: f32 = 12.0;
+const THEME_PREVIEW_HEIGHT: f32 = 8.0;
+
+fn render_terminal_theme_picker(cx: &mut App) -> AnyElement {
+    let selected = AppSettings::global(cx).terminal_theme.clone();
+    let cards = TerminalTheme::all(cx.theme())
+        .into_iter()
+        .map(|theme| render_terminal_theme_card(theme, &selected, cx));
+    v_flex()
+        .w_full()
+        .gap_2()
+        .child(div().child(t!("Settings.terminal.theme").to_string()))
+        .child(h_flex().flex_wrap().gap_2().children(cards))
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(t!("Settings.terminal.theme_description").to_string()),
+        )
+        .into_any_element()
+}
+
+fn render_terminal_theme_card(
+    theme: TerminalTheme,
+    selected: &str,
+    cx: &App,
+) -> impl IntoElement {
+    let is_selected = theme.name == selected;
+    let name = theme.name;
+    let label = theme.display_name();
+    let background = theme.background;
+    let foreground = theme.foreground;
+    let accent = theme.cursor;
+    div()
+        .id(SharedString::from(format!("terminal-theme-card-{name}")))
+        .w(px(THEME_CARD_WIDTH))
+        .h(px(THEME_CARD_HEIGHT))
+        .p_2()
+        .rounded(cx.theme().radius)
+        .border(px(if is_selected { 2.0 } else { 1.0 }))
+        .border_color(if is_selected {
+            cx.theme().primary
+        } else {
+            cx.theme().border
+        })
+        .bg(background)
+        .text_color(foreground)
+        .cursor_pointer()
+        .on_click(move |_, _, cx| {
+            AppSettings::update_and_save(cx, |settings| {
+                settings.terminal_theme = name.to_string();
+            });
+        })
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(div().size(px(THEME_MARKER_SIZE)).rounded_full().bg(accent))
+                .child(div().text_xs().truncate().child(label)),
+        )
+        .child(
+            div()
+                .mt_2()
+                .h(px(THEME_PREVIEW_HEIGHT))
+                .rounded(cx.theme().radius)
+                .bg(accent),
+        )
+}
+
 /// 终端回滚行数；保存时由 `AppSettings` 归一到合法区间。
 fn scrollback_lines_item(defaults: &AppSettings) -> SettingItem {
     let options = NumberFieldOptions {
@@ -122,36 +385,103 @@ fn scrollback_lines_item(defaults: &AppSettings) -> SettingItem {
     .description(t!("Settings.terminal.scrollback_lines_description").to_string())
 }
 
-/// 选中文本后自动复制。
-fn auto_copy_item(defaults: &AppSettings) -> SettingItem {
+/// 候选弹层不透明度；与终端侧边栏里那条滑块共用同一区间。
+fn suggestion_popup_opacity_item(defaults: &AppSettings) -> SettingItem {
+    let options = NumberFieldOptions {
+        min: 0.1,
+        max: 1.0,
+        ..Default::default()
+    };
     SettingItem::new(
-        t!("Settings.terminal.auto_copy"),
-        SettingField::switch(
-            |cx: &App| AppSettings::global(cx).terminal_auto_copy,
-            |value: bool, cx: &mut App| {
+        t!("Settings.terminal.suggestion_popup_opacity"),
+        SettingField::number_input(
+            options,
+            |cx: &App| AppSettings::global(cx).terminal_suggestion_popup_opacity as f64,
+            |value: f64, cx: &mut App| {
                 AppSettings::update_and_save(cx, |settings| {
-                    settings.terminal_auto_copy = value;
+                    settings.terminal_suggestion_popup_opacity = value.clamp(0.1, 1.0) as f32;
                 });
             },
         )
-        .default_value(defaults.terminal_auto_copy),
+        .default_value(defaults.terminal_suggestion_popup_opacity as f64),
     )
-    .description(t!("Settings.terminal.auto_copy_description").to_string())
+    .description(t!("Settings.terminal.suggestion_popup_opacity_description").to_string())
 }
 
-/// 终端命令自动补全。
-fn autocomplete_item(defaults: &AppSettings) -> SettingItem {
+/// vim/TUI 里把鼠标滚轮映射成方向键。
+///
+/// 这一项存在本地终端设置文件里，读写都要走 `terminal_view` 的入口。
+fn vim_scroll_to_arrow_keys_item() -> SettingItem {
     SettingItem::new(
-        t!("Settings.terminal.autocomplete"),
+        t!("Settings.terminal.vim_scroll_to_arrow_keys"),
         SettingField::switch(
-            |cx: &App| AppSettings::global(cx).terminal_enable_autocomplete,
-            |value: bool, cx: &mut App| {
-                AppSettings::update_and_save(cx, |settings| {
-                    settings.terminal_enable_autocomplete = value;
-                });
+            |cx: &App| current_settings(cx).vim_scroll_to_arrow_keys,
+            |value: bool, cx: &mut App| update_vim_scroll_to_arrow_keys(cx, value),
+        )
+        .default_value(true),
+    )
+    .description(t!("Settings.terminal.vim_scroll_to_arrow_keys_description").to_string())
+}
+
+/// 复用的布尔开关项：标题与描述靠语言键前缀拼出来，读写直连 `AppSettings`。
+fn bool_item(
+    key: &str,
+    default_value: bool,
+    read: fn(&AppSettings) -> bool,
+    write: fn(&mut AppSettings, bool),
+) -> SettingItem {
+    let title_key = format!("Settings.terminal.{key}");
+    let description_key = format!("Settings.terminal.{key}_description");
+    SettingItem::new(
+        t!(title_key.as_str()).to_string(),
+        SettingField::switch(
+            move |cx: &App| read(AppSettings::global(cx)),
+            move |value: bool, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| write(settings, value));
             },
         )
-        .default_value(defaults.terminal_enable_autocomplete),
+        .default_value(default_value),
     )
-    .description(t!("Settings.terminal.autocomplete_description").to_string())
+    .description(t!(description_key.as_str()).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    /// 终端配色必须是卡片选择器，和应用外观页的调色板一致；
+    /// 早先这里是下拉框，和外观页观感割裂。
+    #[test]
+    fn terminal_theme_renders_cards_instead_of_a_dropdown() {
+        let source = include_str!("settings.rs");
+        assert!(
+            source.contains(concat!("render_terminal_theme", "_picker(cx)")),
+            "终端配色必须走卡片选择器"
+        );
+        assert!(
+            source.contains(concat!("terminal-theme-card", "-")),
+            "卡片需要稳定的 id，便于点击与测试定位"
+        );
+        // 下拉写法会把 value 转成字符串再写回 terminal_theme；
+        // 断言里拆成两段拼接，避免注释/断言文本命中自身。
+        assert!(
+            !source.contains(concat!("settings.terminal_theme", " = value.to_string()")),
+            "终端配色不应再退回下拉框"
+        );
+    }
+
+    /// 卡片列表要覆盖「跟随应用」+ 终端自带调色板，不能只列预设。
+    #[test]
+    fn terminal_theme_cards_follow_the_shared_theme_list() {
+        let source = include_str!("settings.rs");
+        let picker = source
+            .split("fn render_terminal_theme_picker")
+            .nth(1)
+            .expect("render_terminal_theme_picker 必须存在")
+            .split("fn render_terminal_theme_card")
+            .next()
+            .expect("picker 有结束标记");
+        assert!(
+            picker.contains("TerminalTheme::all(cx.theme())"),
+            "主题列表必须来自 TerminalTheme::all，与应用主题联动"
+        );
+    }
 }

@@ -1208,6 +1208,22 @@ TerminalView:
     en: "Vi mode disabled. Press %{shortcut} to enable it again."
     zh-CN: "已退出 Vi 模式。再次按 %{shortcut} 可重新进入。"
     zh-HK: "已退出 Vi 模式。再次按 %{shortcut} 可重新進入。"
+  reset_session_settings:
+    en: Reset to global defaults
+    zh-CN: 恢复全局默认
+    zh-HK: 恢復全域預設
+  reset_session_settings_hint:
+    en: Resets back to the global defaults set in Settings → Terminal.
+    zh-CN: 重置后回到「设置 → 终端」里的全局默认值。
+    zh-HK: 重設後回到「設定 → 終端」裡的全域預設值。
+  session_scope_hint_title:
+    en: Applies to this session only
+    zh-CN: 仅对当前会话生效
+    zh-HK: 僅對當前工作階段生效
+  session_scope_hint_body:
+    en: Changes here are not saved. To change the defaults for new terminals, go to Settings → Terminal.
+    zh-CN: 这里的改动不会保存；如需对所有终端生效，请到「设置 → 终端」调整。
+    zh-HK: 這裡的改動不會儲存；如需對所有終端生效，請到「設定 → 終端」調整。
   font_reset_triggered:
     en: "Terminal font size has been reset to 15."
     zh-CN: "已触发终端字体重置为 15。"

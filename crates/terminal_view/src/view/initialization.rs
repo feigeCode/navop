@@ -294,6 +294,8 @@ impl TerminalView {
             command_bar,
             sidebar_toolbar,
             sidebar_tool_panels,
+            // 新标签从全局默认值开始，侧边栏改动只写会话覆盖。
+            session_overrides: TerminalSessionOverrides::default(),
             font_size: default_font_size,
             line_height: default_font_size * default_line_height_scale,
             font_family: default_font_family,
