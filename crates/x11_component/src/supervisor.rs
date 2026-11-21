@@ -11,6 +11,7 @@ use crate::metrics::{MetricEvent, record};
 use crate::process::{kill_owned, remove_owned_files, remove_pidfile_if_owned};
 use crate::restart::RestartBudget;
 use crate::state::{disable_embedded, note_restart, set_active_version, update_status};
+#[cfg(not(target_os = "macos"))]
 use crate::vulkan::preflight;
 use crate::{X11ComponentError, X11ForwardingStatus, X11Resolution};
 
@@ -116,7 +117,12 @@ impl EmbeddedSupervisor {
 }
 
 pub async fn start(spec: LaunchSpec) -> Result<X11Resolution, X11ComponentError> {
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     preflight(&spec.min_vulkan)?;
+    #[cfg(target_os = "macos")]
+    if spec.version != "manual" {
+        macos_runtime_preflight(&spec)?;
+    }
     let supervisor = global_supervisor();
     let resolution = supervisor.ensure(spec).await;
     if resolution.is_ok() {
@@ -268,17 +274,80 @@ async fn probe_launched(
     last_attempt: bool,
 ) -> Result<LaunchedChild, (String, bool)> {
     let cookie = spec.cookie().map_err(|error| (error.to_string(), false))?;
-    match probe_endpoint(&spec.endpoint(), &cookie, Duration::from_secs(2)).await {
-        Ok(()) => Ok(launched),
-        Err(error) => {
-            let rotate = retry_decision(spec, crash, last_attempt, true) == RetryDecision::Rotate;
-            let _ = launched.child.kill().await;
-            let _ = launched.child.wait().await;
-            let _ = kill_owned(&launched.pid);
-            let _ = remove_owned_files(&spec.root, &launched.pid);
-            Err((error.to_string(), rotate))
+    // socket 尚未出现时立即失败；已建立连接但 setup 缓慢时保留完整的总预算。
+    #[cfg(target_os = "macos")]
+    let (probe_timeout, startup_timeout) = (Duration::from_millis(500), Duration::from_secs(15));
+    #[cfg(not(target_os = "macos"))]
+    let (probe_timeout, startup_timeout) = (Duration::from_secs(2), Duration::from_secs(2));
+    let deadline = tokio::time::Instant::now() + startup_timeout;
+    let mut last_error = match probe_endpoint(&spec.endpoint(), &cookie, probe_timeout).await {
+        Ok(()) => return Ok(launched),
+        Err(error) => error.to_string(),
+    };
+    loop {
+        match launched.child.try_wait() {
+            Ok(Some(status)) => {
+                last_error = format!("yserver 在 X11 握手前退出：{status}");
+                break;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                last_error = format!("无法读取 yserver 启动状态：{error}");
+                break;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match probe_endpoint(
+            &spec.endpoint(),
+            &cookie,
+            probe_timeout.min(remaining.max(Duration::from_millis(1))),
+        )
+        .await
+        {
+            Ok(()) => return Ok(launched),
+            Err(error) => last_error = error.to_string(),
         }
     }
+    let rotate = retry_decision(spec, crash, last_attempt, true) == RetryDecision::Rotate;
+    let _ = launched.child.kill().await;
+    let _ = launched.child.wait().await;
+    let _ = kill_owned(&launched.pid);
+    let _ = remove_owned_files(&spec.root, &launched.pid);
+    Err((last_error, rotate))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_runtime_preflight(spec: &LaunchSpec) -> Result<(), X11ComponentError> {
+    let required = format!("随包 Vulkan {}/KosmicKrisp 运行库", spec.min_vulkan);
+    let runtime = spec
+        .executable
+        .parent()
+        .ok_or_else(|| X11ComponentError::VulkanUnavailable {
+            required: required.clone(),
+            actual: Some("yserver 缺少运行目录".into()),
+        })?;
+    for relative in [
+        "lib/libvulkan.1.dylib",
+        "lib/libvulkan_kosmickrisp.dylib",
+        "icd.d/kosmickrisp_mesa_icd.aarch64.json",
+        "xkb/rules",
+    ] {
+        let path = runtime.join(relative);
+        if !path.exists() {
+            return Err(X11ComponentError::VulkanUnavailable {
+                required: required.clone(),
+                actual: Some(format!(
+                    "缺少 {}；请重新安装组件或切换外置 XQuartz",
+                    path.display()
+                )),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

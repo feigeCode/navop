@@ -1,14 +1,20 @@
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 use libloading::Library;
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 use semver::Version;
 
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 use crate::X11ComponentError;
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 type EnumerateLoaderVersion = unsafe extern "system" fn(*mut u32) -> i32;
 
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 pub fn decode_vulkan_version(packed: u32) -> (u32, u32, u32) {
     (packed >> 22, (packed >> 12) & 0x3ff, packed & 0xfff)
 }
 
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 pub fn check_vulkan_version(
     required: &str,
     actual: Option<String>,
@@ -29,6 +35,7 @@ pub fn check_vulkan_version(
 }
 
 /// 直接从 Vulkan loader 查询能力，不依赖 vulkaninfo 可执行文件。
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub fn preflight(required: &str) -> Result<(), X11ComponentError> {
     #[cfg(target_os = "windows")]
     let names = ["vulkan-1.dll"];
@@ -51,6 +58,7 @@ pub fn preflight(required: &str) -> Result<(), X11ComponentError> {
     check_vulkan_version(required, None)
 }
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 unsafe fn query_loader(name: &str) -> std::io::Result<String> {
     let library =
         unsafe { Library::new(name) }.map_err(|error| std::io::Error::other(error.to_string()))?;

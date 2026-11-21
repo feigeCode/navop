@@ -21,15 +21,32 @@ pub async fn probe_endpoint(
     cookie: &MagicCookie,
     timeout: Duration,
 ) -> X11Result<()> {
-    tokio::time::timeout(timeout, probe_inner(endpoint, cookie))
+    let packet = ClientHello::for_probe(cookie.bytes()).encode_with(cookie.bytes());
+    probe_with_setup(endpoint, packet, timeout).await
+}
+
+/// Windows 本机无认证 X server 的健康检查；不要伪造 MIT cookie。
+#[cfg(any(target_os = "windows", test))]
+pub(crate) async fn probe_endpoint_without_auth(
+    endpoint: &ServerEndpoint,
+    timeout: Duration,
+) -> X11Result<()> {
+    let packet = ClientHello::for_probe(&[]).encode_with_auth("", &[]);
+    probe_with_setup(endpoint, packet, timeout).await
+}
+
+async fn probe_with_setup(
+    endpoint: &ServerEndpoint,
+    packet: Vec<u8>,
+    timeout: Duration,
+) -> X11Result<()> {
+    tokio::time::timeout(timeout, probe_inner(endpoint, packet))
         .await
         .map_err(|_| X11Error::ProbeTimeout)?
 }
 
-async fn probe_inner(endpoint: &ServerEndpoint, cookie: &MagicCookie) -> X11Result<()> {
+async fn probe_inner(endpoint: &ServerEndpoint, packet: Vec<u8>) -> X11Result<()> {
     let mut stream = connect(endpoint).await?;
-    let hello = ClientHello::for_probe(cookie.bytes());
-    let packet = hello.encode_with(cookie.bytes());
     stream.write_all(&packet).await.map_err(io_error)?;
     let mut header = [0; REPLY_HEADER_LEN];
     stream.read_exact(&mut header).await.map_err(io_error)?;
@@ -95,7 +112,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use super::probe_endpoint;
+    use super::{probe_endpoint, probe_endpoint_without_auth};
     use crate::setup::ClientHello;
     use crate::{MagicCookie, ServerEndpoint, X11Error};
 
@@ -146,6 +163,30 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, X11Error::ProbeIo(_)));
+    }
+
+    #[tokio::test]
+    async fn no_auth_probe_omits_authentication_instead_of_forging_a_cookie() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let endpoint = ServerEndpoint::Inet {
+            host: "127.0.0.1".into(),
+            port: listener.local_addr().unwrap().port(),
+        };
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut header = [0; 12];
+            stream.read_exact(&mut header).await.unwrap();
+            assert_eq!(ClientHello::auth_section_len(&header).unwrap(), 0);
+            let hello = ClientHello::decode(&header).unwrap();
+            assert!(hello.auth_name.is_empty());
+            assert!(hello.auth_data.is_empty());
+            stream.write_all(&[1, 0, 11, 0, 0, 0, 0, 0]).await.unwrap();
+        });
+
+        probe_endpoint_without_auth(&endpoint, Duration::from_secs(1))
+            .await
+            .unwrap();
+        server.await.unwrap();
     }
 
     #[tokio::test]

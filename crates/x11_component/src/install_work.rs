@@ -129,11 +129,19 @@ mod tests {
         let staging = std::env::temp_dir().join("x11-blocking-test");
         let work = tokio::time::timeout(
             Duration::from_secs(30),
-            super::unpack_blocking(&[7; 64 * 1024 * 1024], artifact, String::new(), staging.clone()),
+            super::unpack_blocking(
+                &[7; 64 * 1024 * 1024],
+                artifact,
+                String::new(),
+                staging.clone(),
+            ),
         )
         .await
         .expect("blocking 哈希应在测试时限内完成");
-        assert!(matches!(work, Err(X11ComponentError::Sha256Mismatch { .. })));
+        assert!(matches!(
+            work,
+            Err(X11ComponentError::Sha256Mismatch { .. })
+        ));
         assert!(!staging.exists());
     }
 }

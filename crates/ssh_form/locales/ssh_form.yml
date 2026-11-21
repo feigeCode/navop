@@ -809,9 +809,9 @@ SSH:
     zh-CN: "untrusted ssh -X 会受 X11 SECURITY 超时限制；需要可信转发时请使用 ssh -Y。"
     zh-HK: "untrusted ssh -X 會受 X11 SECURITY 逾時限制；需要可信轉發時請使用 ssh -Y。"
   x11_macos_xquartz_guidance:
-    en: "On macOS, install and start XQuartz for External mode; ensure DISPLAY authorization is ready."
-    zh-CN: "macOS 使用 External 时需安装并启动 XQuartz，并确保 DISPLAY 授权就绪。"
-    zh-HK: "macOS 使用 External 時需安裝並啟動 XQuartz，並確保 DISPLAY 授權就緒。"
+    en: "Apple Silicon full builds include yserver; no XQuartz or Homebrew runtime is required. External uses XQuartz with DISPLAY authorization ready. Intel Macs and data-only builds use External."
+    zh-CN: "Apple Silicon 完整版内置 yserver，无需 XQuartz 或 Homebrew 运行库；External 需安装并启动 XQuartz，并确保 DISPLAY 授权就绪。Intel Mac 和纯数据版请选 External。"
+    zh-HK: "Apple Silicon 完整版內置 yserver，無需 XQuartz 或 Homebrew 運行庫；External 需安裝並啟動 XQuartz，並確保 DISPLAY 授權就緒。Intel Mac 和純資料版請選 External。"
   x11_switch_external:
     en: Switch to external X server
     zh-CN: 切换到外部 X server
