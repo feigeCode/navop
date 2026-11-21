@@ -3089,9 +3089,9 @@ Settings:
         zh-CN: "untrusted ssh -X 会受 X11 SECURITY 超时限制；需要可信转发时请使用 ssh -Y。"
         zh-HK: "untrusted ssh -X 會受 X11 SECURITY 逾時限制；需要可信轉發時請使用 ssh -Y。"
       macos_xquartz_guidance:
-        en: "On macOS, install and start XQuartz for External mode, then log out and back in if DISPLAY is unavailable."
-        zh-CN: "macOS 使用 External 时需安装并启动 XQuartz；若 DISPLAY 不可用，请注销后重新登录。"
-        zh-HK: "macOS 使用 External 時需安裝並啟動 XQuartz；若 DISPLAY 不可用，請登出後重新登入。"
+        en: "Apple Silicon builds include yserver with KosmicKrisp; no XQuartz or Homebrew runtime is required. External uses XQuartz. Intel Macs and data-only builds use External."
+        zh-CN: "Apple Silicon 完整版内置 yserver 和 KosmicKrisp，无需安装 XQuartz 或 Homebrew 运行库；External 使用 XQuartz。Intel Mac 和纯数据版请选 External。"
+        zh-HK: "Apple Silicon 完整版內置 yserver 和 KosmicKrisp，無需安裝 XQuartz 或 Homebrew 運行庫；External 使用 XQuartz。Intel Mac 和純資料版請選 External。"
 
     # 文件传输设置
     FileTransfer:

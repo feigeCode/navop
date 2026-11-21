@@ -35,10 +35,11 @@ fn installed_tcp_listens_only_on_loopback() {
         CommandSpec::installed_tcp(PathBuf::from("yserver"), &endpoint, PathBuf::from("auth"));
     spec.validate_secure_endpoint().unwrap();
     assert_eq!(spec.display_argument(), ":10");
-    assert_eq!(
-        spec.arguments(),
-        vec![":10", "-auth", "auth", "--listen", "127.0.0.1"]
-    );
+    let mut expected = vec![":10", "-auth", "auth"];
+    #[cfg(target_os = "macos")]
+    expected.push("--rootless");
+    expected.extend(["--listen", "127.0.0.1"]);
+    assert_eq!(spec.arguments(), expected);
 }
 
 #[test]
@@ -91,10 +92,11 @@ fn manual_upstream_tcp_all_interfaces_is_rejected() {
     let error = spec.validate_secure_endpoint().unwrap_err().to_string();
     assert!(error.contains("手动"));
     assert!(error.contains("不支持 TCP"));
-    assert_eq!(
-        spec.arguments(),
-        vec![":10", "-auth", "auth", "-listen", "tcp"]
-    );
+    let mut expected = vec![":10", "-auth", "auth"];
+    #[cfg(target_os = "macos")]
+    expected.push("--rootless");
+    expected.extend(["-listen", "tcp"]);
+    assert_eq!(spec.arguments(), expected);
 }
 
 #[test]
@@ -103,10 +105,11 @@ fn unix_socket_manual_launch_arguments() {
     let spec = CommandSpec::unix(PathBuf::from("yserver"), &endpoint, PathBuf::from("auth"));
     spec.validate_secure_endpoint().unwrap();
     assert_eq!(spec.display_argument(), ":17");
-    assert_eq!(
-        spec.arguments(),
-        vec![":17", "-auth", "auth", "-nolisten", "tcp"]
-    );
+    let mut expected = vec![":17", "-auth", "auth"];
+    #[cfg(target_os = "macos")]
+    expected.push("--rootless");
+    expected.extend(["-nolisten", "tcp"]);
+    assert_eq!(spec.arguments(), expected);
 }
 
 #[test]

@@ -189,9 +189,12 @@ pub fn current_target() -> Result<&'static str, X11ComponentError> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("windows", "x86_64") => Ok("windows-x86_64"),
         ("windows", "aarch64") => Ok("windows-aarch64"),
+        ("macos", "aarch64") => Ok("macos-aarch64"),
         ("linux", "x86_64") => Ok("linux-x86_64"),
         ("linux", "aarch64") => Ok("linux-aarch64"),
-        ("macos", _) => Err(X11ComponentError::UnsupportedPlatform("macOS".into())),
+        ("macos", arch) => Err(X11ComponentError::UnsupportedPlatform(format!(
+            "macOS-{arch}；内置仅支持 Apple Silicon，可改用外置 XQuartz"
+        ))),
         (os, arch) => Err(X11ComponentError::UnsupportedPlatform(format!(
             "{os}-{arch}"
         ))),

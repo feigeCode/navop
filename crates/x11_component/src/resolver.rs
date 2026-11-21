@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use x11_forwarding::{ServerEndpoint, detect_local_server};
+use std::time::Duration;
+
+use x11_forwarding::{ServerEndpoint, X11Proxy, detect_local_server};
 
 use crate::installer::prepare;
 use crate::launch::LaunchSpec;
@@ -19,9 +21,14 @@ pub async fn resolve_server(mode: X11ServerMode) -> X11Resolution {
         X11ServerMode::Embedded => embedded(mode).await,
         X11ServerMode::Auto => match external().await {
             Ok(resolution) => Ok(resolution),
-            Err(_) => {
+            Err(external_error) => {
                 record(MetricEvent::AutoExternalFallback);
-                embedded(mode).await
+                match embedded(mode).await {
+                    Ok(resolution) => Ok(resolution),
+                    Err(embedded_error) => Err(X11ComponentError::Config(format!(
+                        "外置 X server 不可用：{external_error}；内置 X server 不可用：{embedded_error}"
+                    ))),
+                }
             }
         },
     };
@@ -39,10 +46,14 @@ pub fn installed_version() -> Option<String> {
 }
 
 pub async fn reinstall() -> Result<String, X11ComponentError> {
-    if !cfg!(target_os = "windows") {
-        return Err(X11ComponentError::UnsupportedPlatform(
-            std::env::consts::OS.into(),
-        ));
+    if !cfg!(any(
+        target_os = "windows",
+        all(target_os = "macos", target_arch = "aarch64")
+    )) {
+        return Err(X11ComponentError::UnsupportedPlatform(format!(
+            "{}；可改用外置 XQuartz",
+            std::env::consts::OS
+        )));
     }
     crate::reinstall_with_config(default_config()?).await
 }
@@ -52,6 +63,15 @@ async fn external() -> Result<X11Resolution, X11ComponentError> {
         .await
         .map_err(|error| X11ComponentError::Process(error.to_string()))?
         .map_err(|error| X11ComponentError::Config(error.to_string()))?;
+    external_proxy(proxy).await
+}
+
+/// External 与 Auto 共用的外置成功路径：健康检查只使用本机认证信息。
+async fn external_proxy(proxy: X11Proxy) -> Result<X11Resolution, X11ComponentError> {
+    proxy
+        .probe_local(Duration::from_secs(2))
+        .await
+        .map_err(|error| X11ComponentError::Config(format!("外置 X11 握手失败：{error}")))?;
     let server = endpoint_name(proxy.endpoint());
     Ok(X11Resolution {
         proxy: Some(proxy),
@@ -63,10 +83,14 @@ async fn embedded(mode: X11ServerMode) -> Result<X11Resolution, X11ComponentErro
     if let Some(reason) = embedded_disable_reason() {
         return Err(X11ComponentError::EmbeddedDisabled(reason));
     }
-    if !cfg!(target_os = "windows") {
-        return Err(X11ComponentError::UnsupportedPlatform(
-            std::env::consts::OS.into(),
-        ));
+    if !cfg!(any(
+        target_os = "windows",
+        all(target_os = "macos", target_arch = "aarch64")
+    )) {
+        return Err(X11ComponentError::UnsupportedPlatform(format!(
+            "{}；可改用外置 XQuartz",
+            std::env::consts::OS
+        )));
     }
     let spec = match manual_binary() {
         Some(executable) => LaunchSpec::manual(configured_data_dir()?, executable)?,
@@ -99,5 +123,90 @@ fn disabled(error: X11ComponentError) -> X11Resolution {
         status: X11ForwardingStatus::Disabled {
             reason: error.to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use x11_forwarding::MagicCookie;
+
+    use super::*;
+
+    async fn authenticating_server(
+        expected_cookie: MagicCookie,
+    ) -> (ServerEndpoint, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let endpoint = ServerEndpoint::Inet {
+            host: "127.0.0.1".into(),
+            port: listener.local_addr().unwrap().port(),
+        };
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut header = [0; 12];
+            stream.read_exact(&mut header).await.unwrap();
+            let little_endian = header[0] == b'l';
+            let read_u16 = |bytes: [u8; 2]| {
+                if little_endian {
+                    u16::from_le_bytes(bytes)
+                } else {
+                    u16::from_be_bytes(bytes)
+                }
+            };
+            let name_len = usize::from(read_u16([header[6], header[7]]));
+            let data_len = usize::from(read_u16([header[8], header[9]]));
+            let padded = |len: usize| (len + 3) & !3;
+            let mut packet = header.to_vec();
+            packet.resize(12 + padded(name_len) + padded(data_len), 0);
+            stream.read_exact(&mut packet[12..]).await.unwrap();
+            let name = &packet[12..12 + name_len];
+            let data = &packet[12 + padded(name_len)..12 + padded(name_len) + data_len];
+            assert_eq!(name, b"MIT-MAGIC-COOKIE-1");
+            assert_eq!(data, expected_cookie.bytes());
+            stream.write_all(&[1, 0, 11, 0, 0, 0, 0, 0]).await.unwrap();
+        });
+        (endpoint, server)
+    }
+
+    #[tokio::test]
+    async fn external_resolution_probes_with_real_cookie() {
+        let cookie = MagicCookie::from_slice(&[0x5c; 16]).unwrap();
+        let (endpoint, server) = authenticating_server(cookie.clone()).await;
+
+        let resolution = external_proxy(X11Proxy::for_endpoint(endpoint, cookie))
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            resolution.status,
+            X11ForwardingStatus::External { .. }
+        ));
+        assert!(resolution.proxy.is_some());
+        server.await.unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn assert_external(resolution: X11Resolution) {
+        assert!(
+            matches!(resolution.status, X11ForwardingStatus::External { .. }),
+            "外置 XQuartz 应直接可用，不得回退内置：{:?}",
+            resolution.status
+        );
+        assert!(resolution.proxy.is_some());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "requires a locally installed and running XQuartz"]
+    async fn resolves_running_xquartz_in_external_mode() {
+        assert_external(resolve_server(X11ServerMode::External).await);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "requires a locally installed and running XQuartz"]
+    async fn resolves_running_xquartz_in_auto_mode_without_starting_embedded() {
+        assert_external(resolve_server(X11ServerMode::Auto).await);
     }
 }

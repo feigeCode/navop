@@ -10,7 +10,7 @@ pub struct EndpointPlan(ServerEndpoint);
 
 impl EndpointPlan {
     pub fn random(manual: bool) -> Result<Self, X11ComponentError> {
-        if manual || cfg!(target_os = "linux") {
+        if manual || cfg!(any(target_os = "linux", target_os = "macos")) {
             #[cfg(unix)]
             return Self::random_unix();
         }
@@ -146,6 +146,8 @@ impl CommandSpec {
             "-auth".into(),
             self.xauth.display().to_string(),
         ];
+        #[cfg(target_os = "macos")]
+        args.push("--rootless".into());
         match self.tcp_listen {
             TcpListen::Loopback => {
                 args.push("--listen".into());
