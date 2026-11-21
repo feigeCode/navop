@@ -1,5 +1,6 @@
 use crate::background_task_panel::BackgroundTaskPanel;
 use crate::layout::TOOLBAR_WIDTH;
+use crate::settings::{AppSettings, TabDoubleClickAction};
 use crate::sidebar_contribution::{
     SidebarContribution, SidebarPanelChrome, SidebarPanelId, SidebarPanelPolicy, SidebarPlacement,
     sidebar_panel_renders_header,
@@ -2710,6 +2711,36 @@ impl TabContainer {
         self.duplicate_tab(self.active_index, window, cx);
     }
 
+    pub fn handle_tab_double_click(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        if self.renaming_tab_id.as_ref() == Some(&tab.id()) {
+            return;
+        }
+        let action = cx
+            .try_global::<AppSettings>()
+            .map(|settings| settings.tab_double_click_action)
+            .unwrap_or_default();
+        match action {
+            TabDoubleClickAction::None => {}
+            TabDoubleClickAction::DuplicateTab => {
+                self.duplicate_tab(index, window, cx);
+            }
+            TabDoubleClickAction::RenameTab => {
+                self.start_rename_tab(index, window, cx);
+            }
+            TabDoubleClickAction::CloseTab => {
+                self.close_tab(index, window, cx).detach();
+            }
+        }
+    }
+
     fn duplicate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index >= self.tabs.len() {
             return;
@@ -4451,9 +4482,12 @@ impl TabContainer {
                                         },
                                     ))
                             })
-                            .on_click(cx.listener(move |this, _event, window, cx| {
+                            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                 window.prevent_default();
                                 this.set_active_index(idx, window, cx);
+                                if event.click_count() == 2 {
+                                    this.handle_tab_double_click(idx, window, cx);
+                                }
                             }))
                             // 中键关闭沿用浏览器惯例：悬停标签任意位置即可关闭，不必对准 ×。
                             // closeable / locked 判断交给 close_tab 自身，避免渲染层重复一套守卫。
@@ -6799,6 +6833,58 @@ mod tests {
                 .active_tab()
                 .map(|tab| tab.id().to_string()))
                 .as_deref()
+        );
+    }
+
+    #[gpui::test]
+    fn double_click_action_setting_controls_tab_double_click_behavior(cx: &mut TestAppContext) {
+        let (window, container) =
+            open_middle_click_window(cx, &["first", "second"], &[], &["home"]);
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| {
+            let mut settings = AppSettings::default();
+            settings.tab_double_click_action = TabDoubleClickAction::None;
+            cx.set_global(settings);
+            window.refresh();
+        });
+        cx.run_until_parked();
+
+        cx.update(|window, cx| {
+            container.update(cx, |tabs, cx| tabs.handle_tab_double_click(0, window, cx));
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            vec!["first".to_string(), "second".to_string()],
+            regular_tab_ids(&container, &mut cx)
+        );
+        assert!(cx.update(|_, cx| container.read(cx).renaming_tab_id.is_none()));
+
+        cx.update(|window, cx| {
+            let mut settings = AppSettings::default();
+            settings.tab_double_click_action = TabDoubleClickAction::RenameTab;
+            cx.set_global(settings);
+            container.update(cx, |tabs, cx| tabs.handle_tab_double_click(0, window, cx));
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            Some("first"),
+            cx.update(|_, cx| container.read(cx).renaming_tab_id.as_deref().map(str::to_string))
+                .as_deref()
+        );
+
+        cx.update(|window, cx| {
+            container.update(cx, |tabs, cx| {
+                tabs.commit_rename_tab_by_id("first", "first".to_string(), window, cx);
+            });
+            let mut settings = AppSettings::default();
+            settings.tab_double_click_action = TabDoubleClickAction::CloseTab;
+            cx.set_global(settings);
+            container.update(cx, |tabs, cx| tabs.handle_tab_double_click(1, window, cx));
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            vec!["first".to_string()],
+            regular_tab_ids(&container, &mut cx)
         );
     }
 }

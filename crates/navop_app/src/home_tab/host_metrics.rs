@@ -180,6 +180,13 @@ impl HomePage {
                 {
                     return None;
                 }
+                if let Ok(params) = connection.to_ssh_params()
+                    && (params.prompts_for_username()
+                        || (params.prompts_for_password()
+                            && params.auth_method.contains_password()))
+                {
+                    return None;
+                }
                 Some((connection_id, connection.clone()))
             })
     }

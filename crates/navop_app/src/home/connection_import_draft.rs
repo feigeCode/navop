@@ -18,6 +18,7 @@ pub(crate) enum ImportDraftKind {
     Telnet,
     QuickCommand,
     Workspace,
+    Keybinding,
     Unsupported,
 }
 
@@ -59,6 +60,9 @@ pub(crate) struct EditableImportDraft {
     pub(crate) quick_command_command: String,
     pub(crate) quick_command_shortcut: String,
     pub(crate) quick_command_description: String,
+    pub(crate) keybinding_action_id: String,
+    pub(crate) keybinding_shortcuts: Vec<String>,
+    pub(crate) keybinding_description: String,
     /// 导入窗口里统一指定的高级设置默认项，转换时套用到连接参数上。
     pub(crate) defaults: ImportConnectionDefaults,
     payload: ImportDraftPayload,
@@ -94,6 +98,7 @@ impl EditableImportDraft {
             ImportRecordKind::Telnet => Self::telnet(record),
             ImportRecordKind::QuickCommand => Self::quick_command(record),
             ImportRecordKind::Workspace => Self::workspace(record),
+            ImportRecordKind::Keybinding => Self::keybinding(record),
             ImportRecordKind::PortForwarding => Self::unsupported(record),
         }
     }
@@ -138,6 +143,9 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            keybinding_action_id: String::new(),
+            keybinding_shortcuts: Vec::new(),
+            keybinding_description: String::new(),
             defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
@@ -174,6 +182,9 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            keybinding_action_id: String::new(),
+            keybinding_shortcuts: Vec::new(),
+            keybinding_description: String::new(),
             defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
@@ -210,6 +221,9 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            keybinding_action_id: String::new(),
+            keybinding_shortcuts: Vec::new(),
+            keybinding_description: String::new(),
             defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
@@ -242,6 +256,9 @@ impl EditableImportDraft {
             quick_command_description: imported
                 .and_then(|record| record.description.clone())
                 .unwrap_or_default(),
+            keybinding_action_id: String::new(),
+            keybinding_shortcuts: Vec::new(),
+            keybinding_description: String::new(),
             defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
@@ -274,6 +291,40 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            keybinding_action_id: String::new(),
+            keybinding_shortcuts: Vec::new(),
+            keybinding_description: String::new(),
+            defaults: ImportConnectionDefaults::default(),
+            payload: ImportDraftPayload::Record(record),
+        }
+    }
+
+    fn keybinding(record: ImportRecord) -> Self {
+        let imported = record.keybinding.as_ref();
+        Self {
+            selected: true,
+            name: record.display_name.clone(),
+            host: String::new(),
+            port: String::new(),
+            username: String::new(),
+            ssh_group_path: String::new(),
+            workspace_path: String::new(),
+            password: String::new(),
+            database: String::new(),
+            private_key_path: String::new(),
+            quick_command_group_name: String::new(),
+            quick_command_command: String::new(),
+            quick_command_shortcut: String::new(),
+            quick_command_description: String::new(),
+            keybinding_action_id: imported
+                .map(|record| record.action_id.clone())
+                .unwrap_or_default(),
+            keybinding_shortcuts: imported
+                .map(|record| record.shortcuts.clone())
+                .unwrap_or_default(),
+            keybinding_description: imported
+                .and_then(|record| record.description.clone())
+                .unwrap_or_default(),
             defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
@@ -295,6 +346,9 @@ impl EditableImportDraft {
             quick_command_command: String::new(),
             quick_command_shortcut: String::new(),
             quick_command_description: String::new(),
+            keybinding_action_id: String::new(),
+            keybinding_shortcuts: Vec::new(),
+            keybinding_description: String::new(),
             defaults: ImportConnectionDefaults::default(),
             payload: ImportDraftPayload::Record(record),
         }
@@ -308,6 +362,7 @@ impl EditableImportDraft {
                 ImportRecordKind::Telnet => ImportDraftKind::Telnet,
                 ImportRecordKind::QuickCommand => ImportDraftKind::QuickCommand,
                 ImportRecordKind::Workspace => ImportDraftKind::Workspace,
+                ImportRecordKind::Keybinding => ImportDraftKind::Keybinding,
                 ImportRecordKind::PortForwarding => ImportDraftKind::Unsupported,
             },
         }
@@ -321,6 +376,7 @@ impl EditableImportDraft {
                 ImportRecordKind::Telnet => ConnectionType::Telnet,
                 ImportRecordKind::QuickCommand => ConnectionType::SshSftp,
                 ImportRecordKind::Workspace => ConnectionType::SshSftp,
+                ImportRecordKind::Keybinding => ConnectionType::SshSftp,
                 ImportRecordKind::PortForwarding => ConnectionType::PortForwarding,
             },
         }
@@ -332,6 +388,9 @@ impl EditableImportDraft {
                 ImportRecordKind::QuickCommand => IconName::TerminalQuickCommandColor,
                 ImportRecordKind::Workspace => {
                     return Icon::new(IconName::FolderOpen).with_size(IconSize::Default);
+                }
+                ImportRecordKind::Keybinding => {
+                    return Icon::new(IconName::SettingColor).with_size(IconSize::Default);
                 }
                 _ => {
                     return crate::connection_visuals::connection_type_icon(
@@ -386,6 +445,20 @@ impl EditableImportDraft {
 
     pub(crate) fn workspace_path(&self) -> Option<String> {
         normalized_workspace_path(&self.workspace_path)
+    }
+
+    pub(crate) fn keybinding_detail_text(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.keybinding_action_id.trim().is_empty() {
+            parts.push(self.keybinding_action_id.clone());
+        }
+        if !self.keybinding_shortcuts.is_empty() {
+            parts.push(self.keybinding_shortcuts.join(", "));
+        }
+        if let Some(desc) = optional_text(&self.keybinding_description) {
+            parts.push(desc);
+        }
+        parts.join(" · ")
     }
 
     pub(crate) fn warning_text(&self) -> Option<String> {

@@ -186,7 +186,9 @@ where
             importer_id: importer_id.into(),
             host,
             permissions,
-            wasi_ctx: WasiCtxBuilder::new().build(),
+            wasi_ctx: WasiCtxBuilder::new()
+                .env("NAVOP_IMPORT_CAPABILITIES", "keybinding")
+                .build(),
             table: ResourceTable::new(),
         }
     }

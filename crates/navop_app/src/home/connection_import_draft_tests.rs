@@ -785,6 +785,7 @@ fn database_import(name: &str) -> ImportRecord {
         port_forwarding: None,
         quick_command: None,
         workspace: None,
+        keybinding: None,
         password_status: PasswordImportStatus::Included,
         warnings: Vec::new(),
     }
@@ -813,6 +814,7 @@ fn sqlite_import(name: &str, path: Option<&str>) -> ImportRecord {
         port_forwarding: None,
         quick_command: None,
         workspace: None,
+        keybinding: None,
         password_status: PasswordImportStatus::Missing,
         warnings: Vec::new(),
     }
@@ -843,6 +845,7 @@ fn external_database_import(name: &str, driver_id: &str, port: u16) -> ImportRec
         port_forwarding: None,
         quick_command: None,
         workspace: None,
+        keybinding: None,
         password_status: PasswordImportStatus::Included,
         warnings: Vec::new(),
     }
@@ -875,6 +878,7 @@ fn ssh_import(name: &str) -> ImportRecord {
         port_forwarding: None,
         quick_command: None,
         workspace: None,
+        keybinding: None,
         password_status: PasswordImportStatus::Unsupported,
         warnings: Vec::new(),
     }
@@ -896,6 +900,7 @@ fn workspace_import(path: &str) -> ImportRecord {
         workspace: Some(WorkspaceImportRecord {
             path: path.to_string(),
         }),
+        keybinding: None,
         password_status: PasswordImportStatus::Missing,
         warnings: Vec::new(),
     }
@@ -922,6 +927,7 @@ fn telnet_import(name: &str, username: Option<&str>, password: Option<&str>) -> 
         port_forwarding: None,
         quick_command: None,
         workspace: None,
+        keybinding: None,
         password_status: if password.is_some() {
             PasswordImportStatus::Included
         } else {
@@ -997,8 +1003,27 @@ fn imported_ssh_password_survives_the_whole_conversion() {
 
     let stored = draft.to_stored_connection().expect("转换应成功");
     let params = stored.to_ssh_params().expect("应为 SSH 连接");
+    assert_eq!(None, params.prompt_password);
     match params.auth_method {
         SshAuthMethod::Password { password } => assert_eq!("s3cret-from-securecrt", password),
         other => panic!("导入的密码应保留为密码认证，实际为 {other:?}"),
     }
+}
+
+#[test]
+fn ssh_import_without_password_prompts_for_password_on_connect() {
+    let mut record = ssh_import("windterm-no-pass");
+    record.ssh.as_mut().unwrap().auth_method = SshImportAuthMethod::Password { password: None };
+    record.password_status = PasswordImportStatus::Missing;
+
+    let draft = EditableImportDraft::new(record);
+    assert!(draft.password.is_empty());
+
+    let params = draft
+        .to_stored_connection()
+        .expect("转换应成功")
+        .to_ssh_params()
+        .expect("应为 SSH 连接");
+    assert_eq!(Some(true), params.prompt_password);
+    assert_eq!(None, params.prompt_username);
 }

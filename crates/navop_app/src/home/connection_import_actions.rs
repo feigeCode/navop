@@ -135,6 +135,33 @@ pub(crate) fn save_import_draft(
     draft: &EditableImportDraft,
     cx: &mut App,
 ) -> Result<ImportSaveResult, String> {
+    if draft.kind() == ImportDraftKind::Keybinding {
+        let action_id = draft.keybinding_action_id.trim();
+        if action_id.is_empty() || draft.keybinding_shortcuts.is_empty() {
+            return Err(t!("Home.ConnectionImport.keybinding_invalid").to_string());
+        }
+        let shortcuts = draft.keybinding_shortcuts.clone();
+        if one_core::settings::AppSettings::global(cx)
+            .custom_keybindings
+            .get(action_id)
+            .is_some_and(|existing| existing == &shortcuts)
+        {
+            return Ok(ImportSaveResult::SkippedDuplicate {
+                existing_name: draft.name.clone(),
+            });
+        }
+        let action_id_owned = action_id.to_string();
+        one_core::settings::AppSettings::update_and_save(cx, |settings| {
+            settings
+                .custom_keybindings
+                .insert(action_id_owned, shortcuts);
+        });
+        crate::navop_app::refresh_keybindings(cx);
+        cx.refresh_windows();
+        return Ok(ImportSaveResult::Saved {
+            connection_id: None,
+        });
+    }
     let storage = cx.global::<GlobalStorageState>().storage.clone();
     if draft.kind() == ImportDraftKind::Workspace {
         let path = draft
