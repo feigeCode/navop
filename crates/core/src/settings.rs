@@ -1427,6 +1427,9 @@ pub struct AppSettings {
     pub terminal_enable_autocomplete: bool,
     #[serde(default = "default_true")]
     pub terminal_show_suggestion_popup: bool,
+    /// 是否在终端面板右上角显示包含分屏与录制按钮的悬浮工具条。
+    #[serde(default = "default_true")]
+    pub terminal_show_pane_toolbar: bool,
     /// 命令提示 / cd 补全 / 历史搜索下拉弹层的背景不透明度。
     ///
     /// 弹层背景画在终端内容之上，下层文字以 (1 - α) 的权重透进弹层：0.72
@@ -1905,6 +1908,7 @@ impl Default for AppSettings {
             terminal_auto_copy: default_true(),
             terminal_enable_autocomplete: default_true(),
             terminal_show_suggestion_popup: default_true(),
+            terminal_show_pane_toolbar: default_true(),
             terminal_suggestion_popup_opacity: default_terminal_suggestion_popup_opacity(),
             terminal_middle_click_paste: default_true(),
             terminal_right_click_paste: false,

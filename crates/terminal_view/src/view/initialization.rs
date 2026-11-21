@@ -340,6 +340,7 @@ impl TerminalView {
             recording_path_prompt_pending: false,
             recording_control_error: None,
             recording_ticker: None,
+            recording_controls_open: false,
             recording_playback_slider,
             recording_playback_slider_dragging: false,
             recording_playback_control_error: None,

@@ -318,6 +318,12 @@ impl TerminalView {
                     settings.sync_path_with_terminal = enabled;
                 });
             }
+            TerminalSidebarEvent::PaneToolbarChanged(enabled) => {
+                let enabled = *enabled;
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.terminal_show_pane_toolbar = enabled;
+                });
+            }
             TerminalSidebarEvent::CustomHighlightsChanged(rules) => {
                 let rules = rules.clone();
                 let _ = update_settings(cx, move |settings| {
