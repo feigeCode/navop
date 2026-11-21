@@ -163,6 +163,8 @@ pub enum SettingsPanelEvent {
     ShowLineNumbersChanged(bool),
     /// 路径同步开关变更
     SyncPathChanged(bool),
+    /// 终端面板右上角悬浮工具条（分屏 + 录制）显隐
+    PaneToolbarChanged(bool),
     /// 自定义高亮规则变更
     CustomHighlightsChanged(Vec<TerminalHighlightRule>),
 }
@@ -221,6 +223,8 @@ pub struct SettingsPanel {
     show_line_numbers: bool,
     /// 路径与终端同步开关
     sync_path: bool,
+    /// 终端面板右上角悬浮工具条显隐
+    pane_toolbar_visible: bool,
     /// 全局自定义高亮规则
     custom_highlights: Vec<TerminalHighlightRule>,
     /// 是否有文件管理器面板（仅 SSH 终端有）
@@ -257,6 +261,7 @@ impl SettingsPanel {
 
         let scrollback_lines = AppSettings::global(cx).terminal_scrollback_lines;
         let auto_session_logging = AppSettings::global(cx).terminal_auto_session_logging;
+        let pane_toolbar_visible = AppSettings::global(cx).terminal_show_pane_toolbar;
         let selection_highlight = AppSettings::global(cx).terminal_selection_highlight;
         let show_line_timestamps = AppSettings::global(cx).terminal_show_timestamps;
         let show_line_numbers = AppSettings::global(cx).terminal_show_line_numbers;
@@ -431,6 +436,7 @@ impl SettingsPanel {
             confirm_multiline_paste: true,
             confirm_high_risk_command: true,
             auto_session_logging,
+            pane_toolbar_visible,
             auto_copy,
             autocomplete_enabled,
             suggestion_popup_enabled,
@@ -533,9 +539,10 @@ impl SettingsPanel {
             return;
         }
         self.suggestion_popup_opacity = opacity;
-        self.suggestion_popup_opacity_slider.update(cx, |slider, cx| {
-            slider.set_value(opacity, window, cx);
-        });
+        self.suggestion_popup_opacity_slider
+            .update(cx, |slider, cx| {
+                slider.set_value(opacity, window, cx);
+            });
         cx.notify();
     }
 
@@ -1102,8 +1109,13 @@ impl SettingsPanel {
         let autocomplete_enabled = self.autocomplete_enabled;
         let suggestion_popup_enabled = self.suggestion_popup_enabled;
         // 百分比读数直接取滑块 state：拖动中面板要跟手，写入设置则等松手。
-        let suggestion_popup_opacity_percent =
-            (self.suggestion_popup_opacity_slider.read(cx).value().start() * 100.0).round() as i32;
+        let suggestion_popup_opacity_percent = (self
+            .suggestion_popup_opacity_slider
+            .read(cx)
+            .value()
+            .start()
+            * 100.0)
+            .round() as i32;
         let middle_click_paste = self.middle_click_paste;
         let right_click_paste = self.right_click_paste;
         let paste_image_upload = self.paste_image_upload;
@@ -1262,12 +1274,10 @@ impl SettingsPanel {
                                             .text_sm()
                                             .child(t!("Settings.suggestion_popup_opacity")),
                                     )
-                                    .child(
-                                        div().text_xs().text_color(muted_fg).child(t!(
-                                            "Settings.suggestion_popup_opacity_value",
-                                            percent = suggestion_popup_opacity_percent
-                                        )),
-                                    ),
+                                    .child(div().text_xs().text_color(muted_fg).child(t!(
+                                        "Settings.suggestion_popup_opacity_value",
+                                        percent = suggestion_popup_opacity_percent
+                                    ))),
                             )
                             .child(
                                 Slider::new(&self.suggestion_popup_opacity_slider)
@@ -1420,6 +1430,51 @@ impl SettingsPanel {
                             .text_xs()
                             .text_color(muted_fg)
                             .child(t!("Settings.automatic_session_logging_help")),
+                    ),
+            )
+    }
+
+    /// 终端面板右上角悬浮工具条（分屏 + 录制按钮）显隐。
+    fn render_pane_toolbar_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.colors();
+        let border = colors.border;
+        let muted_fg = colors.muted_foreground;
+
+        v_flex()
+            .gap_3()
+            .p_3()
+            .border_t_1()
+            .border_color(border)
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(muted_fg)
+                            .child(t!("Settings.pane_toolbar_section").to_uppercase()),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(div().text_sm().child(t!("Settings.pane_toolbar")))
+                            .child(
+                                Switch::new("pane-toolbar-switch")
+                                    .checked(self.pane_toolbar_visible)
+                                    .small()
+                                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                                        this.pane_toolbar_visible = *checked;
+                                        cx.emit(SettingsPanelEvent::PaneToolbarChanged(*checked));
+                                    })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted_fg)
+                            .child(t!("Settings.pane_toolbar_help")),
                     ),
             )
     }
@@ -1925,6 +1980,15 @@ mod tests {
     }
 
     #[test]
+    fn pane_toolbar_visibility_is_configured_in_the_terminal_sidebar() {
+        let source = include_str!("settings_panel.rs");
+        assert!(source.contains("Switch::new(\"pane-toolbar-switch\")"));
+        assert!(source.contains("SettingsPanelEvent::PaneToolbarChanged"));
+        let events = include_str!("../view/sidebar_events.rs");
+        assert!(events.contains("settings.terminal_show_pane_toolbar = enabled"));
+    }
+
+    #[test]
     fn terminal_theme_list_uses_single_panel_scroll_container() {
         let source = include_str!("settings_panel.rs");
         let section_start = source
@@ -2005,6 +2069,7 @@ impl Render for SettingsPanel {
                                 .child(self.render_cursor_section(cx))
                                 .child(self.render_safety_section(cx))
                                 .child(self.render_session_logging_section(cx))
+                                .child(self.render_pane_toolbar_section(cx))
                                 .when(has_file_manager, |el| {
                                     el.child(self.render_file_manager_section(cx))
                                 })

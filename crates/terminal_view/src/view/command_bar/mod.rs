@@ -12,11 +12,11 @@ use terminal::terminal::Terminal;
 pub(super) const COMMAND_BAR_INPUT_DEFAULT_HEIGHT: f32 = 80.0;
 
 mod interaction;
+mod quick_bar;
 mod quick_interaction;
 mod quick_render;
 mod quick_render_list;
 mod quick_render_sidebar;
-mod recording_render;
 mod render;
 mod suggestion_render;
 
@@ -25,10 +25,6 @@ pub(super) enum TerminalCommandBarEvent {
     Submit(String),
     InputToPty(String),
     FocusTerminal,
-    StartRecording,
-    PauseRecording,
-    ResumeRecording,
-    StopRecording,
 }
 
 pub(super) struct TerminalCommandBarConfig {
@@ -52,6 +48,7 @@ pub(super) struct TerminalCommandBar {
     quick_command_panel: Entity<QuickCommandPanel>,
     quick_search_state: Entity<InputState>,
     quick_group_scroll_handle: ScrollHandle,
+    quick_bar_scroll: ScrollHandle,
     quick_scroll_handle: VirtualListScrollHandle,
     quick_commands: Vec<QuickCommand>,
     suggestions: Vec<CommandSuggestion>,
@@ -62,14 +59,11 @@ pub(super) struct TerminalCommandBar {
     quick_group_filter: QuickGroupFilter,
     selected_quick_command: Option<usize>,
     quick_commands_open: bool,
-    recording_controls_open: bool,
     collapsed: bool,
     input_height: f32,
     autocomplete_enabled: bool,
     suggestion_popup_enabled: bool,
     colors: TerminalColors,
-    recording_path_prompt_pending: bool,
-    recording_control_error: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 

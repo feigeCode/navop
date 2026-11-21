@@ -39,12 +39,21 @@ rand.workspace = true
 base64.workspace = true
 sha2.workspace = true
 ed25519-dalek = "2.2.0"
+# 「生成密钥」里 ECDSA / RSA 的 OpenSSH 编码复用 ssh-key；版本与 russh 的传递依赖保持一致。
+ssh-key = { version = "0.7.0-rc.11", features = [
+  "ed25519",
+  "p256",
+  "p384",
+  "rsa",
+  "getrandom",
+] }
 parking_lot.workspace = true
 tool_runtime.workspace = true
 util.workspace = true
 process-util.workspace = true
 rust-i18n.workspace = true
 sys-locale.workspace = true
+x11_component.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

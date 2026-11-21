@@ -50,6 +50,7 @@ impl TerminalCommandBar {
             quick_command_panel,
             quick_search_state,
             quick_group_scroll_handle: ScrollHandle::new(),
+            quick_bar_scroll: ScrollHandle::new(),
             quick_scroll_handle: VirtualListScrollHandle::new(),
             quick_commands: Vec::new(),
             suggestions: Vec::new(),
@@ -60,14 +61,11 @@ impl TerminalCommandBar {
             quick_group_filter: QuickGroupFilter::default(),
             selected_quick_command: None,
             quick_commands_open: false,
-            recording_controls_open: false,
             collapsed: true,
             input_height: COMMAND_BAR_INPUT_DEFAULT_HEIGHT,
             autocomplete_enabled: true,
             suggestion_popup_enabled: true,
             colors: config.colors,
-            recording_path_prompt_pending: false,
-            recording_control_error: None,
             _subscriptions: subscriptions,
         };
         this.load_quick_commands(cx);
@@ -135,21 +133,6 @@ impl TerminalCommandBar {
             self.suggestions.clear();
             self.selected_suggestion = None;
         }
-        cx.notify();
-    }
-
-    pub(in crate::view) fn set_session_controls_state(
-        &mut self,
-        recording_path_prompt_pending: bool,
-        recording_control_error: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        self.recording_path_prompt_pending = recording_path_prompt_pending;
-        self.recording_control_error = recording_control_error;
-        cx.notify();
-    }
-
-    pub(in crate::view) fn refresh_session_controls(&mut self, cx: &mut Context<Self>) {
         cx.notify();
     }
 
@@ -364,21 +347,12 @@ impl TerminalCommandBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.keystroke.key == "escape" && self.recording_controls_open {
-            self.close_recording_controls(window, cx);
-            cx.stop_propagation();
-            return;
-        }
         if !self.input_has_focus(window, cx) {
             return;
         }
         let handled = match event.keystroke.key.as_str() {
             "tab" if !self.suggestions.is_empty() => self.accept_selection(window, cx),
-            "escape"
-                if !self.suggestions.is_empty()
-                    || self.quick_commands_open
-                    || self.recording_controls_open =>
-            {
+            "escape" if !self.suggestions.is_empty() || self.quick_commands_open => {
                 self.reset_overlays(cx);
                 cx.notify();
                 true
@@ -397,43 +371,13 @@ impl TerminalCommandBar {
             .is_focused(window)
     }
 
-    pub(super) fn reset_overlays(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::view) fn reset_overlays(&mut self, cx: &mut Context<Self>) {
         self.quick_commands_open = false;
-        self.recording_controls_open = false;
         self.selected_quick_command = None;
         self.suggestions.clear();
         self.selected_suggestion = None;
         self.reset_history_navigation();
         self.clear_inline_completion(cx);
-    }
-
-    pub(super) fn toggle_recording_controls(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.recording_controls_open {
-            self.close_recording_controls(window, cx);
-            return;
-        }
-        self.recording_controls_open = true;
-        self.quick_commands_open = false;
-        self.selected_quick_command = None;
-        self.suggestions.clear();
-        self.selected_suggestion = None;
-        self.clear_inline_completion(cx);
-        cx.notify();
-    }
-
-    pub(super) fn close_recording_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.recording_controls_open = false;
-        if self.collapsed {
-            cx.emit(TerminalCommandBarEvent::FocusTerminal);
-            cx.notify();
-        } else {
-            self.focus_input(window, cx);
-            self.refresh_suggestions(cx);
-        }
     }
 
     pub(super) fn clear_inline_completion(&self, cx: &mut Context<Self>) {

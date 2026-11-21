@@ -61,6 +61,16 @@ pub struct ClientHello {
 }
 
 impl ClientHello {
+    pub(crate) fn for_probe(auth_data: &[u8]) -> Self {
+        Self {
+            order: ByteOrder::Lsb,
+            major: 11,
+            minor: 0,
+            auth_name: ForwardRequest::AUTH_NAME.to_string(),
+            auth_data: auth_data.to_vec(),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn forge(order: ByteOrder, auth_name: &str, auth_data: &[u8]) -> Self {
         Self {

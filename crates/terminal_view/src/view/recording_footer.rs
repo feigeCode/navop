@@ -7,7 +7,7 @@ use terminal::recording::{
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RecordingFooterStatus {
+pub(crate) enum RecordingFooterStatus {
     Ready,
     Recording,
     Paused,
@@ -17,7 +17,7 @@ pub(super) enum RecordingFooterStatus {
 }
 
 impl RecordingFooterStatus {
-    pub(super) fn from_recording_state(state: &RecordingState) -> Self {
+    pub(crate) fn from_recording_state(state: &RecordingState) -> Self {
         match state {
             RecordingState::Idle => Self::Ready,
             RecordingState::Recording => Self::Recording,
@@ -28,7 +28,7 @@ impl RecordingFooterStatus {
         }
     }
 
-    pub(super) fn label(self) -> SharedString {
+    pub(crate) fn label(self) -> SharedString {
         match self {
             Self::Ready => t!("TerminalRecording.ready").to_string().into(),
             Self::Recording => t!("TerminalRecording.recording").to_string().into(),
@@ -39,7 +39,7 @@ impl RecordingFooterStatus {
         }
     }
 
-    pub(super) fn color(self, cx: &App) -> Hsla {
+    pub(crate) fn color(self, cx: &App) -> Hsla {
         match self {
             Self::Ready => cx.theme().muted_foreground,
             Self::Recording => cx.theme().danger,
@@ -49,7 +49,7 @@ impl RecordingFooterStatus {
         }
     }
 
-    pub(super) fn can_start(self) -> bool {
+    pub(crate) fn can_start(self) -> bool {
         matches!(self, Self::Ready | Self::Stopped | Self::Failed)
     }
 }
@@ -98,8 +98,7 @@ impl TerminalView {
 
         self.recording_path_prompt_pending = true;
         self.recording_control_error = None;
-        self.sync_command_bar_session_controls(cx);
-        cx.notify();
+        self.emit_recording_changed(cx);
 
         let future = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -137,8 +136,7 @@ impl TerminalView {
                 }
 
                 this.sync_recording_ticker(cx);
-                this.sync_command_bar_session_controls(cx);
-                cx.notify();
+                this.emit_recording_changed(cx);
             });
         })
         .detach();
@@ -169,7 +167,11 @@ impl TerminalView {
             Err(error) => self.recording_control_error = Some(error.to_string()),
         }
         self.sync_recording_ticker(cx);
-        self.sync_command_bar_session_controls(cx);
+        self.emit_recording_changed(cx);
+    }
+
+    fn emit_recording_changed(&self, cx: &mut Context<Self>) {
+        cx.emit(TerminalPaneEvent::RecordingChanged);
         cx.notify();
     }
 
@@ -217,9 +219,7 @@ impl TerminalView {
                     .update(cx, |this, cx| {
                         let should_continue = this.recording_elapsed_is_advancing(cx);
                         if should_continue {
-                            this.command_bar.update(cx, |bar, cx| {
-                                bar.refresh_session_controls(cx);
-                            });
+                            cx.emit(TerminalPaneEvent::RecordingChanged);
                             cx.notify();
                         } else {
                             this.recording_ticker = None;
@@ -232,18 +232,6 @@ impl TerminalView {
                 }
             }
         }));
-    }
-
-    pub(super) fn sync_command_bar_session_controls(&self, cx: &mut Context<Self>) {
-        let recording_path_prompt_pending = self.recording_path_prompt_pending;
-        let recording_control_error = self.recording_control_error.clone();
-        self.command_bar.update(cx, |bar, cx| {
-            bar.set_session_controls_state(
-                recording_path_prompt_pending,
-                recording_control_error,
-                cx,
-            );
-        });
     }
 }
 

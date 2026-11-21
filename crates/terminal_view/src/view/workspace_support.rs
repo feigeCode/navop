@@ -8,6 +8,9 @@ pub(crate) enum TerminalPaneEvent {
     SaveAsConnection(StoredConnection),
     /// 请求关闭当前 pane：单 pane 标签由标签容器关闭整个标签页，多 pane 时只关这个 pane。
     ClosePaneRequested,
+    /// 录制状态或录制弹层开关变化：pane 悬浮工具条与弹层由 workspace 渲染，
+    /// 需要跟着 pane 的状态重绘。
+    RecordingChanged,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

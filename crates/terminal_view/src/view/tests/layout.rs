@@ -262,7 +262,10 @@ fn terminal_render_owns_internal_tool_dock_regions() {
     assert!(render_source.contains("terminal-tool-dock-toolbar"));
     assert!(render_source.contains(".child(self.sidebar_toolbar.clone())"));
     // 右栏宽度必须按“合并后的边”算：只被扩展面板占用时也要留出面板宽度。
-    assert!(render_source.contains("let has_right = layout.has_right() || extension_layout.has_right();"));
+    assert!(
+        render_source
+            .contains("let has_right = layout.has_right() || extension_layout.has_right();")
+    );
     assert!(render_source.contains("sidebar_size + TOOLBAR_WIDTH"));
 }
 
@@ -349,18 +352,31 @@ fn terminal_command_bar_is_only_rendered_for_live_terminal_input() {
 }
 
 #[test]
-fn terminal_recording_controls_live_in_the_command_bar() {
-    let command_bar_source = include_str!("../command_bar/recording_render.rs");
+fn terminal_recording_controls_live_in_the_pane_tool() {
+    let recording_source = include_str!("../recording_controls.rs");
+    let pane_tool_source = include_str!("../../workspace/pane_tool.rs");
     let command_bar_layout_source = include_str!("../command_bar/render.rs");
     let footer_source = include_str!("../recording_playback_render.rs");
 
-    assert!(command_bar_layout_source.contains("render_recording_button"));
-    assert!(command_bar_layout_source.contains("render_recording_controls"));
-    assert!(command_bar_source.contains("terminal-command-recording\""));
-    assert!(command_bar_source.contains("terminal-command-recording-start"));
-    assert!(command_bar_source.contains("terminal-command-recording-pause"));
-    assert!(command_bar_source.contains("terminal-command-recording-resume"));
-    assert!(command_bar_source.contains("terminal-command-recording-stop"));
+    assert!(pane_tool_source.contains("render_recording_button"));
+    assert!(pane_tool_source.contains("recording_tool_visible"));
+    assert!(
+        pane_tool_source.contains("terminal_show_pane_toolbar"),
+        "pane floating toolbar must honor the settings switch"
+    );
+    assert!(!command_bar_layout_source.contains("render_recording_button"));
+    assert!(!command_bar_layout_source.contains("render_recording_controls"));
+    for button_id in [
+        "terminal-pane-recording-start",
+        "terminal-pane-recording-pause",
+        "terminal-pane-recording-resume",
+        "terminal-pane-recording-stop",
+    ] {
+        assert!(
+            recording_source.contains(button_id),
+            "录制弹层按钮应挂在 pane 悬浮工具条下：`{button_id}`"
+        );
+    }
     assert!(!footer_source.contains("self.render_recording_footer(cx)"));
 }
 
@@ -506,7 +522,7 @@ fn terminal_viewport_bounds_preserves_the_grid_origin_when_clipped() {
 fn command_bar_recording_controls_are_pane_private_and_use_safe_terminal_apis() {
     let view_source = include_str!("../../view.rs");
     let recording_source = include_str!("../recording_footer.rs");
-    let command_bar_source = include_str!("../command_bar/recording_render.rs");
+    let recording_controls_source = include_str!("../recording_controls.rs");
     let event_source = include_str!("../command_bar_events.rs");
     let render_source = include_str!("../render_layout.rs");
 
@@ -525,14 +541,21 @@ fn command_bar_recording_controls_are_pane_private_and_use_safe_terminal_apis() 
     assert!(recording_source.contains(".pause_recording()"));
     assert!(recording_source.contains(".resume_recording()"));
     assert!(recording_source.contains(".stop_recording()"));
-    assert!(command_bar_source.contains("TerminalCommandBarEvent::StartRecording"));
-    assert!(command_bar_source.contains("TerminalCommandBarEvent::PauseRecording"));
-    assert!(command_bar_source.contains("TerminalCommandBarEvent::ResumeRecording"));
-    assert!(command_bar_source.contains("TerminalCommandBarEvent::StopRecording"));
-    assert!(event_source.contains("self.request_recording_start(cx)"));
-    assert!(event_source.contains("self.request_recording_pause(cx)"));
-    assert!(event_source.contains("self.request_recording_resume(cx)"));
-    assert!(event_source.contains("self.request_recording_stop(cx)"));
+    for direct_call in [
+        "this.request_recording_start(cx)",
+        "this.request_recording_pause(cx)",
+        "this.request_recording_resume(cx)",
+        "this.request_recording_stop(cx)",
+    ] {
+        assert!(
+            recording_controls_source.contains(direct_call),
+            "录制按钮应直接调用终端 API，不再绕命令栏事件：`{direct_call}`"
+        );
+    }
+    assert!(!event_source.contains("TerminalCommandBarEvent::StartRecording"));
+    assert!(!event_source.contains("TerminalCommandBarEvent::PauseRecording"));
+    assert!(!event_source.contains("TerminalCommandBarEvent::ResumeRecording"));
+    assert!(!event_source.contains("TerminalCommandBarEvent::StopRecording"));
 
     for action_handler in [
         ".on_action(cx.listener(Self::start_recording_action))",
@@ -545,14 +568,14 @@ fn command_bar_recording_controls_are_pane_private_and_use_safe_terminal_apis() 
 }
 
 #[test]
-fn command_bar_discloses_output_only_capture_and_visible_failures() {
-    let command_bar_source = include_str!("../command_bar/recording_render.rs");
+fn recording_popover_discloses_output_only_capture_and_visible_failures() {
+    let recording_source = include_str!("../recording_controls.rs");
 
-    assert!(command_bar_source.contains("TerminalRecording.output_only"));
-    assert!(command_bar_source.contains("TerminalRecording.input_included"));
-    assert!(command_bar_source.contains("recording_snapshot_failure(&snapshot)"));
-    assert!(command_bar_source.contains("recording_control_error"));
-    assert!(command_bar_source.contains("cx.theme().danger"));
+    assert!(recording_source.contains("TerminalRecording.output_only"));
+    assert!(recording_source.contains("TerminalRecording.input_included"));
+    assert!(recording_source.contains("recording_snapshot_failure(&snapshot)"));
+    assert!(recording_source.contains("recording_control_error"));
+    assert!(recording_source.contains("cx.theme().danger"));
 }
 
 #[test]
@@ -753,20 +776,31 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(interaction_source.contains("collapsed: true"));
     assert!(render_source.contains("COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 80.0"));
     assert!(render_source.contains("fn popover_bottom_offset(&self) -> f32"));
-    assert!(render_source.contains("self.input_height + COMMAND_BAR_POPOVER_GAP"));
+    assert!(
+        render_source.contains("popover_offset_for(self.collapsed, self.input_height)"),
+        "弹层偏移必须按命令栏主体高度计算（折叠行即快捷指令栏，不再额外占高）"
+    );
+    assert!(render_source.contains("body_height + COMMAND_BAR_POPOVER_GAP"));
     // 折叠态不能展示输入框按键提示（输入框此时不可见，用户会误以为是终端自身的提示）；
     // 展开态的按键说明由输入框 placeholder 承担，不另起一行，避免与 placeholder 重复。
-    let collapsed_hint = render_source
-        .split("fn render_collapsed_hint")
+    let toolbar = render_source
+        .split("fn render_toolbar")
         .nth(1)
-        .and_then(|source| source.split("fn render_toolbar_context").next())
-        .expect("collapsed hint control should exist");
-    assert!(collapsed_hint.contains("TerminalCommandBar.collapsed_hint"));
-    assert!(
-        collapsed_hint.contains("this.toggle_collapsed(window, cx)"),
-        "collapsed hint text must expand the command bar when clicked"
-    );
-    assert!(render_source.contains(".child(self.render_collapsed_hint(cx))"));
+        .and_then(|source| source.split("fn render_quick_command_icon_button").next())
+        .expect("collapsed toolbar should exist");
+    assert!(toolbar.contains("self.render_pinned_quick_chips(cx)"));
+    let chips_position = toolbar
+        .find("self.render_pinned_quick_chips(cx)")
+        .expect("pinned chips should render in the collapsed row");
+    let quick_position = toolbar
+        .find("self.render_quick_command_icon_button(cx)")
+        .expect("quick-command entry should sit on the right side");
+    let toggle_position = toolbar
+        .find("self.render_command_input_toggle_button(cx)")
+        .expect("command-input toggle should sit on the right side");
+    assert!(chips_position < quick_position);
+    assert!(quick_position < toggle_position);
+    assert!(!render_source.contains("TerminalCommandBar.collapsed_hint"));
     assert!(!render_source.contains("TerminalCommandBar.keyboard_hint"));
     assert!(!render_source.contains("render_expanded_hint"));
     let command_bar_locale = include_str!("../../../locales/terminal_view.yml")
@@ -819,20 +853,20 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
         .nth(1)
         .and_then(|source| source.split("impl Render for TerminalCommandBar").next())
         .expect("expanded command input row should exist");
-    let terminal_toggle = render_source
-        .split("fn render_terminal_toggle_button")
+    let input_toggle = render_source
+        .split("fn render_command_input_toggle_button")
         .nth(1)
         .and_then(|source| source.split("fn render_quick_command_button").next())
-        .expect("terminal toggle button should exist");
-    assert!(terminal_toggle.contains("terminal-command-terminal-toggle"));
-    assert!(terminal_toggle.contains("IconName::SquareTerminal"));
-    assert!(terminal_toggle.contains("IconName::ChevronUp"));
-    assert!(terminal_toggle.contains("IconName::ChevronDown"));
-    assert!(!terminal_toggle.contains("self.target_label(cx)"));
-    assert!(terminal_toggle.contains(".selected(!self.collapsed)"));
+        .expect("command input toggle button should exist");
+    assert!(input_toggle.contains("terminal-command-input-toggle"));
+    assert!(input_toggle.contains("IconName::SquareTerminal"));
+    assert!(input_toggle.contains("IconName::ChevronUp"));
+    assert!(input_toggle.contains("IconName::ChevronDown"));
+    assert!(!input_toggle.contains("self.target_label(cx)"));
+    assert!(input_toggle.contains(".selected(!self.collapsed)"));
     assert!(render_source.contains("this.toggle_collapsed(window, cx)"));
     assert!(expanded_row.contains("self.render_expanded_actions(cx)"));
-    assert!(expanded_row.contains("self.render_terminal_toggle_button(cx)"));
+    assert!(!expanded_row.contains("self.render_command_input_toggle_button(cx)"));
     assert!(!expanded_row.contains("IconName::ChevronRight"));
     assert!(!render_source.contains("terminal-command-collapse-toggle-expanded"));
     assert!(!render_source.contains("terminal-command-collapse-toggle\""));
@@ -842,18 +876,14 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(expanded_row.contains(".flex_shrink_0()"));
     assert!(!expanded_row.contains(".absolute()"));
     assert!(!render_source.contains("COMMAND_BAR_ACTIONS_WIDTH"));
-    let terminal_toggle_position = expanded_row
-        .find("self.render_terminal_toggle_button(cx)")
-        .expect("terminal toggle should render in the expanded row");
     let input_position = expanded_row
         .find("Textarea::new(&self.input_state)")
         .expect("command input should render in the expanded row");
     let actions_position = expanded_row
         .find("self.render_expanded_actions(cx)")
         .expect("expanded actions should render in the expanded row");
-    assert!(terminal_toggle_position < input_position);
     assert!(input_position < actions_position);
-    assert!(render_source.contains("child(self.render_quick_command_button(cx))"));
+    assert!(render_source.contains("child(self.render_quick_command_icon_button(cx))"));
     assert!(render_source.contains("when(self.quick_commands_open"));
     let choose_quick_command = quick_interaction_source
         .split("pub(super) fn choose_command")
@@ -901,19 +931,19 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
             .contains("vertical_scrollbar(&self.quick_group_scroll_handle)")
     );
 
-    let recording_source = include_str!("../command_bar/recording_render.rs");
-    let command_bar_state_source = include_str!("../command_bar/mod.rs");
-    assert!(command_bar_state_source.contains("recording_controls_open: bool"));
-    assert!(render_source.contains("self.render_recording_button(cx)"));
-    assert!(render_source.contains("when(self.recording_controls_open"));
-    assert!(recording_source.contains("terminal-command-recording\""));
-    assert!(recording_source.contains("TerminalRecording.control"));
+    let recording_source = include_str!("../recording_controls.rs");
+    let view_source = include_str!("../../view.rs");
+    let pane_tool_source = include_str!("../../workspace/pane_tool.rs");
+    let pane_render_source = include_str!("../../workspace/render.rs");
+    assert!(view_source.contains("recording_controls_open: bool"));
+    assert!(pane_tool_source.contains("self.render_recording_button(pane_id, pane, cx)"));
+    assert!(pane_render_source.contains("recording_controls_open()"));
+    assert!(pane_render_source.contains("render_recording_popover(cx)"));
+    assert!(recording_source.contains("RECORDING_POPOVER_WIDTH"));
+    assert!(recording_source.contains("state.status.label()"));
     assert!(recording_source.contains("toggle_recording_controls"));
-    assert!(recording_source.contains("render_recording_controls"));
-    assert!(recording_source.contains("bottom(px(self.popover_bottom_offset()))"));
     assert!(recording_source.contains("relative(0.96)"));
     assert!(recording_source.contains("on_mouse_down_out"));
-    assert!(recording_source.contains("window.defer(cx"));
 }
 
 #[test]
@@ -994,5 +1024,7 @@ fn extension_panel_frame_is_shared_by_both_render_modes() {
     assert!(frame.contains("sidebar.close_extension_panel(&remove_id, cx)"));
 
     assert!(include_str!("../tool_dock.rs").contains("render_extension_tool_panel_frame"));
-    assert!(include_str!("../../workspace/render.rs").contains("render_extension_tool_panel_frame"));
+    assert!(
+        include_str!("../../workspace/render.rs").contains("render_extension_tool_panel_frame")
+    );
 }

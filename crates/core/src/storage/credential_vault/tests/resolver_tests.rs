@@ -7,8 +7,7 @@ use crate::storage::{
     ProxyConfig, ProxyType, RedisMode, RedisParams, RedisSentinelConfig,
     RemoteDesktopBackendPreference, RemoteDesktopParams, RemoteDesktopProtocol, RemoteFileParams,
     RemoteFileProtocol, SshAccountExpect, SshAuthMethod, SshElevationExpect, SshParams,
-    StoredConnection,
-    TelnetLoginStep, TelnetParams, TerminalExpectSend,
+    StoredConnection, TelnetLoginStep, TelnetParams, TerminalExpectSend,
 };
 
 use super::with_master_key;
@@ -578,8 +577,10 @@ fn resolver_prefers_the_credential_for_ssh_username_and_secret_kinds() {
     });
 }
 
+/// 钥匙串记录里没有用户名时（表单在这种情况下会把用户名一栏放出来），用连接
+/// 自己保存的用户名继续，而不是直接拒绝；两边都空才算错。
 #[test]
-fn resolver_rejects_ssh_keychain_without_username_or_secret() {
+fn resolver_falls_back_to_the_saved_username_when_the_keychain_has_none() {
     with_master_key(|| {
         let (_temp, _connection, repository) = super::test_repository();
 
@@ -588,8 +589,21 @@ fn resolver_rejects_ssh_keychain_without_username_or_secret() {
         let id = repository
             .insert(&mut no_username)
             .expect("insert credential");
-        let error = repository
+
+        let resolved = repository
             .resolve_ssh(ssh_params(Some(password_reference(id))))
+            .expect("resolve ssh");
+        assert_eq!("manual-user", resolved.username);
+        assert!(matches!(
+            resolved.auth_method,
+            SshAuthMethod::Password { ref password } if password == "pw"
+        ));
+
+        let mut without_username = ssh_params(Some(password_reference(id)));
+        without_username.username.clear();
+        without_username.username.push_str("   ");
+        let error = repository
+            .resolve_ssh(without_username)
             .expect_err("an empty username must never be sent");
         assert!(matches!(
             error.downcast_ref::<CredentialResolutionError>(),
@@ -599,7 +613,13 @@ fn resolver_rejects_ssh_keychain_without_username_or_secret() {
                 ..
             }) if credential_name == "No username"
         ));
+    });
+}
 
+#[test]
+fn resolver_rejects_ssh_keychain_without_secret() {
+    with_master_key(|| {
+        let (_temp, _connection, repository) = super::test_repository();
         let mut no_secret = CredentialEntry::new("No secret");
         no_secret.username = Some("user".to_string());
         let id = repository

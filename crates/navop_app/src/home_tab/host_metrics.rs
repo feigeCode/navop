@@ -1,6 +1,6 @@
 //! 首页连接卡片的远端资源占用（#279）。
 //!
-//! 用一次性的后台 SSH 会话采集 CPU、内存与磁盘占用，不打开终端页签；
+//! 用一次性的后台 SSH 会话采集 CPU、内存、磁盘与网络占用，不打开终端页签；
 //! 结果按连接缓存，过期后再采集。任何失败都只记 debug 日志，不影响首页交互。
 
 use std::collections::{HashMap, HashSet};
@@ -21,7 +21,7 @@ use one_core::storage::{
 };
 use rust_i18n::t;
 
-use super::HomePage;
+use super::{ConnectionLayout, HomePage};
 
 /// 同一连接资源快照的缓存时间。
 const HOST_METRICS_TTL: Duration = Duration::from_secs(300);
@@ -29,6 +29,8 @@ const HOST_METRICS_TTL: Duration = Duration::from_secs(300);
 const HOST_METRICS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 /// 同时进行的后台采集上限：首页一次可能渲染几十个连接，不能同时拉起几十个 SSH 会话。
 const HOST_METRICS_MAX_IN_FLIGHT: usize = 2;
+/// 资源轨道宽度：容纳英文标签、容量、百分比，并让四项在常见窗口宽度内保持同一行。
+const HOST_METRIC_TRACK_WIDTH_REMS: f32 = 9.0;
 
 pub(crate) struct HostMetricsEntry {
     usage: terminal_view::HostResourceUsage,
@@ -70,7 +72,10 @@ impl HomePage {
 
     /// 为首页的 SSH 连接排队后台采集（设置关闭或主密钥未解锁时直接跳过）。
     pub(super) fn refresh_host_metrics(&mut self, cx: &mut Context<Self>) {
-        if !host_metrics_enabled(cx) || self.saved_connections_locked() {
+        if self.connection_layout != ConnectionLayout::List
+            || !host_metrics_enabled(cx)
+            || self.saved_connections_locked()
+        {
             return;
         }
 
@@ -186,7 +191,7 @@ impl HomePage {
             })
     }
 
-    /// 卡片、列表共用的资源标签（没有缓存快照或设置关闭时返回 None）。
+    /// 列表使用的资源标签（没有缓存快照或设置关闭时返回 None）。
     pub(crate) fn render_host_metrics_detail(
         &self,
         connection: &StoredConnection,
@@ -210,45 +215,10 @@ impl HomePage {
         }
     }
 
-    /// 卡片宽度有限，只显示一行三项占用；系统和容量信息通过 tooltip 展开。
-    pub(crate) fn render_host_metrics_card(
-        &self,
-        connection: &StoredConnection,
-        id_prefix: &str,
-        cx: &App,
-    ) -> Option<AnyElement> {
-        match self.host_metrics_state(connection, cx)? {
-            HostMetricsState::Ready(usage) => Some(render_host_metrics_card(&usage, id_prefix, cx)),
-            HostMetricsState::Pending => Some(render_host_metrics_card_status(
-                id_prefix,
-                t!("Home.host_metrics_collecting").to_string(),
-                cx,
-            )),
-            HostMetricsState::Unavailable => Some(render_host_metrics_card_status(
-                id_prefix,
-                t!("Home.host_metrics_unavailable").to_string(),
-                cx,
-            )),
-        }
-    }
-
-    /// 树行空间有限，用三条迷你进度条表示 CPU / 内存 / 磁盘，完整数值放 tooltip。
-    pub(crate) fn render_host_metrics_compact(
-        &self,
-        connection: &StoredConnection,
-        id_prefix: &str,
-        cx: &App,
-    ) -> Option<AnyElement> {
-        match self.host_metrics_state(connection, cx)? {
-            HostMetricsState::Ready(usage) => {
-                Some(render_host_metrics_compact(&usage, id_prefix, cx))
-            }
-            HostMetricsState::Pending | HostMetricsState::Unavailable => None,
-        }
-    }
-
     pub(crate) fn shows_host_metrics_strip(&self, connection: &StoredConnection, cx: &App) -> bool {
-        host_metrics_enabled(cx) && connection.connection_type == ConnectionType::SshSftp
+        self.connection_layout == ConnectionLayout::List
+            && host_metrics_enabled(cx)
+            && connection.connection_type == ConnectionType::SshSftp
     }
 
     fn host_metrics_state(
@@ -277,35 +247,6 @@ fn host_metrics_enabled(cx: &App) -> bool {
     AppSettings::global(cx).home_show_host_metrics
 }
 
-fn format_host_metrics_summary(usage: &terminal_view::HostResourceUsage) -> Option<String> {
-    let mut parts = Vec::new();
-    if let Some(cpu) = usage.cpu_percent {
-        let mut text = t!("Home.host_metrics_cpu", percent = format!("{cpu:.0}")).to_string();
-        if let Some(cores) = usage.cpu_cores {
-            text.push_str(" · ");
-            text.push_str(&t!("Home.host_metrics_cores", count = cores.to_string()).to_string());
-        }
-        parts.push(text);
-    }
-    if let Some(memory) = usage.memory_percent {
-        let mut text = t!("Home.host_metrics_memory", percent = format!("{memory:.0}")).to_string();
-        if let Some(total) = usage.memory_total_kib {
-            text.push_str(" · ");
-            text.push_str(&format_kib_compact(total));
-        }
-        parts.push(text);
-    }
-    if let Some(disk) = usage.disk_percent {
-        let mut text = t!("Home.host_metrics_disk", percent = format!("{disk:.0}")).to_string();
-        if let Some(total) = usage.disk_total_kib {
-            text.push_str(" · ");
-            text.push_str(&format_kib_compact(total));
-        }
-        parts.push(text);
-    }
-    (!parts.is_empty()).then(|| parts.join(" · "))
-}
-
 fn render_host_metrics_detail(
     usage: &terminal_view::HostResourceUsage,
     id_prefix: &str,
@@ -315,16 +256,26 @@ fn render_host_metrics_detail(
     h_flex()
         .min_w_0()
         .flex_wrap()
-        .gap_1p5()
+        .items_center()
+        .gap_3()
         .when_some(usage.os_name.as_ref(), |row, os_name| {
-            row.child(render_host_info_chip(
-                SharedString::from(format!("{id_prefix}-os")),
-                os_name.clone(),
-                cx,
-            ))
+            let tooltip: SharedString = os_name.clone().into();
+            row.child(
+                div()
+                    .id(SharedString::from(format!("{id_prefix}-os")))
+                    .flex_shrink_0()
+                    .max_w(gpui::rems(10.0))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+                    .child(os_name.clone()),
+            )
         })
         .children(metrics.into_iter().map(|(kind, value)| {
-            render_host_metric_chip(
+            render_host_metric_track(
                 SharedString::from(format!("{id_prefix}-{}", kind.id_suffix())),
                 kind.label(),
                 value,
@@ -332,6 +283,14 @@ fn render_host_metrics_detail(
                 cx,
             )
         }))
+        .when_some(host_network_rates(usage), |row, (rx, tx)| {
+            row.child(render_host_network_track(
+                SharedString::from(format!("{id_prefix}-network")),
+                rx,
+                tx,
+                cx,
+            ))
+        })
         .into_any_element()
 }
 
@@ -356,115 +315,7 @@ fn render_host_metrics_status(id_prefix: &str, text: String, cx: &App) -> AnyEle
         .into_any_element()
 }
 
-fn render_host_metrics_card_status(id_prefix: &str, text: String, cx: &App) -> AnyElement {
-    h_flex()
-        .id(SharedString::from(format!("{id_prefix}-card-status")))
-        .w_full()
-        .items_center()
-        .gap_2()
-        .px_2()
-        .py_1()
-        .rounded(cx.theme().radius)
-        .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().muted)
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(text),
-        )
-        .into_any_element()
-}
-
-fn render_host_metrics_card(
-    usage: &terminal_view::HostResourceUsage,
-    id_prefix: &str,
-    cx: &App,
-) -> AnyElement {
-    let metrics = host_metric_values(usage);
-    let tooltip: SharedString = format_host_metrics_summary(usage)
-        .unwrap_or_default()
-        .into();
-    h_flex()
-        .id(SharedString::from(format!("{id_prefix}-card")))
-        .w_full()
-        .min_w_0()
-        .items_center()
-        .gap_2()
-        .px_2()
-        .py_1()
-        .rounded(cx.theme().radius)
-        .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().muted)
-        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-        .children(metrics.into_iter().map(|(kind, value)| {
-            h_flex()
-                .flex_1()
-                .min_w_0()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .size_1p5()
-                        .flex_shrink_0()
-                        .rounded_full()
-                        .bg(metric_color(value, cx)),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(kind.label()),
-                )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(if value >= 75.0 {
-                            metric_color(value, cx)
-                        } else {
-                            cx.theme().foreground
-                        })
-                        .child(format!("{value:.0}%")),
-                )
-        }))
-        .into_any_element()
-}
-
-fn render_host_info_chip(id: SharedString, text: String, cx: &App) -> AnyElement {
-    let tooltip: SharedString = text.clone().into();
-    h_flex()
-        .id(id)
-        .flex_shrink_0()
-        .max_w(gpui::rems(12.0))
-        .px_2()
-        .py_0p5()
-        .rounded(cx.theme().radius)
-        .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().muted)
-        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-        .child(
-            div()
-                .min_w_0()
-                .overflow_hidden()
-                .text_ellipsis()
-                .whitespace_nowrap()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(text),
-        )
-        .into_any_element()
-}
-
-fn render_host_metric_chip(
+fn render_host_metric_track(
     id: SharedString,
     label: String,
     value: f64,
@@ -472,43 +323,135 @@ fn render_host_metric_chip(
     cx: &App,
 ) -> AnyElement {
     let tone = metric_color(value, cx);
-    h_flex()
+    let percent = format!("{value:.1}%");
+    let caption = match detail.as_ref() {
+        Some(detail) => format!("{label} · {detail}"),
+        None => label.clone(),
+    };
+    let tooltip_text: SharedString = match detail.as_ref() {
+        Some(detail) => format!("{label} · {detail} · {percent}"),
+        None => format!("{label} · {percent}"),
+    }
+    .into();
+    let accessibility_label = tooltip_text.clone();
+    let progress_id = SharedString::from(format!("{}-progress", id.as_ref()));
+
+    v_flex()
         .id(id)
+        .w(gpui::rems(HOST_METRIC_TRACK_WIDTH_REMS))
         .flex_shrink_0()
-        .items_center()
         .gap_1()
-        .px_2()
-        .py_0p5()
-        .rounded(cx.theme().radius)
-        .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().muted)
-        .child(div().size_1p5().flex_shrink_0().rounded_full().bg(tone))
         .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(label),
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(caption),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .w_10()
+                        .text_right()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(if value >= 75.0 {
+                            tone
+                        } else {
+                            cx.theme().foreground
+                        })
+                        .child(percent),
+                ),
         )
         .child(
-            div()
-                .text_xs()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(if value >= 75.0 {
-                    tone
-                } else {
-                    cx.theme().foreground
-                })
-                .child(format!("{value:.0}%")),
+            Progress::new(progress_id)
+                .with_size(Size::XSmall)
+                .color(tone)
+                .value(value.clamp(0.0, 100.0) as f32)
+                .accessibility_label(accessibility_label),
         )
-        .when_some(detail, |chip, detail| {
-            chip.child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!("· {detail}")),
-            )
-        })
+        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
+        .into_any_element()
+}
+
+fn render_host_network_track(id: SharedString, rx: String, tx: String, cx: &App) -> AnyElement {
+    let label = t!("Home.host_metrics_network_label").to_string();
+    let up = t!("Home.host_metrics_network_up", value = tx.clone()).to_string();
+    let down = t!("Home.host_metrics_network_down", value = rx.clone()).to_string();
+    let tooltip_text: SharedString = format!("{label} · {up} · {down}").into();
+
+    v_flex()
+        .id(id)
+        .w(gpui::rems(HOST_METRIC_TRACK_WIDTH_REMS))
+        .flex_shrink_0()
+        .gap_0p5()
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("↑"),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(tx),
+                ),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_1()
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("↓"),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(rx),
+                ),
+        )
+        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
         .into_any_element()
 }
 
@@ -545,47 +488,30 @@ fn format_kib_compact(kib: u64) -> String {
     }
 }
 
-fn nearly_whole(value: f64) -> bool {
-    (value - value.round()).abs() < 0.05
+fn host_network_rates(usage: &terminal_view::HostResourceUsage) -> Option<(String, String)> {
+    let rx = usage.network_rx_bytes_per_sec?;
+    let tx = usage.network_tx_bytes_per_sec?;
+    Some((format_network_rate(rx), format_network_rate(tx)))
 }
 
-fn render_host_metrics_compact(
-    usage: &terminal_view::HostResourceUsage,
-    id_prefix: &str,
-    cx: &App,
-) -> AnyElement {
-    let metrics = host_metric_values(usage);
-    let tooltip: SharedString = format_host_metrics_summary(usage)
-        .unwrap_or_default()
-        .into();
-    h_flex()
-        .id(SharedString::from(format!("{id_prefix}-compact")))
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .px_1p5()
-        .py_1()
-        .rounded_full()
-        .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().muted)
-        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-        .child(
-            v_flex()
-                .w_5()
-                .gap_0p5()
-                .children(metrics.into_iter().map(|(kind, value)| {
-                    Progress::new(SharedString::from(format!(
-                        "{id_prefix}-compact-{}",
-                        kind.id_suffix()
-                    )))
-                    .with_size(Size::XSmall)
-                    .color(metric_color(value, cx))
-                    .value(value.clamp(0.0, 100.0) as f32)
-                    .accessibility_label(format!("{} {value:.0}%", kind.label()))
-                })),
-        )
-        .into_any_element()
+fn format_network_rate(bytes_per_sec: f64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let value = bytes_per_sec.max(0.0);
+    if value >= GB {
+        format!("{:.1} GB/s", value / GB)
+    } else if value >= MB {
+        format!("{:.1} MB/s", value / MB)
+    } else if value >= KB {
+        format!("{:.1} KB/s", value / KB)
+    } else {
+        format!("{value:.0} B/s")
+    }
+}
+
+fn nearly_whole(value: f64) -> bool {
+    (value - value.round()).abs() < 0.05
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -651,6 +577,8 @@ mod tests {
                 memory_percent: None,
                 disk_total_kib: None,
                 disk_percent: Some(51.6),
+                network_rx_bytes_per_sec: None,
+                network_tx_bytes_per_sec: None,
             })
             .iter()
             .map(|(kind, value)| (kind.id_suffix(), *value))
@@ -666,9 +594,18 @@ mod tests {
                 memory_percent: None,
                 disk_total_kib: None,
                 disk_percent: None,
+                network_rx_bytes_per_sec: None,
+                network_tx_bytes_per_sec: None,
             }),
             Vec::new()
         );
+    }
+
+    #[test]
+    fn network_rate_formatter_uses_compact_binary_units() {
+        assert_eq!(format_network_rate(830.0), "830 B/s");
+        assert_eq!(format_network_rate(2.9 * 1024.0), "2.9 KB/s");
+        assert_eq!(format_network_rate(3.25 * 1024.0 * 1024.0), "3.2 MB/s");
     }
 
     #[test]

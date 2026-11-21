@@ -91,7 +91,6 @@ jobs:
   # 并在判定为发布改动时就地校验 changelog 与版本号；其余 PR 照旧跑全量测试。
   classify:
     name: Classify changes
-    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     outputs:
       release_only: ${{ steps.check.outputs.release_only }}
@@ -105,11 +104,17 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 script/release_pr.py check
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python3 script/release_pr.py check
+          else
+            # 非 PR 事件也必须产生成功输出；否则 needs 此 job 的矩阵会被整体跳过。
+            echo "release_only=false" >> "$GITHUB_OUTPUT"
+          fi
 
-  # PR 快车道：Linux 跑完整 `cargo test --all`；macOS / Windows 只编译
-  # （`cargo check --workspace --all-targets`，含测试目标）不链接、不跑测试，
-  # 平台相关的编译问题仍然会在 PR 阶段暴露。完整三平台测试在 push main
+  # PR 快车道：Linux 跑完整 `cargo test --all`；macOS / Windows 的 workspace
+  # 只做 `cargo check --workspace --all-targets`（含测试目标），不链接、不跑测试；
+  # Windows 额外定向运行真实内嵌 X11 lib 测试。完整三平台测试在 push main
   # 与 workflow_dispatch 时执行。
   test:
     name: Test (${{ matrix.platform }}, ${{ matrix.target }})
@@ -122,6 +127,38 @@ jobs:
     runs-on: ${{ matrix.run_on }}
     steps:
       - uses: actions/checkout@v7
+      - name: Set up Python for Windows X11 component
+        if: ${{ matrix.platform == 'windows' }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: Prepare embedded Windows X11 component
+        id: x11-component
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $archive = Join-Path $env:RUNNER_TEMP "navop-x11-windows-x86_64.zip"
+          # PowerShell 不默认暴露 Git for Windows 的 usr\bin；只在本 step
+          # 补上其中的 OpenSSL，避免依赖 runner 的偶然 PATH，也不改写全局 PATH。
+          $gitOpenSsl = Join-Path $env:ProgramFiles "Git\usr\bin\openssl.exe"
+          if (Test-Path -LiteralPath $gitOpenSsl -PathType Leaf) {
+            $env:Path = "$(Split-Path -Parent $gitOpenSsl);$env:Path"
+          }
+          Get-Command python -ErrorAction Stop | Out-Null
+          Get-Command openssl -ErrorAction Stop | Out-Null
+          python --version
+          openssl version
+          python script/prepare-windows-x11-component.py `
+            --target windows-x86_64 `
+            --output $archive
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows X11 component preparation failed with exit code $LASTEXITCODE"
+          }
+          if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+            throw "Prepared Windows X11 component is missing: '$archive'"
+          }
+          "archive=$archive" >> $env:GITHUB_OUTPUT
       # gpui 单个 crate 的 rustc 命令行在 Windows 上约 35K 字符（大量
       # `--extern` / `-L dependency` 长路径），超过 CreateProcess 的 32,767
       # 上限；sccache 冷编译时会以 `os error 206` 失败。把 target 目录换到
@@ -225,11 +262,27 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
-      # PR 快车道：macOS / Windows 只编译（含测试目标），不链接、不跑测试。
-      # 完整测试仍在 Linux 以及 push main / 手动触发时跑三平台。
+      # PR 快车道：macOS / Windows 的 workspace 只编译（含测试目标），不链接、不跑测试。
+      # 完整测试仍在 Linux 以及 push main / 手动触发时跑三平台；X11 定向 lib 测试例外见下。
       - name: Check the workspace (PR fast lane)
         if: ${{ github.event_name == 'pull_request' && matrix.platform != 'linux' }}
         run: cargo check --workspace --all-targets
+      # 只给 lib 测试注入真实组件：它同时编译内嵌构建并运行
+      # configured_archive_matches_its_pinned_manifest，验证 SHA256 + Ed25519。
+      # 后续 workspace check / test-windows.ps1 不继承该 env；普通测试不访问组件网络。
+      - name: Test Windows X11 component with real embedded archive
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        env:
+          NAVOP_X11_BUNDLED_ARCHIVE: ${{ steps.x11-component.outputs.archive }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:NAVOP_X11_BUNDLED_ARCHIVE)) {
+            throw "NAVOP_X11_BUNDLED_ARCHIVE is missing"
+          }
+          cargo test --locked -p x11_component --lib --target ${{ matrix.target }}
+          if ($LASTEXITCODE -ne 0) {
+            throw "Embedded x11_component lib tests failed with exit code $LASTEXITCODE"
+          }
       - name: Test Windows
         if: ${{ matrix.platform == 'windows' && github.event_name != 'pull_request' }}
         shell: pwsh

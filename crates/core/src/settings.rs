@@ -29,6 +29,11 @@ pub use locale::{
 pub use remote_file_editor::{
     RemoteFileEditorOverride, RemoteFileEditorUserSettings, RemoteFileOpenMode,
 };
+pub use x11_component::{
+    X11ComponentError, X11ForwardingStatus, X11RestartNotification, X11ServerMode, configured_mode,
+    current_status, installed_version, reinstall, take_restart_notification,
+    take_restart_notification_for,
+};
 
 // ============================================================================
 // 全局用户状态
@@ -1454,6 +1459,9 @@ pub struct AppSettings {
     pub terminal_enable_autocomplete: bool,
     #[serde(default = "default_true")]
     pub terminal_show_suggestion_popup: bool,
+    /// 是否在终端面板右上角显示包含分屏与录制按钮的悬浮工具条。
+    #[serde(default = "default_true")]
+    pub terminal_show_pane_toolbar: bool,
     /// 命令提示 / cd 补全 / 历史搜索下拉弹层的背景不透明度。
     ///
     /// 弹层背景画在终端内容之上，下层文字以 (1 - α) 的权重透进弹层：0.72
@@ -1535,6 +1543,9 @@ pub struct AppSettings {
     pub personal_sync: PersonalSyncSettings,
     #[serde(default)]
     pub remote_file_editor: RemoteFileEditorUserSettings,
+    /// 新 SSH 会话使用的 X11 服务；缺省自动选择以保持旧配置兼容。
+    #[serde(default)]
+    pub x11_server_mode: X11ServerMode,
     #[serde(default = "default_true")]
     pub direct_server_transfer_enabled: bool,
     /// 文件传输发生文件夹冲突时，默认把「合并」作为推荐选项（issue #176）。
@@ -1930,6 +1941,7 @@ impl Default for AppSettings {
             terminal_auto_copy: default_true(),
             terminal_enable_autocomplete: default_true(),
             terminal_show_suggestion_popup: default_true(),
+            terminal_show_pane_toolbar: default_true(),
             terminal_suggestion_popup_opacity: default_terminal_suggestion_popup_opacity(),
             terminal_middle_click_paste: default_true(),
             terminal_right_click_paste: false,
@@ -1960,6 +1972,7 @@ impl Default for AppSettings {
             ai_chat: AiChatSettings::default(),
             personal_sync: PersonalSyncSettings::default(),
             remote_file_editor: RemoteFileEditorUserSettings::default(),
+            x11_server_mode: X11ServerMode::default(),
             direct_server_transfer_enabled: true,
             transfer_prefer_merge_for_directories: true,
             transfer_prefer_overwrite_for_files: true,
@@ -2202,6 +2215,7 @@ impl AppSettings {
         settings.normalize_font_settings();
         settings.normalize_appearance_settings();
         settings.normalize_terminal_settings();
+        Self::apply_runtime_x11_mode(&settings);
         cx.set_global(settings);
     }
 
@@ -2212,6 +2226,7 @@ impl AppSettings {
         settings.normalize_appearance_settings();
         settings.normalize_terminal_settings();
         settings.save();
+        Self::apply_runtime_x11_mode(&settings);
         cx.set_global(settings);
     }
 
@@ -2232,15 +2247,16 @@ impl AppSettings {
     }
 
     pub fn load() -> Self {
-        let Some(path) = Self::config_path() else {
-            return Self::default();
-        };
+        let settings = Self::config_path()
+            .filter(|path| path.exists())
+            .map_or_else(Self::default, |path| Self::load_from(&path));
+        Self::apply_runtime_x11_mode(&settings);
+        settings
+    }
 
-        if !path.exists() {
-            return Self::default();
-        }
-
-        Self::load_from(&path)
+    /// 只同步进程级选择；`load_from` 保持纯读取，避免隔离测试污染全局。
+    fn apply_runtime_x11_mode(settings: &Self) {
+        x11_component::set_configured_mode(settings.x11_server_mode);
     }
 
     /// 只把 settings.json 里的 `log_file_path` 取出来，不做整份反序列化。
@@ -2623,6 +2639,65 @@ mod tests {
             serde_json::from_str("{}").expect("missing field falls back to the default");
         assert!(legacy.deeplink_schemes.is_empty());
         assert!(legacy.deeplink_scheme_enabled("jms"));
+    }
+
+    #[test]
+    fn x11_server_mode_defaults_to_auto_and_reads_snake_case() {
+        let legacy: AppSettings = serde_json::from_str("{}").expect("旧配置应保持兼容");
+        assert_eq!(x11_component::X11ServerMode::Auto, legacy.x11_server_mode);
+        assert_eq!(
+            x11_component::X11ServerMode::Auto,
+            AppSettings::default().x11_server_mode
+        );
+
+        let external: AppSettings =
+            serde_json::from_str(r#"{"x11_server_mode":"external"}"#).expect("读取外部模式");
+        let embedded: AppSettings =
+            serde_json::from_str(r#"{"x11_server_mode":"embedded"}"#).expect("读取内置模式");
+        assert_eq!(
+            x11_component::X11ServerMode::External,
+            external.x11_server_mode
+        );
+        assert_eq!(
+            x11_component::X11ServerMode::Embedded,
+            embedded.x11_server_mode
+        );
+    }
+
+    #[gpui::test]
+    fn x11_runtime_mode_tracks_settings_without_load_from_pollution(cx: &mut gpui::TestAppContext) {
+        let original = x11_component::configured_mode();
+        x11_component::set_configured_mode(x11_component::X11ServerMode::External);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"x11_server_mode":"embedded"}"#).expect("写入测试配置");
+
+        let loaded = AppSettings::load_from(&path);
+        assert_eq!(
+            x11_component::X11ServerMode::Embedded,
+            loaded.x11_server_mode
+        );
+        assert_eq!(
+            x11_component::X11ServerMode::External,
+            x11_component::configured_mode()
+        );
+
+        AppSettings::apply_runtime_x11_mode(&loaded);
+        assert_eq!(
+            x11_component::X11ServerMode::Embedded,
+            x11_component::configured_mode()
+        );
+        cx.update(|cx| {
+            cx.set_global(loaded);
+            AppSettings::update(cx, |settings| {
+                settings.x11_server_mode = x11_component::X11ServerMode::External;
+            });
+        });
+        assert_eq!(
+            x11_component::X11ServerMode::External,
+            x11_component::configured_mode()
+        );
+        x11_component::set_configured_mode(original);
     }
 
     #[test]

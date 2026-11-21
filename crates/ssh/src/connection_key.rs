@@ -171,6 +171,7 @@ pub struct ConnectionKey {
     keepalive_max: Option<usize>,
     keyboard_interactive: Option<CredentialRevision>,
     x11_forwarding: bool,
+    x11_resolution_generation: u64,
     allow_legacy_algorithms: bool,
     forward_agent: bool,
 }
@@ -229,6 +230,11 @@ impl ConnectionKey {
             keepalive_max: config.keepalive_max,
             keyboard_interactive,
             x11_forwarding: config.x11_forwarding,
+            x11_resolution_generation: if config.x11_forwarding {
+                x11_component::resolution_generation()
+            } else {
+                0
+            },
             allow_legacy_algorithms: config.allow_legacy_algorithms,
             forward_agent: config.forward_agent,
         })
@@ -283,6 +289,7 @@ impl fmt::Debug for ConnectionKey {
                 &self.keyboard_interactive.is_some(),
             )
             .field("x11_forwarding", &self.x11_forwarding)
+            .field("x11_resolution_generation", &self.x11_resolution_generation)
             .field("allow_legacy_algorithms", &self.allow_legacy_algorithms)
             .finish()
     }
@@ -391,7 +398,7 @@ impl AuthenticationKey {
             SshAuth::Chain(steps) => Self::Chain(
                 steps
                     .iter()
-                    .map(|step| Self::new(step, credential.clone()))
+                    .map(|step| Self::new(step, credential))
                     .collect(),
             ),
         }
@@ -559,6 +566,12 @@ mod tests {
         let mut changed_x11 = base_config();
         changed_x11.x11_forwarding = true;
         assert_ne!(baseline_key, key(&changed_x11, target_credentials()));
+        let before_restart = key(&changed_x11, target_credentials());
+        x11_component::set_configured_mode(x11_component::X11ServerMode::External);
+        let after_mode_change = key(&changed_x11, target_credentials());
+        assert_ne!(before_restart, after_mode_change);
+        x11_component::set_configured_mode(x11_component::X11ServerMode::Embedded);
+        assert_ne!(after_mode_change, key(&changed_x11, target_credentials()));
 
         let mut changed_legacy_algorithms = base_config();
         changed_legacy_algorithms.allow_legacy_algorithms = true;

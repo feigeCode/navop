@@ -10,7 +10,9 @@ use one_core::tab_container::TabContent as _;
 
 use super::{TerminalPaneId, TerminalSplitNode, TerminalWorkspace};
 use crate::sidebar::SidebarPanel;
-use crate::sidebar::tool_dock::{render_extension_tool_panel_frame, render_internal_tool_panel_frame};
+use crate::sidebar::tool_dock::{
+    render_extension_tool_panel_frame, render_internal_tool_panel_frame,
+};
 use crate::view::TerminalWorkspaceSidebarSnapshot;
 
 const TERMINAL_PANE_MIN_WIDTH: Pixels = px(240.0);
@@ -76,6 +78,12 @@ impl TerminalWorkspace {
         } else {
             cx.theme().border
         };
+        // 录制按钮在 pane 悬浮工具条里，弹层贴着工具条下方渲染，属于 pane 内部
+        // 覆盖层，不占终端布局。
+        let recording_popover = pane
+            .read(cx)
+            .recording_controls_open()
+            .then(|| pane.update(cx, |view, cx| view.render_recording_popover(cx)));
 
         let content = v_flex()
             .id(("terminal-workspace-pane", pane_id.value()))
@@ -95,6 +103,9 @@ impl TerminalWorkspace {
                     .child(pane),
             )
             .child(self.render_pane_floating_tool(pane_id, title, hover_group, cx))
+            .when_some(recording_popover, |this, popover| {
+                this.child(div().absolute().top(px(40.0)).right_2().child(popover))
+            })
             .into_any_element();
         self.render_tab_drop_target(pane_id, content, cx)
     }

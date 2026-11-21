@@ -27,4 +27,10 @@ pub enum X11Error {
     SetupOversized(usize),
     #[error("远端出示的 cookie 未通过校验")]
     CookieRejected,
+    #[error("X11 setup 健康检查超时")]
+    ProbeTimeout,
+    #[error("X11 setup 健康检查 I/O 失败：{0}")]
+    ProbeIo(String),
+    #[error("X11 setup 健康检查被拒绝：{0}")]
+    ProbeRejected(String),
 }

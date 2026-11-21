@@ -44,6 +44,7 @@ impl TerminalView {
                 self.ensure_ssh_tool_panels(window, cx);
                 self.sync_zmodem_background_task(None, cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
+                self.notify_x11_ready_once(window, cx);
                 self.refresh_history_prompt_matches(cx);
                 cx.emit(TabContentEvent::ContentChanged);
                 cx.notify();

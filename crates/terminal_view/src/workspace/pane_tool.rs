@@ -13,6 +13,7 @@ use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, Placement, Sizable as _, Size, h_flex,
 };
 use one_assets::IconName;
+use one_core::settings::AppSettings;
 use one_core::tab_container::DragTab;
 use rust_i18n::t;
 
@@ -26,12 +27,19 @@ impl TerminalWorkspace {
         hover_group: SharedString,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if !AppSettings::global(cx).terminal_show_pane_toolbar {
+            return gpui::Empty.into_any_element();
+        }
         let active = self.active_pane_id == pane_id;
         let split = self.panes.len() > 1;
         let split_supported = self
             .panes
             .get(&pane_id)
             .is_some_and(|pane| pane.read(cx).duplicate_supported(cx));
+        let pane = self.panes.get(&pane_id).cloned();
+        let recording_visible = pane
+            .as_ref()
+            .is_some_and(|pane| pane.update(cx, |view, cx| view.recording_tool_visible(cx)));
         let workspace = cx.entity().downgrade();
         let drag_source = split
             .then(|| self.external_tab_drag_source(pane_id, workspace.clone()))
@@ -60,8 +68,11 @@ impl TerminalWorkspace {
                 .border_color(border)
                 .text_color(cx.theme().foreground)
                 .when(cx.theme().shadow, |this| this.shadow_md())
-                .invisible()
-                .group_hover(hover_group, |this| this.visible())
+                .when(!recording_visible, |this| this.invisible())
+                .when(!recording_visible, |this| {
+                    this.group_hover(hover_group, |this| this.visible())
+                })
+                .child(self.render_recording_button(pane_id, pane, cx))
                 .child(self.render_split_button(pane_id, workspace, split_supported))
                 .into_any_element();
         }
@@ -89,6 +100,7 @@ impl TerminalWorkspace {
                     .with_size(Size::XSmall),
             )
             .child(self.render_drag_title(pane_id, title, drag_source, cx))
+            .child(self.render_recording_button(pane_id, pane, cx))
             .child(self.render_split_button(pane_id, workspace.clone(), split_supported))
             .child(self.render_cancel_split_button(pane_id, workspace.clone()))
             .child(self.render_close_button(pane_id, workspace))
@@ -131,6 +143,27 @@ impl TerminalWorkspace {
                     )
             })
             .child(title)
+            .into_any_element()
+    }
+
+    fn render_recording_button(
+        &self,
+        pane_id: TerminalPaneId,
+        pane: Option<gpui::Entity<crate::view::TerminalView>>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(pane) = pane else {
+            return div().into_any_element();
+        };
+        let (label, color) = pane.update(cx, |view, cx| view.recording_indicator(cx));
+        Button::new(("terminal-pane-recording", pane_id.value()))
+            .ghost()
+            .xsmall()
+            .child(Icon::new(IconName::Record).xsmall().text_color(color))
+            .tooltip(label)
+            .on_click(move |_, _, cx| {
+                pane.update(cx, |view, cx| view.toggle_recording_controls(cx));
+            })
             .into_any_element()
     }
 

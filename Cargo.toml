@@ -57,6 +57,7 @@ members = [
     "crates/ssh",
     "crates/otp",
     "crates/x11_forwarding",
+    "crates/x11_component",
     "crates/sftp",
     "crates/ftp",
     "crates/sftp_transfer",
@@ -183,6 +184,13 @@ one-ui = { path = "crates/one_ui" }
 one-assets = { path = "crates/one-assets" }
 ssh = { path = "crates/ssh" }
 x11_forwarding = { path = "crates/x11_forwarding" }
+x11_component = { path = "crates/x11_component" }
+http_client = { package = "gpui-pre-http-client", version = "0.3.99" }
+ed25519-dalek = "2.2.0"
+fs2 = "0.4.3"
+libloading = "0.8.9"
+libc = "0.2"
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 sftp = { path = "crates/sftp" }
 ftp = { path = "crates/ftp" }
 sftp_transfer = { path = "crates/sftp_transfer" }

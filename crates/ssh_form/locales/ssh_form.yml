@@ -253,6 +253,14 @@ SSH:
     en: Key Path
     zh-CN: 密钥路径
     zh-HK: 密鑰路徑
+  key_path_select_file:
+    en: Select a local private key file
+    zh-CN: 选择本地私钥文件
+    zh-HK: 選擇本機私鑰檔案
+  username_missing_in_keychain:
+    en: This keychain entry has no username. Fill it in here.
+    zh-CN: 该钥匙串条目没有用户名，请在这里填写
+    zh-HK: 該鑰匙圈條目沒有使用者名稱，請在這裡填寫
   key_path_placeholder:
     en: Enter private key path
     zh-CN: 请输入私钥路径
@@ -772,6 +780,62 @@ SSH:
     en: Forward remote X11 graphical applications to the local X server. macOS requires XQuartz to be installed and running. Applies to new terminal sessions.
     zh-CN: 将远端 X11 图形应用转发到本机 X server。macOS 需要安装并启动 XQuartz。对新开的终端会话生效。
     zh-HK: 將遠端 X11 圖形應用轉發到本機 X server。macOS 需要安裝並啟動 XQuartz。對新開的終端工作階段生效。
+  x11_status_external:
+    en: "X11 forwarding: local %{server}"
+    zh-CN: "X11 转发：本机 %{server}"
+    zh-HK: "X11 轉發：本機 %{server}"
+  x11_status_embedded:
+    en: "X11 forwarding: built-in yserver %{version} (Vulkan)"
+    zh-CN: "X11 转发：内置 yserver %{version}（Vulkan）"
+    zh-HK: "X11 轉發：內置 yserver %{version}（Vulkan）"
+  x11_status_disabled:
+    en: "X11 forwarding: disabled (%{reason})"
+    zh-CN: "X11 转发：已停用（%{reason}）"
+    zh-HK: "X11 轉發：已停用（%{reason}）"
+  x11_remote_channel_unavailable:
+    en: the SSH server did not open an X11 forwarding channel
+    zh-CN: SSH 服务端未建立 X11 转发通道
+    zh-HK: SSH 伺服器未建立 X11 轉發通道
+  x11_remote_forwarding_disabled_checklist:
+    en: Check remote sshd_config for X11Forwarding yes, install xauth, then reconnect.
+    zh-CN: 请检查远端 sshd_config 的 X11Forwarding yes、安装 xauth，然后重新连接。
+    zh-HK: 請檢查遠端 sshd_config 的 X11Forwarding yes、安裝 xauth，然後重新連線。
+  x11_remote_display_restarted:
+    en: If the remote display service was restarted, close old X11 windows and reconnect.
+    zh-CN: 若远程显示服务已重启，请关闭旧 X11 窗口并重新连接。
+    zh-HK: 若遠端顯示服務已重新啟動，請關閉舊 X11 視窗並重新連線。
+  x11_untrusted_ssh_x_security:
+    en: "Untrusted ssh -X is limited by the X11 SECURITY timeout; use trusted ssh -Y when required."
+    zh-CN: "untrusted ssh -X 会受 X11 SECURITY 超时限制；需要可信转发时请使用 ssh -Y。"
+    zh-HK: "untrusted ssh -X 會受 X11 SECURITY 逾時限制；需要可信轉發時請使用 ssh -Y。"
+  x11_macos_xquartz_guidance:
+    en: "On macOS, install and start XQuartz for External mode; ensure DISPLAY authorization is ready."
+    zh-CN: "macOS 使用 External 时需安装并启动 XQuartz，并确保 DISPLAY 授权就绪。"
+    zh-HK: "macOS 使用 External 時需安裝並啟動 XQuartz，並確保 DISPLAY 授權就緒。"
+  x11_switch_external:
+    en: Switch to external X server
+    zh-CN: 切换到外部 X server
+    zh-HK: 切換至外部 X server
+  x11_switching_external:
+    en: External mode saved. Detecting the local X server…
+    zh-CN: 已保存 External 模式，正在重新探测本机 X server…
+    zh-HK: 已儲存 External 模式，正在重新偵測本機 X server…
+  x11_channel_open_failed:
+    en: "Could not open a temporary SSH channel for the X11 request: %{error}. SSH itself is connected."
+    zh-CN: "无法为 X11 请求打开临时 SSH 通道：%{error}。SSH 本身已连接。"
+    zh-HK: "無法為 X11 請求開啟臨時 SSH 通道：%{error}。SSH 本身已連線。"
+  x11_remote_request_rejected:
+    en: "The SSH server rejected x11-req: %{error}. Check sshd_config for X11Forwarding yes, X11DisplayOffset and xauth; this application uses trusted (-Y) forwarding."
+    zh-CN: "远端拒绝了 x11-req：%{error}。请检查 sshd_config 的 X11Forwarding yes、X11DisplayOffset 与 xauth；本应用使用 trusted (-Y) 转发。"
+    zh-HK: "遠端拒絕了 x11-req：%{error}。請檢查 sshd_config 的 X11Forwarding yes、X11DisplayOffset 與 xauth；本應用使用 trusted (-Y) 轉發。"
+  x11_request_failed:
+    en: "The X11 request was not completed (local send failure, response timeout or early channel close): %{error}. This was not a remote CHANNEL_FAILURE; SSH itself is connected."
+    zh-CN: "X11 请求未完成（本地发送失败、等待响应超时或通道提前关闭）：%{error}。这不是远端 CHANNEL_FAILURE；SSH 本身已连接。"
+    zh-HK: "X11 請求未完成（本機傳送失敗、等待回應逾時或通道提前關閉）：%{error}。這不是遠端 CHANNEL_FAILURE；SSH 本身已連線。"
+  x11_request_unavailable:
+    en: the X11 request did not complete; SSH itself is connected
+    zh-CN: X11 请求未完成；SSH 本身已连接
+    zh-HK: X11 請求未完成；SSH 本身已連線
   forward_agent:
     en: SSH Agent Forwarding
     zh-CN: SSH Agent 转发

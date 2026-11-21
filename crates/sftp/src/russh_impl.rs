@@ -23,7 +23,7 @@ use rust_i18n::t;
 use ssh::{
     AuthFailureMessages, HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyVerifier,
     KeyboardInteractiveTarget, ProxyConnectConfig, ProxyType, RusshClient, SshConnectConfig,
-    add_jump_channel_rejected_hint, add_legacy_algorithm_hint, authenticate_with_strategy,
+    add_jump_channel_rejected_hint, add_legacy_algorithm_hint,
     authenticate_with_strategy_for_target, build_client_preferred_algorithms_with_legacy, defaults,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -2690,11 +2690,13 @@ impl SftpClient for RusshSftpClient {
             .as_ref()
             .is_some_and(|jump| jump.bastion_login_username().is_some());
         if !bastion_direct {
-            authenticate_with_strategy(
+            authenticate_with_strategy_for_target(
                 &mut session,
                 &ssh_config.username,
                 &ssh_config.auth,
                 sftp_auth_failure_messages(),
+                KeyboardInteractiveTarget::TargetServer,
+                ssh_config.keyboard_interactive_responder.clone(),
             )
             .await?;
         }

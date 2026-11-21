@@ -342,26 +342,7 @@ impl HomePage {
         None
     }
 
-    /// 没有 shell 能力时卡片底部不显示资源状态带。
-    pub(crate) fn render_host_metrics_card(
-        &self,
-        _connection: &StoredConnection,
-        _id_prefix: &str,
-        _cx: &App,
-    ) -> Option<AnyElement> {
-        None
-    }
-
-    /// 没有 shell 能力时树行也不显示资源进度条。
-    pub(crate) fn render_host_metrics_compact(
-        &self,
-        _connection: &StoredConnection,
-        _id_prefix: &str,
-        _cx: &App,
-    ) -> Option<AnyElement> {
-        None
-    }
-
+    #[cfg(test)]
     pub(crate) fn shows_host_metrics_strip(
         &self,
         _connection: &StoredConnection,

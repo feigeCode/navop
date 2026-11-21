@@ -55,6 +55,7 @@ impl TerminalWorkspace {
                     cx.emit(TerminalWorkspaceEvent::SaveAsConnection(connection.clone()));
                 }
                 // Ctrl+D 断开后再按一次：单 pane 标签关整个标签页，多 pane 只关当前 pane。
+                TerminalPaneEvent::RecordingChanged => cx.notify(),
                 TerminalPaneEvent::ClosePaneRequested => {
                     if this.panes.len() <= 1 {
                         cx.emit(TabContentEvent::CloseRequested);

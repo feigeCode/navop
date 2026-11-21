@@ -15,6 +15,9 @@ const PING_THROTTLE: Duration = Duration::from_secs(5);
 #[async_trait]
 trait SharedSessionClient: Send + Sync {
     fn is_connected(&self) -> bool;
+    fn x11_status(&self) -> Option<crate::X11ForwardingStatus> {
+        None
+    }
     async fn ping(&self) -> Result<()>;
     async fn disconnect(&mut self) -> Result<()>;
 }
@@ -104,6 +107,8 @@ struct SessionPool<C, K> {
     config: RwLock<SessionConfig>,
     connector: K,
     state: Mutex<SessionState<C>>,
+    /// 最近一次已解析的 transport X11 状态，供锁忙或重连窗口无阻塞读取。
+    last_x11_status: RwLock<Option<crate::X11ForwardingStatus>>,
     shutdown: CancellationToken,
     /// Serializes successful client checkout/publication with the synchronous
     /// shutdown gate.  Once `request_shutdown()` returns, no connection can
@@ -129,6 +134,7 @@ where
             }),
             connector,
             state: Mutex::new(SessionState::default()),
+            last_x11_status: RwLock::new(None),
             shutdown: CancellationToken::new(),
             shutdown_publication: RwLock::new(()),
         }
@@ -136,6 +142,36 @@ where
 
     fn config(&self) -> SshConnectConfig {
         self.config_snapshot().0
+    }
+
+    fn x11_status(&self) -> Option<crate::X11ForwardingStatus> {
+        let client = match self.state.try_lock() {
+            Ok(state) => state.client.clone(),
+            Err(_) => return self.cached_x11_status(),
+        };
+        let Some(client) = client else {
+            return self.cached_x11_status();
+        };
+        let status = match client.try_lock() {
+            Ok(client) => client.x11_status(),
+            Err(_) => return self.cached_x11_status(),
+        };
+        self.cache_x11_status(status.clone());
+        status
+    }
+
+    fn cached_x11_status(&self) -> Option<crate::X11ForwardingStatus> {
+        self.last_x11_status
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    fn cache_x11_status(&self, status: Option<crate::X11ForwardingStatus>) {
+        *self
+            .last_x11_status
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = status;
     }
 
     fn replace_config(&self, config: SshConnectConfig) {
@@ -287,6 +323,7 @@ where
                     }
                     return match result {
                         Ok(new_client) => {
+                            self.cache_x11_status(new_client.x11_status());
                             let arc = Arc::new(Mutex::new(new_client));
                             state.connecting = None;
                             state.client = Some(arc.clone());
@@ -388,6 +425,7 @@ where
             state.client.take()
         };
 
+        self.cache_x11_status(None);
         if let Some(client) = client {
             client.lock().await.disconnect().await?;
         }
@@ -405,6 +443,7 @@ where
             .write()
             .unwrap_or_else(|error| error.into_inner());
         self.shutdown.cancel();
+        self.cache_x11_status(None);
     }
 
     /// Permanently close this manager and wait for both its cached client and
@@ -462,6 +501,10 @@ impl SharedSessionClient for RusshClient {
         SshClient::is_connected(self)
     }
 
+    fn x11_status(&self) -> Option<crate::X11ForwardingStatus> {
+        SshClient::x11_status(self)
+    }
+
     async fn ping(&self) -> Result<()> {
         SshClient::ping(self).await
     }
@@ -503,6 +546,11 @@ impl SshSessionManager {
 
     pub async fn client(&self) -> Result<Arc<Mutex<RusshClient>>> {
         self.inner.client().await
+    }
+
+    /// 无副作用读取已缓存连接的 X11 状态；未连接或连接正被使用时返回 None。
+    pub fn x11_status(&self) -> Option<crate::X11ForwardingStatus> {
+        self.inner.x11_status()
     }
 
     pub async fn open_channel(&self) -> Result<RusshChannel> {
@@ -638,6 +686,13 @@ mod tests {
     impl SharedSessionClient for FakeClient {
         fn is_connected(&self) -> bool {
             self.connected.load(Ordering::SeqCst)
+        }
+
+        fn x11_status(&self) -> Option<crate::X11ForwardingStatus> {
+            self.is_connected()
+                .then(|| crate::X11ForwardingStatus::External {
+                    server: "fake X server".into(),
+                })
         }
 
         async fn ping(&self) -> Result<()> {
@@ -909,6 +964,62 @@ mod tests {
 
         assert!(Arc::ptr_eq(&replacement, &checked_out));
         assert_eq!(connector.connect_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn cached_x11_status_never_connects_and_clears_on_disconnect() {
+        let connector = Arc::new(FakeConnector::default());
+        let pool = SessionPool::new(test_config(), connector.clone());
+
+        assert_eq!(pool.x11_status(), None);
+        assert_eq!(connector.connect_count.load(Ordering::SeqCst), 0);
+        let _client = pool.client().await.expect("client should connect");
+        assert_eq!(
+            pool.x11_status(),
+            Some(crate::X11ForwardingStatus::External {
+                server: "fake X server".into(),
+            })
+        );
+        assert_eq!(connector.connect_count.load(Ordering::SeqCst), 1);
+
+        pool.disconnect().await.expect("disconnect should succeed");
+        assert_eq!(pool.x11_status(), None);
+        assert_eq!(connector.connect_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn x11_status_uses_last_snapshot_when_locks_are_busy_or_client_is_missing() {
+        let connector = Arc::new(FakeConnector::default());
+        let pool = SessionPool::new(test_config(), connector.clone());
+        let expected = Some(crate::X11ForwardingStatus::External {
+            server: "fake X server".into(),
+        });
+        let client = pool.client().await.expect("client should connect");
+        assert_eq!(pool.x11_status(), expected);
+
+        let state = pool.state.lock().await;
+        assert_eq!(
+            pool.x11_status(),
+            expected,
+            "state 锁忙时必须返回最后一次成功读取的快照"
+        );
+        drop(state);
+
+        let client_guard = client.lock().await;
+        assert_eq!(
+            pool.x11_status(),
+            expected,
+            "client 锁忙时不能把已有状态闪成 None"
+        );
+        drop(client_guard);
+
+        assert!(pool.invalidate_client(&client).await);
+        assert_eq!(
+            pool.x11_status(),
+            expected,
+            "重连前的无 client 窗口应保留最后快照"
+        );
+        assert_eq!(connector.connect_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

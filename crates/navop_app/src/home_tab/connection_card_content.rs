@@ -11,10 +11,8 @@ impl HomePage {
         let display_name = connection_display_name(conn);
         let name_tooltip: SharedString = display_name.clone().into();
         let connection_info = card_connection_info(conn);
-        let host_metrics =
-            self.render_host_metrics_card(conn, &format!("{card_id}-host-metrics"), cx);
 
-        let header = h_flex()
+        h_flex()
             .items_center()
             .gap_2p5()
             .w_full()
@@ -81,13 +79,6 @@ impl HomePage {
                         )
                     }),
             )
-            .into_any_element();
-
-        v_flex()
-            .w_full()
-            .gap_2()
-            .child(header)
-            .when_some(host_metrics, |this, metrics| this.child(metrics))
             .into_any_element()
     }
 }

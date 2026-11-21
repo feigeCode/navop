@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use gpui::{App, AppContext as _, Context, Entity, Subscription, Window};
 use gpui_component::Icon;
+use one_core::settings::AppSettings;
 use one_core::storage::models::StoredConnection;
 use terminal::LocalConfig;
 use terminal::terminal::TerminalConnectionKind;
@@ -174,6 +175,8 @@ impl TerminalWorkspace {
         };
         this.subscribe_to_pane(initial_pane_id, pane, window, cx);
         this.set_active_pane_metric_state(cx);
+        cx.observe_global::<AppSettings>(|_, cx| cx.notify())
+            .detach();
         this
     }
 

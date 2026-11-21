@@ -22,8 +22,8 @@ use one_core::app_dirs;
 use one_core::gpui_tokio::Tokio;
 use one_core::settings::AppSettings;
 use one_core::storage::models::{
-    ActiveConnections, SerialParams, SshAccountExpect, SshAgentForwardKey,
-    SshAuthMethod, StoredConnection, TelnetParams,
+    ActiveConnections, SerialParams, SshAccountExpect, SshAgentForwardKey, SshAuthMethod,
+    StoredConnection, TelnetParams,
 };
 use one_core::storage::{
     GlobalStorageState, TerminalCommandHistoryRepository, TerminalCommandHistorySort,
@@ -710,8 +710,14 @@ fn resolve_ssh_connection(
         timeout: params.connect_timeout.map(Duration::from_secs),
         keepalive_interval: params.keepalive_interval.map(Duration::from_secs),
         keepalive_max: params.keepalive_max,
-        jump_server: params.jump_server.as_ref().map(sftp_transfer::jump_connect_config),
-        proxy: params.proxy.as_ref().map(sftp_transfer::proxy_connect_config),
+        jump_server: params
+            .jump_server
+            .as_ref()
+            .map(sftp_transfer::jump_connect_config),
+        proxy: params
+            .proxy
+            .as_ref()
+            .map(sftp_transfer::proxy_connect_config),
         keyboard_interactive_responder: None,
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: params.x11_forwarding.unwrap_or(false),
@@ -2827,8 +2833,8 @@ impl Terminal {
                 ssh_config: None,
                 ssh_base_config: None,
                 ssh_session_manager: None,
-            ssh_session_lease: None,
-            ssh_credential_revision: None,
+                ssh_session_lease: None,
+                ssh_credential_revision: None,
                 ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
                 ssh_credential_request: None,
                 ssh_keyboard_interactive_enabled: false,
@@ -3409,9 +3415,7 @@ impl Terminal {
             // acquire 内部会 tokio::spawn（reaper/创建飞行），必须在 Tokio runtime
             // 上下文里调用；GPUI executor 上没有 reactor，直接 await 会 panic。
             let acquire_task = Tokio::spawn(cx, async move {
-                service
-                    .acquire(&key, acquire_connect_config)
-                    .await
+                service.acquire(&key, acquire_connect_config).await
             });
             let source = match acquire_task.await {
                 Ok(Ok(lease)) => ManagerSource::Shared(lease),
@@ -4096,6 +4100,12 @@ impl Terminal {
 
     pub fn ssh_session_manager(&self) -> Option<&Arc<SshSessionManager>> {
         self.ssh_session_manager.as_ref()
+    }
+
+    /// 返回当前终端自身已完成 X11 请求的结果。
+    /// 后端安装前不得回退共享 transport 状态，否则其他标签页会被误报为成功。
+    pub fn x11_status(&self) -> Option<ssh::X11ForwardingStatus> {
+        self.backend.as_ref().and_then(|backend| backend.x11_status())
     }
 
     pub fn apply_ssh_connection_update(&mut self, update: SshConnectionUpdate) -> Result<()> {

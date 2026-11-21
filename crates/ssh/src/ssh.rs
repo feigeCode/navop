@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
@@ -11,7 +12,8 @@ use russh::*;
 use rust_i18n::t;
 use tokio::io::{AsyncRead, AsyncWrite, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, Semaphore, oneshot};
+use x11_component::{X11ForwardingStatus, X11Resolution};
 use x11_forwarding::{ForwardRequest, X11Proxy, X11ProxyHandle};
 
 use crate::connection_error::{add_jump_channel_rejected_hint, add_private_key_load_hint};
@@ -466,6 +468,21 @@ impl Default for PtyConfig {
     }
 }
 
+const X11_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_X11_CHANNELS: usize = 32;
+
+/// 远端明确以 CHANNEL_FAILURE 拒绝 `x11-req`，区别于本地发送失败和等待超时。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct X11RequestRejected;
+
+impl std::fmt::Display for X11RequestRejected {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("remote server rejected x11-req")
+    }
+}
+
+impl std::error::Error for X11RequestRejected {}
+
 pub enum ChannelEvent {
     Data(Vec<u8>),
     ExtendedData {
@@ -537,6 +554,11 @@ pub trait SshClient: Send + Sync {
         None
     }
 
+    /// 当前连接的 X11 来源或停用原因。
+    fn x11_status(&self) -> Option<X11ForwardingStatus> {
+        None
+    }
+
     /// 连接是否启用了 ForwardAgent（`auth-agent-req@openssh.com`）。
     /// 默认 `false`；具体实现应返回连接配置中的实际值。
     fn forward_agent(&self) -> bool {
@@ -546,6 +568,7 @@ pub trait SshClient: Send + Sync {
 
 struct RusshHandler {
     x11_handle: Option<X11ProxyHandle>,
+    x11_channel_permits: Arc<Semaphore>,
     identity: HostKeyIdentity,
     host_key_verifier: HostKeyVerifier,
     remote_forward_target: Arc<RwLock<Option<RemoteForwardTarget>>>,
@@ -566,6 +589,7 @@ impl RusshHandler {
     ) -> Self {
         Self {
             x11_handle,
+            x11_channel_permits: Arc::new(Semaphore::new(MAX_X11_CHANNELS)),
             identity,
             host_key_verifier,
             remote_forward_target,
@@ -722,15 +746,28 @@ impl client::Handler for RusshHandler {
             return Ok(());
         };
 
-        // russh 0.62 起，服务端主动打开的通道必须由回调显式确认。
-        // 仅在本连接确实启用了 X11 转发时接受，避免先确认再立即关闭。
-        reply.accept().await;
+        // 先非阻塞获取许可，避免回连洪峰无限创建任务或卡住其它通道回调。
+        let Ok(permit) = self.x11_channel_permits.clone().try_acquire_owned() else {
+            tracing::warn!(
+                target: "ssh.x11",
+                originator_address,
+                originator_port,
+                limit = MAX_X11_CHANNELS,
+                "X11 回连通道达到并发上限，拒绝新通道"
+            );
+            reply
+                .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        };
 
+        reply.accept().await;
         let originator = Some((
             originator_address.to_string(),
             u16::try_from(originator_port).unwrap_or(0),
         ));
         tokio::spawn(async move {
+            let _permit = permit;
             x11_handle
                 .run_channel(channel.into_stream(), originator)
                 .await;
@@ -938,6 +975,8 @@ pub struct RusshClient {
     _jump_session: Option<client::Handle<RusshHandler>>,
     /// 本机 X11 转发管理器（仅在配置启用且本机 X server 可用时存在）。
     x11_proxy: Option<X11Proxy>,
+    /// transport 建连时解析出的本机 X server 状态；各终端会话的请求结果不写入此处。
+    x11_status: X11ForwardingStatus,
     remote_forward_target: Arc<RwLock<Option<RemoteForwardTarget>>>,
     /// 连接是否启用了 ForwardAgent（`auth-agent-req@openssh.com`）。
     ///
@@ -2701,11 +2740,19 @@ impl SshClient for RusshClient {
                 .context("add SSH agent identities")?;
         }
 
-        // X11 转发依赖本机 X server（DISPLAY/XAUTHORITY），解析失败仅降级不阻断连接。
-        let x11_proxy = if config.x11_forwarding {
+        // 仅替换本机 X server 的来源，x11-req 与 cookie 委托仍走既有链路。
+        let X11Resolution {
+            proxy: x11_proxy,
+            status: x11_status,
+        } = if config.x11_forwarding {
             detect_x11_proxy().await
         } else {
-            None
+            X11Resolution {
+                proxy: None,
+                status: X11ForwardingStatus::Disabled {
+                    reason: "用户未启用 X11 转发".into(),
+                },
+            }
         };
         let x11_handle = x11_proxy.as_ref().map(|proxy| proxy.handle());
         let host_key_verifier = config.host_key_verifier.clone();
@@ -2778,6 +2825,7 @@ impl SshClient for RusshClient {
                         session,
                         _jump_session: None,
                         x11_proxy: x11_proxy.clone(),
+                        x11_status,
                         remote_forward_target: Arc::clone(&remote_forward_target),
                         forward_agent: config.forward_agent,
                         bastion_direct,
@@ -2878,6 +2926,7 @@ impl SshClient for RusshClient {
                     session,
                     _jump_session: Some(jump_session),
                     x11_proxy: x11_proxy.clone(),
+                    x11_status,
                     remote_forward_target: Arc::clone(&remote_forward_target),
                     forward_agent: config.forward_agent,
                     bastion_direct,
@@ -2920,6 +2969,7 @@ impl SshClient for RusshClient {
                     session,
                     _jump_session: None,
                     x11_proxy: x11_proxy.clone(),
+                    x11_status,
                     remote_forward_target: Arc::clone(&remote_forward_target),
                     forward_agent: config.forward_agent,
                     bastion_direct,
@@ -2955,6 +3005,7 @@ impl SshClient for RusshClient {
                     session,
                     _jump_session: None,
                     x11_proxy: x11_proxy.clone(),
+                    x11_status,
                     remote_forward_target: Arc::clone(&remote_forward_target),
                     forward_agent: config.forward_agent,
                     bastion_direct,
@@ -2972,7 +3023,10 @@ impl SshClient for RusshClient {
 
     async fn open_channel(&mut self) -> Result<Self::Channel> {
         let channel = self.session.channel_open_session().await?;
-        Ok(RusshChannel { channel })
+        Ok(RusshChannel {
+            channel,
+            pending: VecDeque::new(),
+        })
     }
 
     async fn disconnect(&mut self) -> Result<()> {
@@ -3002,6 +3056,10 @@ impl SshClient for RusshClient {
         self.x11_proxy.as_ref()
     }
 
+    fn x11_status(&self) -> Option<X11ForwardingStatus> {
+        Some(self.x11_status.clone())
+    }
+
     fn forward_agent(&self) -> bool {
         self.forward_agent
     }
@@ -3018,34 +3076,22 @@ impl RusshClient {
     }
 }
 
-/// 解析本机 X server 环境，失败仅告警并返回 None（X11 转发静默停用）。
-async fn detect_x11_proxy() -> Option<X11Proxy> {
-    match tokio::task::spawn_blocking(x11_forwarding::detect_local_server).await {
-        Ok(Ok(proxy)) => {
-            tracing::info!(
-                target: "ssh.x11",
-                endpoint = ?proxy.endpoint(),
-                "本机 X server 可用，X11 转发已启用"
-            );
-            Some(proxy)
+/// 按设置解析 X server；失败作为可见状态返回，不阻断 SSH 连接。
+async fn detect_x11_proxy() -> X11Resolution {
+    let mode = x11_component::configured_mode();
+    let resolution = x11_component::resolve_server(mode).await;
+    match &resolution.status {
+        X11ForwardingStatus::Embedded { version } => {
+            tracing::info!(target: "ssh.x11", %version, "内置 yserver 已就绪");
         }
-        Ok(Err(error)) => {
-            tracing::warn!(
-                target: "ssh.x11",
-                error = %error,
-                "本机 X server 不可用，X11 转发停用"
-            );
-            None
+        X11ForwardingStatus::External { server } => {
+            tracing::info!(target: "ssh.x11", %server, "本机 X server 已就绪");
         }
-        Err(error) => {
-            tracing::warn!(
-                target: "ssh.x11",
-                error = %error,
-                "解析本机 X11 环境失败，X11 转发停用"
-            );
-            None
+        X11ForwardingStatus::Disabled { reason } => {
+            tracing::warn!(target: "ssh.x11", %reason, "X11 转发已停用");
         }
     }
+    resolution
 }
 
 fn normalize_disconnect_result(
@@ -4284,8 +4330,361 @@ zsXyAAAAAAE=
     }
 }
 
+#[cfg(test)]
+mod x11_protocol_tests {
+    use std::future::Future;
+    use std::sync::{Arc, RwLock};
+    use std::time::Duration;
+
+    use russh::server::{Auth, Server as _};
+    use tokio::net::TcpListener;
+
+    use super::{
+        Algorithm, ChannelEvent, ForwardRequest, HostKeyVerifier, PrivateKey, RusshChannel,
+        RusshClient, RusshHandler, SshAuth, SshChannel, SshClient, SshConnectConfig, X11Proxy,
+        X11RequestRejected, build_russh_client_config,
+    };
+    use crate::{MagicCookie, ServerEndpoint};
+
+    #[derive(Clone, Copy)]
+    enum X11Reply {
+        RejectWithData,
+        CloseWithData,
+        Ignore,
+    }
+
+    #[derive(Clone)]
+    struct X11TestServer {
+        reply: X11Reply,
+        server_handle_tx: Option<tokio::sync::mpsc::UnboundedSender<russh::server::Handle>>,
+    }
+
+    impl russh::server::Server for X11TestServer {
+        type Handler = Self;
+
+        fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self::Handler {
+            self.clone()
+        }
+    }
+
+    impl russh::server::Handler for X11TestServer {
+        type Error = anyhow::Error;
+
+        async fn auth_password(&mut self, _: &str, _: &str) -> Result<Auth, Self::Error> {
+            Ok(Auth::Accept)
+        }
+
+        fn channel_open_session(
+            &mut self,
+            _channel: russh::Channel<russh::server::Msg>,
+            reply: russh::server::ChannelOpenHandle,
+            _session: &mut russh::server::Session,
+        ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+            let server_handle_tx = self.server_handle_tx.clone();
+            async move {
+                if let Some(sender) = server_handle_tx {
+                    let _ = sender.send(_session.handle());
+                }
+                reply.accept().await;
+                Ok(())
+            }
+        }
+
+        fn x11_request(
+            &mut self,
+            channel: russh::ChannelId,
+            _single_connection: bool,
+            _x11_auth_protocol: &str,
+            _x11_auth_cookie: &str,
+            _x11_screen_number: u32,
+            session: &mut russh::server::Session,
+        ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+            let reply = self.reply;
+            async move {
+                match reply {
+                    X11Reply::RejectWithData => {
+                        session.data(channel, &b"before-reply"[..])?;
+                        session.channel_failure(channel)?;
+                    }
+                    X11Reply::CloseWithData => {
+                        session.data(channel, &b"before-close"[..])?;
+                        session.close(channel)?;
+                    }
+                    X11Reply::Ignore => {}
+                }
+                Ok(())
+            }
+        }
+    }
+
+    async fn connected_channel(
+        reply: X11Reply,
+    ) -> (
+        RusshClient,
+        RusshChannel,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    ) {
+        let socket = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = socket.local_addr().unwrap();
+        let host_key = PrivateKey::random(&mut rand_010::rng(), Algorithm::Ed25519).unwrap();
+        let config = Arc::new(russh::server::Config {
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            keys: vec![host_key],
+            ..Default::default()
+        });
+        let server_task = tokio::spawn(async move {
+            let mut server = X11TestServer {
+                reply,
+                server_handle_tx: None,
+            };
+            server.run_on_socket(config, &socket).await
+        });
+        let mut client = RusshClient::connect(client_config(address)).await.unwrap();
+        let channel = client.open_channel().await.unwrap();
+        (client, channel, server_task)
+    }
+
+    fn client_config(address: std::net::SocketAddr) -> SshConnectConfig {
+        SshConnectConfig {
+            host: address.ip().to_string(),
+            port: address.port(),
+            username: "tester".to_owned(),
+            auth: SshAuth::Password("password".to_owned()),
+            timeout: Some(Duration::from_secs(5)),
+            keepalive_interval: None,
+            keepalive_max: None,
+            jump_server: None,
+            proxy: None,
+            keyboard_interactive_responder: None,
+            host_key_verifier: HostKeyVerifier::insecure(),
+            x11_forwarding: false,
+            allow_legacy_algorithms: false,
+            forward_agent: false,
+            agent_identities: Vec::new(),
+        }
+    }
+
+    fn forward_request() -> ForwardRequest {
+        X11Proxy::for_endpoint(
+            ServerEndpoint::Inet {
+                host: "127.0.0.1".to_owned(),
+                port: 6137,
+            },
+            MagicCookie::generate(),
+        )
+        .issue_request(false)
+    }
+
+    #[tokio::test]
+    async fn channel_failure_rejects_request_and_preserves_prior_data() {
+        let (_client, mut channel, server_task) = connected_channel(X11Reply::RejectWithData).await;
+
+        let result = channel.request_x11_forwarding(&forward_request()).await;
+        let event = channel.recv().await;
+        server_task.abort();
+
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.downcast_ref::<X11RequestRejected>().is_some()),
+            "CHANNEL_FAILURE 必须映射为可识别的远端拒绝"
+        );
+        assert!(matches!(
+            event,
+            Some(ChannelEvent::Data(data)) if data == b"before-reply"
+        ));
+    }
+
+    #[tokio::test]
+    async fn close_before_reply_is_not_swallowed() {
+        let (_client, mut channel, server_task) = connected_channel(X11Reply::CloseWithData).await;
+
+        let result = channel.request_x11_forwarding(&forward_request()).await;
+        let data = channel.recv().await;
+        let close = channel.recv().await;
+        server_task.abort();
+
+        assert!(result.is_err(), "响应前关闭通道不能报告为请求成功");
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.downcast_ref::<X11RequestRejected>().is_none()),
+            "通道关闭属于本地协议错误，不能伪装成远端拒绝"
+        );
+        assert!(matches!(
+            data,
+            Some(ChannelEvent::Data(data)) if data == b"before-close"
+        ));
+        assert!(matches!(close, Some(ChannelEvent::Close)));
+    }
+
+    #[tokio::test]
+    async fn missing_channel_reply_times_out() {
+        let (_client, mut channel, server_task) = connected_channel(X11Reply::Ignore).await;
+
+        tokio::time::pause();
+        let result = channel.request_x11_forwarding(&forward_request()).await;
+        server_task.abort();
+        tokio::time::resume();
+
+        assert!(result.is_err(), "没有 CHANNEL_SUCCESS/FAILURE 必须有界超时");
+    }
+
+    async fn x11_server_with_handle() -> (
+        std::net::SocketAddr,
+        tokio::sync::mpsc::UnboundedReceiver<russh::server::Handle>,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    ) {
+        let socket = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = socket.local_addr().unwrap();
+        let host_key = PrivateKey::random(&mut rand_010::rng(), Algorithm::Ed25519).unwrap();
+        let config = Arc::new(russh::server::Config {
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            keys: vec![host_key],
+            ..Default::default()
+        });
+        let (server_handle_tx, server_handle_rx) = tokio::sync::mpsc::unbounded_channel();
+        let server_task = tokio::spawn(async move {
+            let mut server = X11TestServer {
+                reply: X11Reply::Ignore,
+                server_handle_tx: Some(server_handle_tx),
+            };
+            server.run_on_socket(config, &socket).await
+        });
+        (address, server_handle_rx, server_task)
+    }
+
+    async fn client_with_x11(address: std::net::SocketAddr) -> russh::client::Handle<RusshHandler> {
+        let config = client_config(address);
+        let identity = config.target_host_key_identity();
+        let proxy = X11Proxy::for_endpoint(
+            ServerEndpoint::Inet {
+                host: "127.0.0.1".to_owned(),
+                port: 1,
+            },
+            MagicCookie::generate(),
+        );
+        let handler = RusshHandler::new(
+            identity.clone(),
+            HostKeyVerifier::insecure(),
+            Some(proxy.handle()),
+            Arc::new(RwLock::new(None)),
+            false,
+        );
+        let russh_config = build_russh_client_config(&config, &identity).unwrap();
+        let mut session = russh::client::connect(russh_config, address, handler)
+            .await
+            .unwrap();
+        assert!(
+            session
+                .authenticate_password("tester", "password")
+                .await
+                .unwrap()
+                .success()
+        );
+        session
+    }
+
+    #[tokio::test]
+    async fn x11_accept_is_bounded_and_permits_are_released() {
+        const TEST_LIMIT: usize = 32;
+
+        let (address, mut server_handle_rx, server_task) = x11_server_with_handle().await;
+        let session = client_with_x11(address).await;
+        let _session_channel = session.channel_open_session().await.unwrap();
+        let server_handle = server_handle_rx.recv().await.unwrap();
+        let mut channels = Vec::new();
+        for _ in 0..TEST_LIMIT {
+            let channel = server_handle
+                .channel_open_x11("127.0.0.1", 6000)
+                .await
+                .unwrap();
+            channels.push(channel);
+        }
+
+        let overflow = server_handle.channel_open_x11("127.0.0.1", 6000).await;
+        assert!(overflow.is_err(), "第 33 条回连必须因并发上限被拒绝");
+        let normal_channel =
+            tokio::time::timeout(Duration::from_secs(1), session.channel_open_session())
+                .await
+                .expect("X11 达到上限不能卡住普通 session 通道")
+                .expect("普通 session 通道不应受 X11 许可上限影响");
+        drop(normal_channel);
+        channels.pop().unwrap().close().await.unwrap();
+        let reopened = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(channel) = server_handle.channel_open_x11("127.0.0.1", 6000).await {
+                    break channel;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        server_task.abort();
+
+        assert!(reopened.is_ok(), "通道结束后必须释放许可并允许新回连");
+    }
+}
+
 pub struct RusshChannel {
     channel: Channel<client::Msg>,
+    /// 等待 x11-req 响应期间收到的普通通道事件，按原顺序留给 recv。
+    pending: VecDeque<ChannelMsg>,
+}
+
+impl RusshChannel {
+    async fn wait_for_x11_reply(&mut self) -> Result<()> {
+        loop {
+            let Some(message) = self.channel.wait().await else {
+                anyhow::bail!("SSH channel ended before the x11-req response");
+            };
+            match message {
+                ChannelMsg::Success => return Ok(()),
+                ChannelMsg::Failure => return Err(anyhow::Error::new(X11RequestRejected)),
+                ChannelMsg::Close => {
+                    self.pending.push_back(ChannelMsg::Close);
+                    anyhow::bail!("SSH channel closed before the x11-req response");
+                }
+                ChannelMsg::Data { .. }
+                | ChannelMsg::ExtendedData { .. }
+                | ChannelMsg::Eof
+                | ChannelMsg::ExitStatus { .. }
+                | ChannelMsg::ExitSignal { .. } => self.pending.push_back(message),
+                _ => {}
+            }
+        }
+    }
+
+    async fn next_message(&mut self) -> Option<ChannelMsg> {
+        match self.pending.pop_front() {
+            Some(message) => Some(message),
+            None => self.channel.wait().await,
+        }
+    }
+}
+
+fn channel_event(message: ChannelMsg) -> Option<ChannelEvent> {
+    match message {
+        ChannelMsg::Data { data } => Some(ChannelEvent::Data(data.to_vec())),
+        ChannelMsg::ExtendedData { data, ext } => Some(ChannelEvent::ExtendedData {
+            ext,
+            data: data.to_vec(),
+        }),
+        ChannelMsg::Eof => Some(ChannelEvent::Eof),
+        ChannelMsg::ExitStatus { exit_status } => Some(ChannelEvent::ExitStatus(exit_status)),
+        ChannelMsg::ExitSignal {
+            signal_name,
+            error_message,
+            ..
+        } => Some(ChannelEvent::ExitSignal {
+            signal_name: format!("{:?}", signal_name),
+            error_message,
+        }),
+        ChannelMsg::Close => Some(ChannelEvent::Close),
+        _ => None,
+    }
 }
 
 #[async_trait]
@@ -4325,7 +4724,9 @@ impl SshChannel for RusshChannel {
                 request.screen,
             )
             .await?;
-        Ok(())
+        tokio::time::timeout(X11_REQUEST_TIMEOUT, self.wait_for_x11_reply())
+            .await
+            .map_err(|_| anyhow::anyhow!("timed out waiting for the x11-req response"))?
     }
 
     async fn request_agent_forwarding(&mut self) -> Result<()> {
@@ -4349,26 +4750,12 @@ impl SshChannel for RusshChannel {
     }
 
     async fn recv(&mut self) -> Option<ChannelEvent> {
-        let msg = self.channel.wait().await?;
-        Some(match msg {
-            ChannelMsg::Data { data } => ChannelEvent::Data(data.to_vec()),
-            ChannelMsg::ExtendedData { data, ext } => ChannelEvent::ExtendedData {
-                ext,
-                data: data.to_vec(),
-            },
-            ChannelMsg::Eof => ChannelEvent::Eof,
-            ChannelMsg::ExitStatus { exit_status } => ChannelEvent::ExitStatus(exit_status),
-            ChannelMsg::ExitSignal {
-                signal_name,
-                error_message,
-                ..
-            } => ChannelEvent::ExitSignal {
-                signal_name: format!("{:?}", signal_name),
-                error_message,
-            },
-            ChannelMsg::Close => ChannelEvent::Close,
-            _ => return self.recv().await,
-        })
+        loop {
+            let message = self.next_message().await?;
+            if let Some(event) = channel_event(message) {
+                return Some(event);
+            }
+        }
     }
 
     async fn eof(&mut self) -> Result<()> {

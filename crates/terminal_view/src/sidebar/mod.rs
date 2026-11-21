@@ -775,6 +775,8 @@ pub enum TerminalSidebarEvent {
     ShowLineNumbersChanged(bool),
     /// 路径与终端同步开关
     SyncPathChanged(bool),
+    /// 终端面板右上角悬浮工具条显隐
+    PaneToolbarChanged(bool),
     /// 自定义高亮规则变更
     CustomHighlightsChanged(Vec<TerminalHighlightRule>),
     /// 在独立页签中打开当前 SSH 连接的 SFTP 文件管理器
@@ -1348,6 +1350,9 @@ impl TerminalSidebar {
                     }
                     cx.emit(TerminalSidebarEvent::SyncPathChanged(*enabled));
                 }
+                settings_panel::SettingsPanelEvent::PaneToolbarChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::PaneToolbarChanged(*enabled));
+                }
                 settings_panel::SettingsPanelEvent::CustomHighlightsChanged(rules) => {
                     cx.emit(TerminalSidebarEvent::CustomHighlightsChanged(rules.clone()));
                 }
@@ -1551,7 +1556,11 @@ impl TerminalSidebar {
 
     /// 关闭扩展面板（不销毁视图，再次打开复用）。
     pub fn close_extension_panel(&mut self, id: &str, cx: &mut Context<Self>) {
-        if let Some(entry) = self.extension_panels.iter_mut().find(|p| p.id.as_ref() == id) {
+        if let Some(entry) = self
+            .extension_panels
+            .iter_mut()
+            .find(|p| p.id.as_ref() == id)
+        {
             if entry.open {
                 entry.open = false;
                 cx.emit(TerminalSidebarEvent::PanelChanged(None));
@@ -1576,7 +1585,11 @@ impl TerminalSidebar {
         placement: SidebarPlacement,
         cx: &mut Context<Self>,
     ) {
-        if let Some(entry) = self.extension_panels.iter_mut().find(|p| p.id.as_ref() == id) {
+        if let Some(entry) = self
+            .extension_panels
+            .iter_mut()
+            .find(|p| p.id.as_ref() == id)
+        {
             if entry.placement != placement {
                 entry.placement = placement;
                 cx.emit(TerminalSidebarEvent::PanelChanged(None));
@@ -1598,7 +1611,11 @@ impl TerminalSidebar {
         let Some(view) = extension_panels::open_terminal_extension_panel(id, &colors, cx) else {
             return false;
         };
-        match self.extension_panels.iter_mut().find(|p| p.id.as_ref() == id) {
+        match self
+            .extension_panels
+            .iter_mut()
+            .find(|p| p.id.as_ref() == id)
+        {
             Some(entry) => {
                 entry.view = Some(view);
                 true
@@ -1772,7 +1789,11 @@ impl TerminalSidebar {
         let header_bg = self.colors.muted;
         let text = self.colors.foreground;
         let title = entry.title.clone();
-        let icon = entry.icon.clone().with_size(IconSize::Small).text_color(text);
+        let icon = entry
+            .icon
+            .clone()
+            .with_size(IconSize::Small)
+            .text_color(text);
         let close_id = entry.id.clone();
 
         let header = PanelHeader::new(SharedString::from(format!(
@@ -2244,28 +2265,26 @@ impl TerminalSidebar {
             .border_color(border_color)
             .justify_between()
             .child(
-                v_flex().items_center().py_2().gap_1().children(
-                    self.tool_dock
-                        .panels
-                        .iter()
-                        .copied()
-                        .map(|panel| self.render_toolbar_button(panel, window, cx)),
-                )
-                .when(!self.extension_panels.is_empty(), |this| {
-                    this.child(
-                        div()
-                            .w(px(16.0))
-                            .h(px(1.0))
-                            .my_1()
-                            .bg(self.colors.border),
+                v_flex()
+                    .items_center()
+                    .py_2()
+                    .gap_1()
+                    .children(
+                        self.tool_dock
+                            .panels
+                            .iter()
+                            .copied()
+                            .map(|panel| self.render_toolbar_button(panel, window, cx)),
                     )
-                })
-                .children(
-                    self.extension_panels
-                        .iter()
-                        .map(|entry| self.render_extension_toolbar_button(entry, window, cx))
-                        .collect::<Vec<_>>(),
-                ),
+                    .when(!self.extension_panels.is_empty(), |this| {
+                        this.child(div().w(px(16.0)).h(px(1.0)).my_1().bg(self.colors.border))
+                    })
+                    .children(
+                        self.extension_panels
+                            .iter()
+                            .map(|entry| self.render_extension_toolbar_button(entry, window, cx))
+                            .collect::<Vec<_>>(),
+                    ),
             )
             .into_any_element()
     }
@@ -2461,7 +2480,13 @@ impl Render for TerminalSidebarToolbar {
                         }),
                     )
                     .when(!snapshot.extension_buttons.is_empty(), |this| {
-                        this.child(div().w(px(16.0)).h(px(1.0)).my_1().bg(snapshot.colors.border))
+                        this.child(
+                            div()
+                                .w(px(16.0))
+                                .h(px(1.0))
+                                .my_1()
+                                .bg(snapshot.colors.border),
+                        )
                     })
                     .children(snapshot.extension_buttons.iter().cloned().map(|button| {
                         self.render_extension_button(button, item_size, &snapshot.colors, cx)
@@ -2513,9 +2538,10 @@ impl Render for TerminalSidebar {
             .h_full()
             .flex_shrink_0()
             .bg(bg_color)
-            .when(active_panel.is_some() || active_extension.is_some(), |this| {
-                this.w_full()
-            })
+            .when(
+                active_panel.is_some() || active_extension.is_some(),
+                |this| this.w_full(),
+            )
             .when(
                 active_panel.is_none() && active_extension.is_none(),
                 |this| this.w(TOOLBAR_WIDTH),
@@ -2554,9 +2580,9 @@ impl Render for TerminalSidebar {
 mod tests {
     use super::{
         SidebarPanel, TerminalToolDockState, agent_theme_from_terminal_theme,
-        extension_panel_placement_key,
-        build_live_terminal_ai_context, build_terminal_ai_context, terminal_ai_system_instruction,
-        terminal_sidebar_available_panels, workspace_theme_from_terminal_colors,
+        build_live_terminal_ai_context, build_terminal_ai_context, extension_panel_placement_key,
+        terminal_ai_system_instruction, terminal_sidebar_available_panels,
+        workspace_theme_from_terminal_colors,
     };
     use crate::theme::{TerminalColors, TerminalTheme};
     use agent_runtime::{ResourceCapability, ResourceKind, ResourceRef};
@@ -2990,10 +3016,9 @@ mod tests {
 
         assert!(dock.apply_persisted_placements(&persisted).is_empty());
 
-        assert!(dock.update_available_panels([
-            SidebarPanel::Settings,
-            SidebarPanel::ServerMonitor,
-        ]));
+        assert!(
+            dock.update_available_panels([SidebarPanel::Settings, SidebarPanel::ServerMonitor,])
+        );
         assert_eq!(
             dock.apply_persisted_placements(&persisted),
             vec![SidebarPanel::ServerMonitor]

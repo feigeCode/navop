@@ -4453,6 +4453,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8365,6 +8375,7 @@ dependencies = [
  "remote_desktop_view",
  "remote_file_editor",
  "rust-i18n",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -8384,6 +8395,7 @@ dependencies = [
  "uuid",
  "windows 0.62.2",
  "workspace_explorer",
+ "x11_component",
  "x11rb",
  "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=110523127440aefb11ce0cf280ae7c5071337ec5)",
  "zeroize",
@@ -9003,7 +9015,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 1.3.1",
+ "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -9482,6 +9494,7 @@ dependencies = [
  "serde_yaml",
  "sha2 0.10.9",
  "smallvec",
+ "ssh-key",
  "sys-locale",
  "tempfile",
  "thiserror 2.0.21",
@@ -9492,6 +9505,7 @@ dependencies = [
  "tracing",
  "uuid",
  "windows 0.61.3",
+ "x11_component",
  "zeroize",
 ]
 
@@ -11044,7 +11058,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.3",
  "rustls 0.23.45",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -11082,7 +11096,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -12837,7 +12851,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8050abb251097357e24aff63ba2c52a6309ecb7d23a5474023df960a02694d8"
 dependencies = [
  "annotate-snippets",
- "base64 0.21.7",
+ "base64 0.23.1",
  "encoding_rs_io",
  "granit-parser",
  "nohash-hasher",
@@ -13081,6 +13095,7 @@ dependencies = [
  "one-assets",
  "one-core",
  "one-ui",
+ "otp",
  "remote_file_editor",
  "remote_image_preview",
  "rust-i18n",
@@ -13588,6 +13603,7 @@ dependencies = [
  "tokio-socks",
  "tokio-util",
  "tracing",
+ "x11_component",
  "x11_forwarding",
 ]
 
@@ -13673,6 +13689,7 @@ dependencies = [
  "tokio",
  "tool_runtime",
  "tracing",
+ "x11_component",
 ]
 
 [[package]]
@@ -17365,6 +17382,31 @@ dependencies = [
  "libc",
  "once_cell",
  "pkg-config",
+]
+
+[[package]]
+name = "x11_component"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "dirs 6.0.0",
+ "ed25519-dalek 2.2.0",
+ "fs2",
+ "hex",
+ "libc",
+ "libloading",
+ "process-util",
+ "rand 0.8.8",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sysinfo",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "x11_forwarding",
+ "zip 2.4.2",
 ]
 
 [[package]]

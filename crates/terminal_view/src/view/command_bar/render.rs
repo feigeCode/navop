@@ -24,6 +24,16 @@ const COMMAND_BAR_RESIZE_GRIP_HOVER_WIDTH: f32 = 48.0;
 const COMMAND_BAR_RESIZE_GRIP_HEIGHT: f32 = 2.0;
 const COMMAND_BAR_POPOVER_GAP: f32 = 8.0;
 
+/// 弹层底边偏移：命令栏主体高度 + 间距。
+pub(super) fn popover_offset_for(collapsed: bool, input_height: f32) -> f32 {
+    let body_height = if collapsed {
+        COMMAND_BAR_COLLAPSED_HEIGHT
+    } else {
+        input_height
+    };
+    body_height + COMMAND_BAR_POPOVER_GAP
+}
+
 #[derive(Clone)]
 struct CommandBarResize {
     entity_id: EntityId,
@@ -39,11 +49,7 @@ impl Render for CommandBarResize {
 
 impl TerminalCommandBar {
     pub(super) fn popover_bottom_offset(&self) -> f32 {
-        if self.collapsed {
-            COMMAND_BAR_COLLAPSED_HEIGHT + COMMAND_BAR_POPOVER_GAP
-        } else {
-            self.input_height + COMMAND_BAR_POPOVER_GAP
-        }
+        popover_offset_for(self.collapsed, self.input_height)
     }
 
     fn render_resize_handle(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -104,63 +110,72 @@ impl TerminalCommandBar {
         cx.notify();
     }
 
+    /// 折叠态这一行就是置顶快捷指令横条：左侧滚动展示 chips，右侧固定
+    /// 「快捷指令」与「展开命令输入」两个图标按钮。没有置顶指令时左侧留空，
+    /// 避免把入口挤到左边。
     fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .w_full()
             .h(px(COMMAND_BAR_COLLAPSED_HEIGHT))
             .items_center()
-            .justify_between()
-            .child(self.render_toolbar_context(cx))
-            .child(self.render_collapsed_hint(cx))
-            .into_any_element()
-    }
-
-    /// 折叠态把「命令输入」入口做成可点击的展开控件：用户会直接点这段文字，
-    /// 所以点击必须真的展开；按键说明由输入框 placeholder 承担，不另起一行。
-    fn render_collapsed_hint(&self, cx: &mut Context<Self>) -> AnyElement {
-        Button::new("terminal-command-collapsed-hint")
-            .label(t!("TerminalCommandBar.collapsed_hint").to_string())
-            .custom(
-                ButtonCustomVariant::new(cx)
-                    .foreground(self.colors.muted_foreground)
-                    .hover(self.colors.muted)
-                    .active(self.colors.muted),
-            )
-            .small()
-            .tooltip(t!("TerminalCommandBar.expand").to_string())
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.toggle_collapsed(window, cx);
-            }))
-            .into_any_element()
-    }
-
-    fn render_toolbar_context(&self, cx: &mut Context<Self>) -> AnyElement {
-        h_flex()
-            .min_w_0()
             .gap_1()
-            .items_center()
-            .child(self.render_terminal_toggle_button(cx))
-            .child(self.render_quick_command_button(cx))
-            .child(self.render_recording_button(cx))
+            .child(self.render_pinned_quick_chips(cx))
+            .child(self.render_quick_command_icon_button(cx))
+            .child(self.render_command_input_toggle_button(cx))
             .into_any_element()
     }
 
-    fn render_terminal_toggle_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        Button::new("terminal-command-terminal-toggle")
+    /// 折叠态右侧的快捷指令入口：只显示图标，完整弹层里再做搜索、分组与编辑。
+    fn render_quick_command_icon_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        Button::new("terminal-command-quick")
             .child(
                 h_flex()
                     .items_center()
                     .gap_1()
+                    .child(Icon::new(IconName::QuickCommands).xsmall())
+                    .when(!self.quick_commands.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(self.colors.muted_foreground)
+                                .child(self.quick_commands.len().to_string()),
+                        )
+                    }),
+            )
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .foreground(self.colors.foreground)
+                    .hover(self.colors.muted)
+                    .active(self.colors.muted),
+            )
+            .selected(self.quick_commands_open)
+            .small()
+            .tooltip(if self.quick_commands_open {
+                t!("TerminalCommandBar.close_quick_commands").to_string()
+            } else {
+                t!("TerminalCommandBar.open_quick_commands").to_string()
+            })
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.toggle_quick_commands(window, cx);
+            }))
+            .into_any_element()
+    }
+
+    /// 展开 / 收起命令输入：入口固定在折叠行右侧，展开后同一按钮移到输入框
+    /// 右侧，位置保持一致。
+    fn render_command_input_toggle_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let chevron = if self.collapsed {
+            IconName::ChevronUp
+        } else {
+            IconName::ChevronDown
+        };
+        Button::new("terminal-command-input-toggle")
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_0p5()
                     .child(Icon::new(IconName::SquareTerminal).xsmall())
-                    .child(
-                        Icon::new(if self.collapsed {
-                            IconName::ChevronUp
-                        } else {
-                            IconName::ChevronDown
-                        })
-                        .xsmall()
-                        .flex_shrink_0(),
-                    ),
+                    .child(Icon::new(chevron).xsmall()),
             )
             .custom(
                 ButtonCustomVariant::new(cx)
@@ -181,38 +196,11 @@ impl TerminalCommandBar {
             .into_any_element()
     }
 
-    fn render_quick_command_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        Button::new("terminal-command-quick")
-            .icon(IconName::SquareTerminal)
-            .label(format!(
-                "{} · {}",
-                t!("TerminalCommandBar.quick_commands"),
-                self.quick_commands.len()
-            ))
-            .custom(
-                ButtonCustomVariant::new(cx)
-                    .foreground(self.colors.foreground)
-                    .hover(self.colors.muted)
-                    .active(self.colors.muted),
-            )
-            .selected(self.quick_commands_open)
-            .small()
-            .tooltip(if self.quick_commands_open {
-                t!("TerminalCommandBar.close_quick_commands").to_string()
-            } else {
-                t!("TerminalCommandBar.open_quick_commands").to_string()
-            })
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.toggle_quick_commands(window, cx);
-            }))
-            .into_any_element()
-    }
-
     fn render_expanded_actions(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .gap_1()
-            .child(self.render_quick_command_button(cx))
-            .child(self.render_recording_button(cx))
+            .child(self.render_quick_command_icon_button(cx))
+            .child(self.render_command_input_toggle_button(cx))
             .into_any_element()
     }
 
@@ -225,11 +213,6 @@ impl TerminalCommandBar {
             .items_start()
             .gap_1()
             .py_1()
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .child(self.render_terminal_toggle_button(cx)),
-            )
             .child(
                 div().flex_1().min_w_0().h(px(self.input_height)).child(
                     Textarea::new(&self.input_state)
@@ -277,9 +260,6 @@ impl Render for TerminalCommandBar {
             )
             .when(self.quick_commands_open, |bar| {
                 bar.child(self.render_quick_commands(cx))
-            })
-            .when(self.recording_controls_open, |bar| {
-                bar.child(self.render_recording_controls(cx))
             })
             .when(self.collapsed, |bar| bar.child(self.render_toolbar(cx)))
             .when(!self.collapsed, |bar| {

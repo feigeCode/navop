@@ -782,6 +782,18 @@ Settings:
     en: Terminal autocomplete
     zh-CN: 终端自动补全
     zh-HK: 終端自動補全
+  pane_toolbar_section:
+    en: Panel
+    zh-CN: 面板
+    zh-HK: 面板
+  pane_toolbar:
+    en: Pane toolbar
+    zh-CN: 面板工具条
+    zh-HK: 面板工具列
+  pane_toolbar_help:
+    en: Show the floating toolbar with split and recording buttons in the top-right corner of the terminal pane.
+    zh-CN: 在终端面板右上角显示包含分屏与录制按钮的悬浮工具条。
+    zh-HK: 在終端面板右上角顯示包含分屏與錄製按鈕的懸浮工具列。
   middle_click_paste:
     en: Middle click paste
     zh-CN: 中键粘贴
@@ -1778,6 +1790,14 @@ TerminalCommandBar:
     en: Close quick commands
     zh-CN: 关闭快捷指令
     zh-HK: 關閉快速指令
+  quick_bar_hint:
+    en: Pinned quick commands appear here
+    zh-CN: 置顶的快捷指令会显示在这里
+    zh-HK: 置頂的快捷指令會顯示在這裡
+  quick_bar_hint_tooltip:
+    en: Pin a command with the star in the quick command list to show it here.
+    zh-CN: 在快捷指令列表中点击星标置顶，置顶后会常驻显示在这里。
+    zh-HK: 在快捷指令列表中點擊星標置頂，置頂後會常駐顯示在這裡。
   fill:
     en: Fill
     zh-CN: 填入
@@ -2780,6 +2800,16 @@ TerminalRecording:
     en: Failed to select recording folder
     zh-CN: 选择录制目录失败
     zh-HK: 選擇錄製目錄失敗
+
+TerminalX11:
+  external:
+    en: "External X server: %{server}"
+    zh-CN: "外部 X server：%{server}"
+    zh-HK: "外部 X server：%{server}"
+  embedded:
+    en: "Embedded X server: %{version}"
+    zh-CN: "内置 X server：%{version}"
+    zh-HK: "內置 X server：%{version}"
 
 TerminalSessionLog:
   tab_title:

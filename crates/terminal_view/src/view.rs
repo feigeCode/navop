@@ -163,6 +163,7 @@ mod paste_confirm_dialog;
 mod paste_confirmation;
 mod performance_diagnostics;
 mod preferences;
+mod recording_controls;
 mod recording_footer;
 mod recording_playback_config;
 mod recording_playback_controls;
@@ -188,6 +189,7 @@ mod terminal_render;
 mod text_input;
 mod tool_dock;
 mod vi_input;
+mod x11_status;
 mod zmodem_picker;
 
 use actions::*;
@@ -304,14 +306,18 @@ pub struct TerminalView {
     local_command_running: bool,
     /// 上一次已向 TabContainer 广播的连接状态，用于在变化时刷新标签页徽标。
     last_connection_status: Option<one_core::tab_container::TabConnectionStatus>,
+    /// X11 成功只在每次状态跃迁时轻提示一次，不占用终端底部空间。
+    x11_ready_notified: bool,
     /// InlineSuggest 防抖任务（30ms 延迟刷新建议）
     suggestion_debounce: Option<Task<()>>,
     /// 当前 pane 是否正在等待用户选择录制文件保存目录。
     recording_path_prompt_pending: bool,
-    /// 当前 pane 最近一次录制控制错误；在 command bar 中直接展示。
+    /// 当前 pane 最近一次录制控制错误；在录制弹层中直接展示。
     recording_control_error: Option<String>,
-    /// 仅在录制时间持续增长时存在，用于每秒刷新 command bar。
+    /// 仅在录制时间持续增长时存在，用于每秒刷新录制按钮。
     recording_ticker: Option<Task<()>>,
+    /// 录制控制弹层是否打开；按钮位于 pane 右上角悬浮工具条。
+    recording_controls_open: bool,
     /// 当前 pane 独占的 Playback seek 控件状态。
     recording_playback_slider: Entity<SliderState>,
     /// 用户拖动期间只预览位置，Release 后才重建 Playback grid。
