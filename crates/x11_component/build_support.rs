@@ -15,8 +15,9 @@ pub fn target_key(target_os: &str, target_arch: &str) -> Result<&'static str, St
     match (target_os, target_arch) {
         ("windows", "x86_64") => Ok("windows-x86_64"),
         ("windows", "aarch64") => Ok("windows-aarch64"),
+        ("macos", "aarch64") => Ok("macos-aarch64"),
         _ => Err(format!(
-            "{BUNDLED_ARCHIVE_ENV} 仅支持 Windows x86_64/aarch64，实际为 {target_os}-{target_arch}"
+            "{BUNDLED_ARCHIVE_ENV} 仅支持 Windows x86_64/aarch64、macOS aarch64，实际为 {target_os}-{target_arch}"
         )),
     }
 }
@@ -96,7 +97,8 @@ mod tests {
         assert_eq!(target_key("windows", "x86_64").unwrap(), "windows-x86_64");
         assert_eq!(target_key("windows", "aarch64").unwrap(), "windows-aarch64");
         assert!(target_key("windows", "x86").is_err());
-        assert!(target_key("macos", "aarch64").is_err());
+        assert_eq!(target_key("macos", "aarch64").unwrap(), "macos-aarch64");
+        assert!(target_key("macos", "x86_64").is_err());
     }
 
     #[test]

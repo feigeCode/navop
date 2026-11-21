@@ -1,4 +1,4 @@
-//! 「设置 → 通用 → 链接协议」：控制 Navop 是否接管 `ssh://` / `sftp://`。
+//! 「设置 → SSH / SFTP → 链接协议」：控制 Navop 是否接管 `ssh://` / `sftp://`。
 //!
 //! 这些是系统级的公共 scheme，终端与文件管理器通常已经注册了默认处理程序。
 //! 注册会改变双击/点击链接时的默认行为，所以默认全部关闭，只在用户显式勾选后
@@ -9,22 +9,36 @@ use gpui_component::setting::{SettingField, SettingGroup, SettingItem};
 use one_core::settings::AppSettings;
 use rust_i18n::t;
 
-pub fn deeplink_setting_group() -> SettingGroup {
+/// 只含 `ssh://` 的链接协议组，放在「设置 → SSH」。
+pub fn ssh_deeplink_setting_group() -> SettingGroup {
     SettingGroup::new()
         .title(t!("Settings.General.Deeplinks.group_title"))
-        .description(t!("Settings.General.Deeplinks.group_description"))
-        .items(vec![
-            scheme_item(
-                "ssh",
-                t!("Settings.General.Deeplinks.ssh").to_string(),
-                t!("Settings.General.Deeplinks.ssh_desc").to_string(),
-            ),
-            scheme_item(
-                "sftp",
-                t!("Settings.General.Deeplinks.sftp").to_string(),
-                t!("Settings.General.Deeplinks.sftp_desc").to_string(),
-            ),
-        ])
+        .description(t!("Settings.General.Deeplinks.ssh_group_description"))
+        .items(vec![ssh_scheme_item()])
+}
+
+/// 只含 `sftp://` 的链接协议组，放在「设置 → SFTP」。
+pub fn sftp_deeplink_setting_group() -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.General.Deeplinks.group_title"))
+        .description(t!("Settings.General.Deeplinks.sftp_group_description"))
+        .items(vec![sftp_scheme_item()])
+}
+
+fn ssh_scheme_item() -> SettingItem {
+    scheme_item(
+        "ssh",
+        t!("Settings.General.Deeplinks.ssh").to_string(),
+        t!("Settings.General.Deeplinks.ssh_desc").to_string(),
+    )
+}
+
+fn sftp_scheme_item() -> SettingItem {
+    scheme_item(
+        "sftp",
+        t!("Settings.General.Deeplinks.sftp").to_string(),
+        t!("Settings.General.Deeplinks.sftp_desc").to_string(),
+    )
 }
 
 fn scheme_item(scheme: &'static str, title: String, description: String) -> SettingItem {

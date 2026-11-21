@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-本期让 Windows 用户在不安装 VcXsrv 的情况下使用 X11 转发；macOS 继续引导 XQuartz。Linux 不纳入本期内置范围，仍使用本机 X server。远端 sshd、远端软件和现有 cookie 委托链路均不改变。
+本期让 Windows 用户在不安装 VcXsrv、Apple Silicon macOS 用户在不安装 XQuartz/Homebrew 的情况下使用 X11 转发。macOS 仍可显式选择外置 XQuartz；Intel Mac 没有内置 artifact，使用外置模式。Linux 不纳入本期内置范围，仍使用本机 X server。远端 sshd、远端软件和现有 cookie 委托链路均不改变。
 
 本期不实现 X server，不内嵌单窗口 tab，不把裸字节流塞入 universal-plugins。yserver 只作为原生 sidecar 子进程运行。`yserver-core` 不含窗口 shell、Vulkan 渲染和完整生命周期接口，不能靠直接链接 core 替代 sidecar；进程隔离也避免 yserver 崩溃或 GPU 异常带走 Navop。
 
@@ -16,15 +16,15 @@
 
 `crates/x11_component` 负责模式解析、固定清单、内嵌包安装、验签、版本目录、能力预检和进程监督；`crates/ssh` 只读取全局设置并取得解析结果。每个 `RusshClient` 保存自己的状态，避免并发会话相互覆盖。`X11Proxy::for_endpoint` 只替换本机 server 的来源，x11-req、回连通道、fake cookie、真实 cookie 改写和双向中继继续复用。
 
-**本机 endpoint 与远端 DISPLAY 是两套语义。** 远端 DISPLAY 由 sshd 在 accepted x11-req 后分配；远端客户端通过 SSH 通道回连，不会把本机 TCP 端口号当作远端 display。本机使用 `127.0.0.1` 上随机 display 对应的 `6000 + display` 端口；发生冲突时在组件锁内轮换，不再宣称 yserver 支持任意 TCP 端口参数。
+**本机 endpoint 与远端 DISPLAY 是两套语义。** 远端 DISPLAY 由 sshd 在 accepted x11-req 后分配；远端客户端通过 SSH 通道回连，不会把本机 endpoint 当作远端 display。Windows 内置使用 `127.0.0.1` 上随机 display 对应的 `6000 + display` 端口；macOS 使用随机 Unix socket，发生冲突时在组件锁内轮换。不再宣称 yserver 支持任意 TCP 端口参数。
 
 ## 组件供应链与内嵌交付
 
-组件版本为 `1.9.0-navop.1`，源码固定为 [feigeCode/yserver](https://github.com/feigeCode/yserver) 提交 `3b3c7f66fb9d9c80752af36b4948fad0b8760671`，发布物固定到 [navop-v1.9.0-1](https://github.com/feigeCode/yserver/releases/tag/navop-v1.9.0-1)。fork 基于上游 v1.9.0，只增加安全监听参数及 Windows 构建配置，不自动追踪 latest。
+Windows 组件版本为 `1.9.0-navop.1`，源码固定为 [feigeCode/yserver](https://github.com/feigeCode/yserver) 提交 `3b3c7f66fb9d9c80752af36b4948fad0b8760671`；macOS 组件版本为 `1.9.0-navop.2`，源码提交为 `465c3db5`。发布物固定到 [navop-v1.9.0-1](https://github.com/feigeCode/yserver/releases/tag/navop-v1.9.0-1)。fork 基于上游 v1.9.0，增加安全监听参数、Windows 构建配置及 macOS 便携运行时，不自动追踪 latest。macOS 包由固定 bottle 清单构建，携带 19 个非系统动态库、XKB、Vulkan loader/KosmicKrisp、xauth 和许可证。
 
-运行时清单使用 schema 1，按 `windows-x86_64`、`windows-aarch64` 选择 artifact。artifact 只包含版本、SHA-256、Ed25519 签名、最低 Vulkan 版本、`format` 和 `executable_path`，不包含 URL 等下载元数据；Windows zip 完整保留 `yserver.exe`、`xauth.exe`、`xkb/` 与 licenses。`pinned_for_navop` 匹配当前 Navop 版本，artifact 自身版本独立解析。签名原始字节是完整 zip，不是摘要文本或解压后的单个可执行文件。同一组件版本不得替换不同摘要，更新组件必须提升版本并同步固定清单和构建期地址。
+运行时清单使用 schema 1，按 `windows-x86_64`、`windows-aarch64`、`macos-aarch64` 选择 artifact。artifact 只包含版本、SHA-256、Ed25519 签名、最低 Vulkan 版本、`format` 和 `executable_path`，不包含 URL 等下载元数据；zip 完整保留 yserver、xauth、`xkb/` 与 licenses。`pinned_for_navop` 匹配当前 Navop 版本，artifact 自身版本独立解析。签名原始字节是完整 zip，不是摘要文本或解压后的单个可执行文件。同一组件版本不得替换不同摘要，更新组件必须提升版本并同步固定清单和构建期地址。
 
-正式 Windows full 和 standalone-shell x86_64 构建前，`script/prepare-windows-x11-component.py` 从脚本内固定地址获取 zip、限制大小、按固定清单校验 SHA-256 与 Ed25519 签名，再通过 `NAVOP_X11_BUNDLED_ARCHIVE` 交给 `crates/x11_component/build.rs` 编进 `navop.exe`。网络访问只发生在构建机，build script 和成品运行时均不联网获取组件。这样 MSI、Burn、portable 和只替换 exe 的自更新都携带同一组件，不依赖旁置 zip。Win32 没有对应 yserver 产品，standalone-data 不嵌入；二者均不得误装 x64 包。当前 Navop 没有 Windows aarch64 产品 target，但组件安装器保留正确架构选择供后续产品接入。
+正式 Windows full/standalone-shell x86_64 和 macOS full/standalone-shell arm64 构建前，`script/prepare-x11-component.py` 从脚本内固定地址获取 zip、限制大小、按固定清单校验 SHA-256、Ed25519 签名和包结构，再通过 `NAVOP_X11_BUNDLED_ARCHIVE` 交给 `crates/x11_component/build.rs` 编进主可执行文件。网络访问只发生在构建机，build script 和成品运行时均不联网获取组件。这样 MSI、Burn、DMG、portable 和只替换主程序的自更新都携带同一组件，不依赖旁置 zip。Win32、Intel macOS 没有对应内置产品，standalone-data 不嵌入；这些 target 不得误装其他架构的包。当前 Navop 没有 Windows aarch64 产品 target，但组件安装器保留正确架构选择供后续产品接入。
 
 运行时安装和“修复/重新安装”只读取内嵌 zip，仍完整执行灰度、摘要、签名、安全 zip 解压、staging 与原子提交。crate 不包含 HTTP client、远程清单或下载重试逻辑；没有内嵌包、包损坏或目标不符时 fail-closed，不存在网络回退。
 
@@ -38,7 +38,9 @@
 
 组件全局只维护一个 server，同一 Navop 进程内的所有 SSH 会话共享 endpoint，但各自保留 x11-req 的 cookie 委托。cookie 由组件生成并写入 server xauth 文件，同时交给 `X11Proxy::for_endpoint`。本期不跨 Navop 进程附加到已有 server：检测到另一实例仍持有它时明确返回停用原因，而不是猜用对方的 cookie。
 
-启动后必须完成一次真实 X11 setup 握手：发送 MIT-MAGIC-COOKIE-1 ClientHello，读取完整 setup reply，并限制应答大小和总超时。仅等待进程或端口可连接不算健康。
+启动后必须完成一次真实 X11 setup 握手：发送 MIT-MAGIC-COOKIE-1 ClientHello，读取完整 setup reply，并限制应答大小和总超时。仅等待进程或端口可连接不算健康。macOS 的 Vulkan/Metal 首次初始化需要数秒，supervisor 在有界 15 秒内每 100ms 重试握手并检查 child 提前退出，不能在 socket 尚未出现时立即杀进程。Windows 保留原有单次 2 秒握手预算，避免 macOS 冷启动条件改变其他平台的失败时延。
+
+macOS ICD manifest 使用 `@@YSERVER_ROOT@@` 占位，安装时不写 staging 绝对路径；启动前按最终 executable 目录重写，同一路径重启幂等，安装根目录移动后也会更新到新的 KosmicKrisp 路径。ICD 通过同目录临时文件、`sync_all` 和原子 rename 替换，写入失败不能破坏上一份完整 JSON。随包 loader、ICD、XKB 和动态库由环境变量显式指定，不依赖用户 Homebrew。KosmicKrisp 真实渲染条件为 Apple Silicon + macOS 26+ + 可用 Metal 设备，不满足时用户可选择 External 使用 XQuartz。
 
 进程退出由 supervisor 记录并重启，窗口为 10 分钟最多 3 次；超限后本次运行禁用内置，成功、失败和永久禁用都会留下供界面消费的崩溃通知。pidfile 必须同时校验 pid、进程启动时间和可执行文件身份，不能仅按 pid 杀进程。启动在组件锁内同时检查共享 pidfile 和 `instances/*`：另一 Navop 实例仍持有的活跃 server 不能当作孤儿清理；owner 已退出且 child 身份一致的进程才按孤儿回收。首次启动遇到 endpoint 冲突会在锁内轮换随机 identity，崩溃重启保持原 endpoint/cookie。Windows 子进程统一经过 `process-util` 的后台进程配置。
 
@@ -52,7 +54,7 @@ Navop fork 增加 `--listen IP`，只绑定明确给出的单个地址；保留�
 
 ## 用户可见状态
 
-设置页展示模式、已安装组件版本和“修复/重新安装”。会话信息显示以下结构化状态之一：外部 server 及其名称、内置 yserver 及版本、已停用及具体原因。
+设置页展示模式、已安装组件版本和“修复/重新安装”。会话信息保留外部 server、内置 yserver、已停用等结构化状态，但终端底部不常驻 X11 状态栏；仅 External/Embedded 成功跃迁时显示一次自动消失的轻提示，停用和失败不提示。
 
 本地安装失败、验签失败、Vulkan 不足、握手超时、平台/灰度不可用、远端拒绝 x11-req 都必须有对应文案。只有收到真实 CHANNEL_FAILURE 才显示远端拒绝诊断；本地发送失败、连接关闭和响应超时分别归类，成功响应恢复该会话此前的可用状态。远端拒绝时提示检查 `X11Forwarding yes`、`X11DisplayOffset`、xauth，并明确本应用使用 trusted (`-Y`)；不能拿不支持 SECURITY 扩展的 `ssh -X` 行为作为诊断依据。
 
@@ -64,7 +66,8 @@ X11 回连等待响应期间保留其他通道事件，每个 SSH 连接最多�
 - 集成：使用内存清单和 zip，覆盖篡改、重复安装、握手失败、重启，以及离线安装、目标不匹配、损坏包和强制修复。
 - 构建：准备脚本校验真实固定 zip，CI 编译内嵌产物并运行内嵌字节与固定清单一致性测试；普通运行时测试不访问组件网络。
 - 转发：setup 探针执行真实协议往返，并验证可变长度正文完整读取。
+- macOS 实机：真实固定 zip 经安装器解压后，由生产 supervisor 启动并完成 X11 setup；另跑 XQuartz 探测和真实握手。macOS 26+ arm64 CI 先用随包 loader/ICD 运行 `vulkaninfo --summary`，仅在发现设备后启用真实握手；无 Metal 的托管虚拟机仍执行下载、验签、离线安装和结构测试，真实 GUI 启动明确留作实机验收，不通过跳过逻辑掩盖探测成功后的启动回归。
 - E2E：Windows 上真实 yserver + xterm/gtk3-demo 截图比对；该验收不能用 mock 替代。
-- 手动矩阵：有无 Vulkan、RDP、多显示器、HiDPI、与 VcXsrv 共存、Windows arm64。
+- 手动矩阵：Windows 有无 Vulkan、RDP、多显示器、HiDPI、与 VcXsrv 共存、Windows arm64；macOS 26+ 内置与外置 XQuartz 的 X11 GUI、远程 SSH 转发和安装/更新。
 
-本环境无法完成 Windows 真实窗口和 GPU 矩阵时，交付报告必须明确标记未验收，不能把单元测试描述成端到端通过。
+本环境无法完成 Windows 真实窗口和 GPU 矩阵时，交付报告必须明确标记未验收，不能把单元测试描述成端到端通过；macOS 的握手通过也不能代替远程 GUI 和安装更新验收。

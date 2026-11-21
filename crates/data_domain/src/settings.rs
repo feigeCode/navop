@@ -12,8 +12,12 @@ use gpui_component::setting::{
 };
 use one_core::settings::{
     AppSettings, DatabaseOpenMode, LargeTextCellEditorOpenMode, TableViewMode,
+    monospace_font_options,
 };
-use one_ui::{set_table_column_comment_in_header, set_table_row_height};
+use one_ui::{
+    MIN_FONT_SIZE, available_monospace_fonts, set_table_column_comment_in_header,
+    set_table_row_height,
+};
 
 /// 数据设置页在设置列表中的排序（排在通用页之后）。
 const DATABASE_SETTINGS_ORDER: i32 = 10;
@@ -22,26 +26,139 @@ const DATABASE_SETTINGS_ORDER: i32 = 10;
 pub struct DataSettingsProvider;
 
 impl SettingsSectionProvider for DataSettingsProvider {
-    fn pages(&self, _cx: &mut App) -> Vec<(i32, SettingPage)> {
-        vec![
-            (DATABASE_SETTINGS_ORDER, database_settings_page()),
-            (DATABASE_SETTINGS_ORDER + 1, sql_format_page()),
-        ]
+    fn pages(&self, cx: &mut App) -> Vec<(i32, SettingPage)> {
+        vec![(DATABASE_SETTINGS_ORDER, database_settings_page(cx))]
     }
 }
 
-/// SQL 格式化设置页：关键字大小写、缩进风格与预览。
-fn sql_format_page() -> SettingPage {
-    SettingPage::new("SQL 格式化")
-        .resettable(true)
-        .groups([sql_format::sql_format_setting_group()])
+/// 数据库设置页：连接与表格、SQL 编辑器，以及原先独立的「SQL 格式化」。
+///
+/// 格式化是写 SQL 时顺手调的，独立成页反而要找；合并后一页里从表格展示排到
+/// SQL 排版。
+fn database_settings_page(cx: &mut App) -> SettingPage {
+    SettingPage::new("数据库").resettable(true).groups([
+        database_setting_group(),
+        editor_font_setting_group(cx),
+        sql_format::sql_format_setting_group(),
+    ])
 }
 
-/// 数据库设置页。
-fn database_settings_page() -> SettingPage {
-    SettingPage::new("数据库")
-        .resettable(true)
-        .groups([database_setting_group()])
+/// SQL 编辑器与表格预览的字体设置。
+///
+/// SQL 编辑器字号上限比终端宽（72 对 32）：看长 SQL 时会临时放大。
+fn editor_font_setting_group(cx: &mut App) -> SettingGroup {
+    let defaults = AppSettings::default();
+    SettingGroup::new()
+        .title("SQL 编辑器与表格字体")
+        .items(vec![
+            sql_editor_font_family_item(cx, &defaults),
+            sql_editor_font_size_item(&defaults),
+            sql_editor_hover_item(&defaults),
+            table_preview_font_family_item(cx, &defaults),
+        ])
+}
+
+/// 等宽字体选项；与终端字体共用 `one_core` 的合并规则，避免两边列出的字体不一致。
+fn grid_monospace_options(cx: &App) -> Vec<(SharedString, SharedString)> {
+    let installed_font_names = cx.text_system().all_font_names();
+    let custom_font_families = AppSettings::global(cx)
+        .custom_fonts
+        .iter()
+        .flat_map(|font| font.monospace_families.iter().cloned())
+        .collect::<Vec<_>>();
+
+    monospace_font_options(
+        &available_monospace_fonts(),
+        &installed_font_names,
+        &custom_font_families,
+    )
+    .into_iter()
+    .map(|(family, installed)| {
+        let label = if installed {
+            SharedString::from(family.clone())
+        } else {
+            format!("{family} (未安装)").into()
+        };
+        (SharedString::from(family), label)
+    })
+    .collect()
+}
+
+fn sql_editor_font_family_item(cx: &App, defaults: &AppSettings) -> SettingItem {
+    SettingItem::new(
+        "SQL 编辑器字体",
+        SettingField::scrollable_dropdown(
+            grid_monospace_options(cx),
+            |cx: &App| SharedString::from(AppSettings::global(cx).sql_editor_font_family.clone()),
+            |val: SharedString, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.sql_editor_font_family = val.to_string();
+                });
+            },
+        )
+        .default_value(SharedString::from(defaults.sql_editor_font_family.clone())),
+    )
+    .description("SQL 编辑器用的等宽字体")
+}
+
+fn sql_editor_font_size_item(defaults: &AppSettings) -> SettingItem {
+    SettingItem::new(
+        "SQL 编辑器字号",
+        SettingField::number_input(
+            NumberFieldOptions {
+                min: MIN_FONT_SIZE as f64,
+                max: 72.0,
+                ..Default::default()
+            },
+            |cx: &App| AppSettings::global(cx).sql_editor_font_size,
+            |val: f64, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.sql_editor_font_size = val;
+                });
+                cx.refresh_windows();
+            },
+        )
+        .default_value(defaults.sql_editor_font_size),
+    )
+    .description("SQL 编辑器文字大小")
+}
+
+fn sql_editor_hover_item(defaults: &AppSettings) -> SettingItem {
+    SettingItem::new(
+        "悬停提示",
+        SettingField::switch(
+            |cx: &App| AppSettings::global(cx).sql_editor_hover_enabled,
+            |val: bool, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.sql_editor_hover_enabled = val;
+                });
+                cx.refresh_windows();
+            },
+        )
+        .default_value(defaults.sql_editor_hover_enabled),
+    )
+    .description("鼠标停在表名、列名上时显示详细信息")
+}
+
+fn table_preview_font_family_item(cx: &App, defaults: &AppSettings) -> SettingItem {
+    SettingItem::new(
+        "表格预览字体",
+        SettingField::scrollable_dropdown(
+            grid_monospace_options(cx),
+            |cx: &App| {
+                SharedString::from(AppSettings::global(cx).table_preview_font_family.clone())
+            },
+            |val: SharedString, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.table_preview_font_family = val.to_string();
+                });
+            },
+        )
+        .default_value(SharedString::from(
+            defaults.table_preview_font_family.clone(),
+        )),
+    )
+    .description("单元格大文本预览用的等宽字体")
 }
 
 /// 数据库设置分组：打开方式、大文本编辑器、自动保存、查询上限与表格展示。
@@ -237,4 +354,30 @@ fn table_view_mode_item(defaults: &AppSettings) -> SettingItem {
         .default_value(SharedString::from(defaults.table_view_mode.as_str())),
     )
     .description("网格按行列平铺；纵向按「列名：值」逐行展开，适合宽表。")
+}
+
+#[cfg(test)]
+mod tests {
+
+    /// 数据库页必须保留 SQL 编辑器与表格预览的字体设置。
+    ///
+    /// 这四项原先在「通用 → 字体」里，迁移过来后要是漏了哪一项，用户就再也找不到
+    /// 改编辑器字体的入口了，所以用源码契约兜住。
+    #[test]
+    fn database_page_keeps_editor_and_table_font_items() {
+        let source = include_str!("settings.rs")
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .map(|(implementation, _)| implementation)
+            .expect("settings.rs has a tests module");
+
+        assert!(source.contains("editor_font_setting_group"));
+        for title in [
+            "SQL 编辑器字体",
+            "SQL 编辑器字号",
+            "悬停提示",
+            "表格预览字体",
+        ] {
+            assert!(source.contains(title), "数据库页缺少设置项 {title}");
+        }
+    }
 }

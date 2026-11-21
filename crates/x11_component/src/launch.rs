@@ -176,10 +176,41 @@ fn tokio_command(spec: &LaunchSpec) -> Result<Command, X11ComponentError> {
     let mut command = Command::new(command_spec.executable());
     command
         .args(command_spec.arguments())
-        .env("XAUTHORITY", &xauth)
+        .env("XAUTHORITY", &xauth);
+    #[cfg(target_os = "macos")]
+    if spec.version != "manual" {
+        crate::archive::rewrite_macos_icd(&spec.executable)?;
+        let runtime = spec
+            .executable
+            .parent()
+            .ok_or_else(|| X11ComponentError::Process("yserver 缺少运行目录".into()))?;
+        command
+            .env("XKB_CONFIG_ROOT", runtime.join("xkb"))
+            .env(
+                "VK_DRIVER_FILES",
+                runtime.join("icd.d/kosmickrisp_mesa_icd.aarch64.json"),
+            )
+            .env("DYLD_FALLBACK_LIBRARY_PATH", runtime.join("lib"))
+            .env(
+                "YSERVER_VULKAN_LOADER",
+                runtime.join("lib/libvulkan.1.dylib"),
+            );
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(
+            if cfg!(target_os = "macos")
+                && (spec.version != "manual" || std::env::var_os("NAVOP_X11_YSERVER_LOG").is_some())
+            {
+                Stdio::from(
+                    std::fs::File::create(spec.root.join("yserver-macos.log"))
+                        .map_err(process_error)?,
+                )
+            } else {
+                Stdio::null()
+            },
+        )
         .kill_on_drop(true);
     configure_tokio_background_child(&mut command);
     Ok(command)

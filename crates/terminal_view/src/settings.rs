@@ -255,6 +255,21 @@ pub fn update_settings<T>(
     Some(next)
 }
 
+/// 从 `App` 侧（例如设置页）修改「vim/TUI 滚轮映射为方向键」。
+///
+/// 这个开关存在本地 settings 文件里而不是 `AppSettings`，所以设置页需要一个
+/// 直接接受 `&mut App` 的入口；终端侧边栏只改当前会话，不动这里。
+pub fn update_vim_scroll_to_arrow_keys(cx: &mut App, enabled: bool) {
+    let Some(global) = cx.try_global::<GlobalTerminalLocalSettings>().cloned() else {
+        return;
+    };
+    global.0.update(cx, |store, cx| {
+        let mut next = store.snapshot();
+        next.vim_scroll_to_arrow_keys = enabled;
+        store.replace(next, cx);
+    });
+}
+
 fn terminal_settings_path() -> anyhow::Result<PathBuf> {
     let config_dir = get_config_dir()?;
     if !config_dir.exists() {

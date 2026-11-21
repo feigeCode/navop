@@ -735,6 +735,8 @@ pub enum TerminalSidebarEvent {
     FontFamilyChanged(String),
     /// 主题变更
     ThemeChanged(TerminalTheme),
+    /// 丢弃当前会话的临时覆盖，回到全局默认
+    ResetSessionDefaults,
     /// 滚屏历史保留行数变更
     ScrollbackLinesChanged(usize),
     /// 粘贴命令到终端输入区（不自动回车）
@@ -749,8 +751,6 @@ pub enum TerminalSidebarEvent {
     ConfirmMultilinePasteChanged(bool),
     /// 高危命令确认开关
     ConfirmHighRiskCommandChanged(bool),
-    /// 自动会话日志开关
-    AutoSessionLoggingChanged(bool),
     /// 选中自动复制开关
     AutoCopyChanged(bool),
     /// 自动补全开关
@@ -775,8 +775,6 @@ pub enum TerminalSidebarEvent {
     ShowLineNumbersChanged(bool),
     /// 路径与终端同步开关
     SyncPathChanged(bool),
-    /// 终端面板右上角悬浮工具条显隐
-    PaneToolbarChanged(bool),
     /// 自定义高亮规则变更
     CustomHighlightsChanged(Vec<TerminalHighlightRule>),
     /// 在独立页签中打开当前 SSH 连接的 SFTP 文件管理器
@@ -1279,6 +1277,9 @@ impl TerminalSidebar {
                 settings_panel::SettingsPanelEvent::Close => {
                     this.close_tool(SidebarPanel::Settings, cx);
                 }
+                settings_panel::SettingsPanelEvent::ResetSessionDefaults => {
+                    cx.emit(TerminalSidebarEvent::ResetSessionDefaults);
+                }
                 settings_panel::SettingsPanelEvent::FontSizeChanged(size) => {
                     cx.emit(TerminalSidebarEvent::FontSizeChanged(*size));
                 }
@@ -1302,9 +1303,6 @@ impl TerminalSidebar {
                     cx.emit(TerminalSidebarEvent::ConfirmHighRiskCommandChanged(
                         *enabled,
                     ));
-                }
-                settings_panel::SettingsPanelEvent::AutoSessionLoggingChanged(enabled) => {
-                    cx.emit(TerminalSidebarEvent::AutoSessionLoggingChanged(*enabled));
                 }
                 settings_panel::SettingsPanelEvent::AutoCopyChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::AutoCopyChanged(*enabled));
@@ -1349,9 +1347,6 @@ impl TerminalSidebar {
                         });
                     }
                     cx.emit(TerminalSidebarEvent::SyncPathChanged(*enabled));
-                }
-                settings_panel::SettingsPanelEvent::PaneToolbarChanged(enabled) => {
-                    cx.emit(TerminalSidebarEvent::PaneToolbarChanged(*enabled));
                 }
                 settings_panel::SettingsPanelEvent::CustomHighlightsChanged(rules) => {
                     cx.emit(TerminalSidebarEvent::CustomHighlightsChanged(rules.clone()));

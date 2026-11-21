@@ -16,6 +16,7 @@ mod quick_command_parameters;
 mod quick_command_sync;
 pub mod selection_highlight_addon;
 pub mod serial_form_window;
+pub mod session_settings;
 pub mod settings;
 pub mod sidebar;
 
@@ -32,16 +33,18 @@ pub use one_core::layout::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
 };
 pub use serial_form_window::{SerialFormWindow, SerialFormWindowConfig};
+pub use session_settings::TerminalSessionOverrides;
 pub use settings::{
     TerminalHighlightRule, TerminalSettings, current_settings, init_settings, update_settings,
-};
-pub use sidebar::{
-    HostResourceUsage, SettingsPanel, SidebarPanel, TerminalSidebar, TerminalSidebarEvent,
-    probe_host_resource_usage,
+    update_vim_scroll_to_arrow_keys,
 };
 pub use sidebar::{
     ExtensionPanelSpec as SidebarExtensionPanelSpec, TerminalExtensionPanelHost,
     init_terminal_extension_panels as init_sidebar_extension_panels,
+};
+pub use sidebar::{
+    HostResourceUsage, SettingsPanel, SidebarPanel, TerminalSidebar, TerminalSidebarEvent,
+    probe_host_resource_usage,
 };
 pub use ssh_form::{SshFormPostSaveAction, SshFormWindow, SshFormWindowConfig};
 pub use telnet_form_window::{TelnetFormWindow, TelnetFormWindowConfig};

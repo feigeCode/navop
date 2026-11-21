@@ -88,6 +88,73 @@ fn is_symlink(mode: Option<u32>) -> bool {
     mode.is_some_and(|mode| mode & 0o170000 == 0o120000)
 }
 
+/// 必须对原子提交后的最终路径执行，不能把 staging 绝对路径写进已安装 ICD。
+#[cfg(target_os = "macos")]
+pub(crate) fn rewrite_macos_icd(executable: &Path) -> Result<(), X11ComponentError> {
+    let executable_dir = executable
+        .parent()
+        .ok_or_else(|| install("macOS yserver 缺少运行目录"))?;
+    let loader = executable_dir.join("lib/libvulkan_kosmickrisp.dylib");
+    let path = executable_dir.join("icd.d/kosmickrisp_mesa_icd.aarch64.json");
+    if !path.is_file() {
+        return Err(install("macOS 发布物缺少 KosmicKrisp ICD"));
+    }
+    if !loader.is_file() {
+        return Err(install("macOS 发布物缺少 KosmicKrisp Vulkan 驱动"));
+    }
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).map_err(io_error)?)
+            .map_err(|_| install("macOS ICD 不是有效 JSON"))?;
+    let library_path = document
+        .get_mut("ICD")
+        .and_then(|icd| icd.get_mut("library_path"))
+        .ok_or_else(|| install("macOS ICD 缺少 library_path"))?;
+    let current = library_path
+        .as_str()
+        .ok_or_else(|| install("macOS ICD library_path 不是字符串"))?;
+    if current != "@@YSERVER_ROOT@@/lib/libvulkan_kosmickrisp.dylib"
+        && !current.ends_with("/lib/libvulkan_kosmickrisp.dylib")
+    {
+        return Err(install("macOS ICD 包含非预期的 Vulkan 驱动路径"));
+    }
+    let expected = loader.display().to_string();
+    if current == expected {
+        return Ok(());
+    }
+    *library_path = serde_json::Value::String(expected);
+    let rewritten = serde_json::to_vec_pretty(&document)
+        .map_err(|error| install(format!("macOS ICD 序列化失败：{error}")))?;
+    let temporary = path.with_file_name(format!(
+        ".kosmickrisp-{}-{:016x}.tmp",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    atomic_replace(&path, &rewritten, &temporary)
+}
+
+#[cfg(target_os = "macos")]
+fn atomic_replace(path: &Path, contents: &[u8], temporary: &Path) -> Result<(), X11ComponentError> {
+    use std::io::Write as _;
+
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(temporary)
+            .map_err(io_error)?;
+        file.write_all(contents).map_err(io_error)?;
+        file.sync_all().map_err(io_error)?;
+        std::fs::rename(temporary, path).map_err(io_error)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests;
+
 fn make_executable(_path: &Path) -> Result<(), X11ComponentError> {
     #[cfg(unix)]
     {

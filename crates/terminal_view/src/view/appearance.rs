@@ -21,16 +21,22 @@ impl TerminalView {
         self.local_working_dir.as_deref()
     }
 
-    /// 设置字体大小
+    /// 设置字体大小。
+    ///
+    /// 只影响当前会话：写进会话覆盖并立刻重排，不落盘。全局默认字号在
+    /// 「设置 → 终端」里改。
     pub fn set_font_size(&mut self, size: f32, cx: &mut Context<Self>) {
         let clamped = size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
         let current = f32::from(self.font_size);
         if (current - clamped).abs() < f32::EPSILON {
             return;
         }
-        let _ = update_settings(cx, move |settings| {
-            settings.font_size = clamped;
-        });
+        self.session_overrides.font_size = Some(clamped);
+        self.font_size = px(clamped);
+        self.line_height = self.font_size * self.line_height_scale;
+        self.font_metrics = None;
+        self.last_size = None;
+        cx.notify();
     }
 
     pub fn apply_terminal_settings(
@@ -198,10 +204,13 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.current_theme == *theme {
+        let theme = theme
+            .clone()
+            .with_window_opacity(AppSettings::global(cx).window_opacity);
+        if self.current_theme == theme {
             return;
         }
-        self.current_theme = theme.clone();
+        self.current_theme = theme;
         self.sync_sidebar_theme(window, cx);
         cx.emit(TabContentEvent::StateChanged);
         cx.notify();

@@ -231,6 +231,10 @@ Settings:
       en: Monospace font used by terminal views.
       zh-CN: 终端使用的等宽字体。
       zh-HK: 終端使用的等寬字體。
+    font_family_missing:
+      en: " (not installed)"
+      zh-CN: （未安装）
+      zh-HK: （未安裝）
     font_size:
       en: Font Size
       zh-CN: 字号
@@ -263,6 +267,159 @@ Settings:
       en: Suggest previous commands while typing in the terminal.
       zh-CN: 输入命令时显示历史命令建议。
       zh-HK: 輸入指令時顯示歷史指令建議。
+
+    appearance_group:
+      en: Appearance
+      zh-CN: 外观
+      zh-HK: 外觀
+    theme:
+      en: Terminal Theme
+      zh-CN: 终端主题
+      zh-HK: 終端主題
+    theme_description:
+      en: Color palette used by terminal views. Sidebar changes only apply to the current session.
+      zh-CN: 终端使用的配色；侧边栏里改只对当前会话生效。
+      zh-HK: 終端使用的配色；側邊欄裡改只對目前工作階段生效。
+    cursor_blink:
+      en: Blinking Cursor
+      zh-CN: 光标闪烁
+      zh-HK: 游標閃爍
+    cursor_blink_description:
+      en: Blink the terminal cursor while it is idle.
+      zh-CN: 终端光标空闲时闪烁。
+      zh-HK: 終端游標閒置時閃爍。
+    selection_highlight:
+      en: Selection Highlight
+      zh-CN: 相同文本高亮
+      zh-HK: 相同文字高亮
+    selection_highlight_description:
+      en: Highlight every occurrence of the selected text in the terminal.
+      zh-CN: 选中文本时，高亮终端里所有相同的内容。
+      zh-HK: 選取文字時，高亮終端裡所有相同的內容。
+    show_line_numbers:
+      en: Line Numbers
+      zh-CN: 显示行号
+      zh-HK: 顯示行號
+    show_line_numbers_description:
+      en: Show a line number gutter next to the terminal content.
+      zh-CN: 在终端内容左侧显示行号。
+      zh-HK: 在終端內容左側顯示行號。
+    show_line_timestamps:
+      en: Line Timestamps
+      zh-CN: 显示时间戳
+      zh-HK: 顯示時間戳
+    show_line_timestamps_description:
+      en: Show when each terminal line was produced.
+      zh-CN: 显示每行输出产生的时间。
+      zh-HK: 顯示每行輸出產生的時間。
+    scrolling_group:
+      en: Scrollback and Logs
+      zh-CN: 回滚与日志
+      zh-HK: 回捲與日誌
+    auto_session_logging:
+      en: Automatic Session Logging
+      zh-CN: 自动记录会话
+      zh-HK: 自動記錄工作階段
+    auto_session_logging_description:
+      en: Write every terminal session to a log file automatically.
+      zh-CN: 自动把终端会话写入日志文件。
+      zh-HK: 自動把終端工作階段寫入日誌檔案。
+    clipboard_group:
+      en: Clipboard
+      zh-CN: 复制与粘贴
+      zh-HK: 複製與貼上
+    middle_click_paste:
+      en: Middle-click Paste
+      zh-CN: 中键粘贴
+      zh-HK: 中鍵貼上
+    middle_click_paste_description:
+      en: Paste the clipboard when the middle mouse button is clicked.
+      zh-CN: 点击鼠标中键时粘贴剪贴板内容。
+      zh-HK: 點擊滑鼠中鍵時貼上剪貼簿內容。
+    right_click_paste:
+      en: Right-click Paste
+      zh-CN: 右键粘贴
+      zh-HK: 右鍵貼上
+    right_click_paste_description:
+      en: Paste the clipboard on right click instead of opening the context menu.
+      zh-CN: 右键直接粘贴剪贴板内容，而不是弹出菜单。
+      zh-HK: 右鍵直接貼上剪貼簿內容，而不是彈出選單。
+    paste_image_upload:
+      en: Paste Image to Upload
+      zh-CN: 粘贴图片上传
+      zh-HK: 貼上圖片上傳
+    paste_image_upload_description:
+      en: Upload clipboard images to the remote host when pasting into SSH sessions.
+      zh-CN: 在 SSH 会话里粘贴图片时上传到远端主机。
+      zh-HK: 在 SSH 工作階段裡貼上圖片時上傳到遠端主機。
+    sync_path:
+      en: Sync Path with Terminal
+      zh-CN: 路径与终端同步
+      zh-HK: 路徑與終端同步
+    sync_path_description:
+      en: Follow the terminal working directory in the file panel, and the reverse.
+      zh-CN: 文件面板跟随终端当前目录，反之亦然。
+      zh-HK: 檔案面板跟隨終端目前目錄，反之亦然。
+    input_group:
+      en: Input Assist
+      zh-CN: 输入辅助
+      zh-HK: 輸入輔助
+    suggestion_popup:
+      en: Suggestion Popup
+      zh-CN: 命令建议弹层
+      zh-HK: 指令建議彈層
+    suggestion_popup_description:
+      en: Show history suggestions in a floating popup while typing.
+      zh-CN: 输入时以浮层显示历史命令建议。
+      zh-HK: 輸入時以浮層顯示歷史指令建議。
+    suggestion_popup_opacity:
+      en: Suggestion Popup Opacity
+      zh-CN: 建议弹层不透明度
+      zh-HK: 建議彈層不透明度
+    suggestion_popup_opacity_description:
+      en: Between 0.1 and 1.0.
+      zh-CN: 取值 0.1–1.0。
+      zh-HK: 取值 0.1–1.0。
+    safety_group:
+      en: Confirmation
+      zh-CN: 危险操作确认
+      zh-HK: 危險操作確認
+    confirm_multiline_paste:
+      en: Confirm Multi-line Paste
+      zh-CN: 多行粘贴确认
+      zh-HK: 多行貼上確認
+    confirm_multiline_paste_description:
+      en: Ask before pasting content that spans multiple lines.
+      zh-CN: 粘贴多行内容前先确认。
+      zh-HK: 貼上多行內容前先確認。
+    confirm_high_risk_command:
+      en: Confirm High-risk Commands
+      zh-CN: 高危命令确认
+      zh-HK: 高危指令確認
+    confirm_high_risk_command_description:
+      en: Ask before running commands that may destroy data.
+      zh-CN: 执行可能破坏数据的命令前先确认。
+      zh-HK: 執行可能破壞資料的指令前先確認。
+    interface_group:
+      en: Interface and Keys
+      zh-CN: 界面与按键
+      zh-HK: 介面與按鍵
+    show_pane_toolbar:
+      en: Floating Pane Toolbar
+      zh-CN: 悬浮工具条
+      zh-HK: 懸浮工具列
+    show_pane_toolbar_description:
+      en: Show the floating toolbar above terminal panes.
+      zh-CN: 在终端面板上方显示悬浮工具条。
+      zh-HK: 在終端面板上方顯示懸浮工具列。
+    vim_scroll_to_arrow_keys:
+      en: Wheel as Arrow Keys in vim/TUI
+      zh-CN: 滚轮映射为方向键
+      zh-HK: 滾輪對應為方向鍵
+    vim_scroll_to_arrow_keys_description:
+      en: Map the mouse wheel to arrow keys in vim and other full-screen programs.
+      zh-CN: 在 vim 等全屏程序里把鼠标滚轮映射为方向键。
+      zh-HK: 在 vim 等全螢幕程式裡把滑鼠滾輪對應為方向鍵。
 
 LocalTerminal:
   group_title:

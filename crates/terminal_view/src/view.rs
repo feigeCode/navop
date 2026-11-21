@@ -61,6 +61,7 @@ use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromp
 use crate::public_mcp::TerminalPublicMcpRegistration;
 use crate::quick_command_sync::{QuickCommandSyncEvent, QuickCommandSyncNotifier};
 use crate::selection_highlight_addon::SelectionHighlightAddon;
+use crate::session_settings::TerminalSessionOverrides;
 use crate::settings::{
     GlobalTerminalLocalSettings, TerminalHighlightRule, TerminalSettings, TerminalSettingsEvent,
     current_settings, update_settings,
@@ -242,6 +243,12 @@ pub struct TerminalView {
     command_bar: Entity<TerminalCommandBar>,
     sidebar_toolbar: Entity<TerminalSidebarToolbar>,
     sidebar_tool_panels: HashMap<SidebarPanel, Entity<TerminalSidebarToolPanel>>,
+
+    /// 只对当前会话生效的终端设置覆盖。
+    ///
+    /// 侧边栏里改字号、主题、粘贴行为时写这里，不动 `AppSettings` 也不落盘；
+    /// 全局默认值在「设置 → 终端」维护。
+    session_overrides: TerminalSessionOverrides,
 
     font_size: Pixels,
     line_height: Pixels,

@@ -55,6 +55,33 @@ fn fixed_terminal_theme_does_not_depend_on_application_theme() {
 }
 
 #[test]
+fn window_opacity_applies_to_fixed_terminal_theme_backgrounds() {
+    let app_theme = Theme::from(ThemeColor::dark().as_ref());
+    let terminal_theme = TerminalTheme::resolve("ocean", &app_theme).with_window_opacity(0.62);
+
+    assert!((terminal_theme.background.a - 0.62).abs() <= f32::EPSILON);
+    assert_eq!(1.0, terminal_theme.foreground.a);
+    assert_eq!(1.0, terminal_theme.cursor.a);
+    assert_eq!(1.0, terminal_theme.selection.a);
+}
+
+#[test]
+fn every_terminal_theme_entry_point_carries_window_opacity() {
+    let initialization = include_str!("view/initialization.rs");
+    let appearance = include_str!("view/appearance.rs");
+    let opacity_call = ".with_window_opacity(AppSettings::global(cx).window_opacity)";
+
+    assert!(
+        initialization.contains(opacity_call),
+        "终端首次创建时的默认主题也要带上窗口透明度"
+    );
+    assert!(
+        appearance.contains(opacity_call),
+        "运行中切换主题或窗口透明度时必须重新套用终端背景 alpha"
+    );
+}
+
+#[test]
 fn unknown_terminal_theme_falls_back_to_application() {
     let app_theme = Theme::from(ThemeColor::dark().as_ref());
 

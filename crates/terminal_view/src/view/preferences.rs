@@ -23,6 +23,48 @@ impl TerminalView {
         });
     }
 
+    /// 当前会话的终端设置覆盖（侧边栏改动只写这里，不落盘）。
+    pub fn session_overrides(&self) -> &TerminalSessionOverrides {
+        &self.session_overrides
+    }
+
+    /// 本次会话实际生效的终端设置：全局默认值叠加会话覆盖。
+    pub fn effective_terminal_settings(&self, cx: &App) -> TerminalSettings {
+        let base = current_settings(cx);
+        self.session_overrides.merged_into(&base)
+    }
+
+    /// 更新会话级覆盖并立刻应用到当前终端。
+    ///
+    /// 只改内存和渲染状态，不写 `AppSettings`、不落盘；想改全局默认值去「设置 → 终端」。
+    pub(crate) fn update_session_overrides(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        updater: impl FnOnce(&mut TerminalSessionOverrides),
+    ) {
+        let mut next = self.session_overrides.clone();
+        updater(&mut next);
+        if next == self.session_overrides {
+            return;
+        }
+        self.session_overrides = next;
+        let settings = self.effective_terminal_settings(cx);
+        self.apply_settings_snapshot(&settings, window, cx);
+        cx.notify();
+    }
+
+    /// 放弃当前会话的全部覆盖，回到全局默认值。
+    pub fn reset_session_overrides(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.session_overrides.is_empty() {
+            return;
+        }
+        self.session_overrides.clear();
+        let settings = current_settings(cx);
+        self.apply_settings_snapshot(&settings, window, cx);
+        cx.notify();
+    }
+
     /// 把侧栏各工具面板的停靠位置合并进设置。
     ///
     /// 每台终端可用的面板不同（本地终端有文件浏览器，SSH 终端有文件管理器和
@@ -45,13 +87,17 @@ impl TerminalView {
         });
     }
 
+    /// 选中即复制：只影响当前会话。
     pub fn set_auto_copy(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.auto_copy_on_select == enabled {
             return;
         }
-        let _ = update_settings(cx, move |settings| {
-            settings.auto_copy = enabled;
+        self.auto_copy_on_select = enabled;
+        self.session_overrides.auto_copy = Some(enabled);
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_auto_copy(enabled, cx);
         });
+        cx.notify();
     }
 
     pub fn apply_autocomplete_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -74,13 +120,13 @@ impl TerminalView {
         cx.notify();
     }
 
+    /// 自动补全：只影响当前会话。
     pub fn set_autocomplete_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.autocomplete_enabled == enabled {
             return;
         }
-        let _ = update_settings(cx, move |settings| {
-            settings.enable_autocomplete = enabled;
-        });
+        self.session_overrides.enable_autocomplete = Some(enabled);
+        self.apply_autocomplete_enabled(enabled, cx);
     }
 
     pub fn apply_suggestion_popup_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -91,19 +137,16 @@ impl TerminalView {
             return;
         }
         self.suggestion_popup_enabled = enabled;
-        let _ = update_settings(cx, move |settings| {
-            settings.show_suggestion_popup = enabled;
-        });
         cx.notify();
     }
 
+    /// 候选词弹层开关：只影响当前会话。
     pub fn set_suggestion_popup_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.suggestion_popup_enabled == enabled {
             return;
         }
-        let _ = update_settings(cx, move |settings| {
-            settings.show_suggestion_popup = enabled;
-        });
+        self.session_overrides.show_suggestion_popup = Some(enabled);
+        self.apply_suggestion_popup_enabled(enabled, cx);
     }
 
     /// 设置命令提示 / cd 补全 / 历史搜索下拉弹层的背景不透明度（issue #73）。
@@ -112,45 +155,57 @@ impl TerminalView {
         if self.suggestion_popup_opacity == opacity {
             return;
         }
-        let _ = update_settings(cx, move |settings| {
-            settings.suggestion_popup_opacity = opacity;
-        });
+        self.suggestion_popup_opacity = opacity;
+        self.session_overrides.suggestion_popup_opacity = Some(opacity);
+        cx.notify();
     }
 
     pub fn set_middle_click_paste(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.middle_click_paste == enabled {
             return;
         }
-        let _ = update_settings(cx, move |settings| {
-            settings.middle_click_paste = enabled;
+        self.middle_click_paste = enabled;
+        self.session_overrides.middle_click_paste = Some(enabled);
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_middle_click_paste(enabled, cx);
         });
+        cx.notify();
     }
 
     pub fn set_right_click_paste(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.right_click_paste == enabled {
             return;
         }
-        let _ = update_settings(cx, move |settings| {
-            settings.right_click_paste = enabled;
+        self.right_click_paste = enabled;
+        self.session_overrides.right_click_paste = Some(enabled);
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_right_click_paste(enabled, cx);
         });
+        cx.notify();
     }
 
     pub fn set_paste_image_upload(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.paste_image_upload == enabled {
             return;
         }
-        let _ = update_settings(cx, move |settings| {
-            settings.paste_image_upload = enabled;
+        self.paste_image_upload = enabled;
+        self.session_overrides.paste_image_upload = Some(enabled);
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_paste_image_upload(enabled, cx);
         });
+        cx.notify();
     }
 
     pub fn set_vim_scroll_to_arrow_keys(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.vim_scroll_to_arrow_keys == enabled {
             return;
         }
-        let _ = update_settings(cx, move |settings| {
-            settings.vim_scroll_to_arrow_keys = enabled;
+        self.vim_scroll_to_arrow_keys = enabled;
+        self.session_overrides.vim_scroll_to_arrow_keys = Some(enabled);
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_vim_scroll_to_arrow_keys(enabled, cx);
         });
+        cx.notify();
     }
 
     /// 增大字体
