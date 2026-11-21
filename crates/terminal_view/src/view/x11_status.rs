@@ -8,38 +8,38 @@ const X11_SESSION_FOOTER_TEXT_SIZE: Pixels = px(11.0);
 
 pub(super) struct X11SessionStatus {
     label: String,
-    disabled: bool,
 }
 
-pub(super) fn session_status(status: Option<X11ForwardingStatus>) -> Option<X11SessionStatus> {
-    let (label, disabled) = match status? {
-        X11ForwardingStatus::External { server } => (
-            t!("TerminalX11.external", server = server).to_string(),
-            false,
-        ),
-        X11ForwardingStatus::Embedded { version, .. } => (
-            t!("TerminalX11.embedded", version = version).to_string(),
-            false,
-        ),
-        X11ForwardingStatus::Disabled { reason } => (
-            t!("TerminalX11.disabled", reason = reason).to_string(),
-            true,
-        ),
+pub(super) fn session_status(
+    x11_enabled: bool,
+    status: Option<X11ForwardingStatus>,
+) -> Option<X11SessionStatus> {
+    if !x11_enabled {
+        return None;
+    }
+    let label = match status? {
+        X11ForwardingStatus::External { server } => {
+            t!("TerminalX11.external", server = server).to_string()
+        }
+        X11ForwardingStatus::Embedded { version, .. } => {
+            t!("TerminalX11.embedded", version = version).to_string()
+        }
+        X11ForwardingStatus::Disabled { .. } => return None,
     };
-    Some(X11SessionStatus { label, disabled })
+    Some(X11SessionStatus { label })
 }
 
 impl TerminalView {
     pub(super) fn render_x11_session_footer(&self, cx: &App) -> AnyElement {
-        let Some(status) = session_status(self.terminal.read(cx).x11_status()) else {
+        let terminal = self.terminal.read(cx);
+        let x11_enabled = terminal
+            .ssh_config()
+            .is_some_and(|config| config.ssh_config.x11_forwarding);
+        let Some(status) = session_status(x11_enabled, terminal.x11_status()) else {
             return div().into_any_element();
         };
         let colors = self.current_theme.colors();
-        let status_color = if status.disabled {
-            cx.theme().warning
-        } else {
-            cx.theme().success
-        };
+        let status_color = cx.theme().success;
         let tooltip = status.label.clone();
         h_flex()
             .id("terminal-x11-session-footer")
