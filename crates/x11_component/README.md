@@ -38,7 +38,7 @@ NAVOP_X11_BUNDLED_ARCHIVE="$PWD/target/navop-x11-component.zip" \
 - Windows 使用仅监听 `127.0.0.1` 的 TCP endpoint；macOS 使用随机 Unix socket，并传递 `--rootless -nolisten tcp`。
 - macOS 安装时保留 ICD 中的 `@@YSERVER_ROOT@@` 占位符，启动前按已提交的 executable 目录重定位，不能把 staging 绝对路径写入最终安装目录。
 - macOS 启动后最多等待 15 秒，每 100ms 重试真实 X11 setup，同时检查子进程是否提前退出；首次 Vulkan/Metal 初始化可能耗时数秒，不能在 socket 尚未出现时立即杀进程。Windows 保留原有单次 2 秒握手预算，避免 macOS 冷启动条件改变其他平台的失败时延。
-- KosmicKrisp 的真实渲染环境要求 Apple Silicon 与 macOS 26+；不支持此条件的用户可选择 `External`，使用 XQuartz。Intel Mac 没有内置 artifact。
+- KosmicKrisp 的真实渲染环境要求 Apple Silicon、macOS 26+ 和可用 Metal 设备；GitHub 的 Apple Silicon 虚拟机可能不提供 Metal。不支持这些条件时可选择 `External` 使用 XQuartz，Intel Mac 没有内置 artifact。
 
 ## 测试
 
@@ -48,4 +48,4 @@ cargo test -p x11_component
 cargo clippy -p x11_component --tests -- -D warnings
 ```
 
-测试使用独立临时数据目录、临时签名密钥和内存 zip，覆盖 SHA256/签名错误、安全 zip、原子安装、离线安装/修复、重复/强制安装、rollout、重启窗口、永久禁用原因和指标；普通运行时测试不访问发布服务。CI 使用真实固定 zip 编译并校验内嵌产物，macOS arm64 还运行真实安装、启动和 X11 setup 握手。外置 XQuartz 探测测试在本机有 XQuartz 时单独运行，不依赖其存在作为所有测试的前提。
+测试使用独立临时数据目录、临时签名密钥和内存 zip，覆盖 SHA256/签名错误、安全 zip、原子安装、离线安装/修复、重复/强制安装、rollout、重启窗口、永久禁用原因和指标；普通运行时测试不访问发布服务。CI 使用真实固定 zip 编译并校验内嵌产物，macOS arm64 始终运行真实离线安装；先用随包 loader/ICD 探测 `vulkaninfo`，发现 Metal 设备后才运行真实启动和 X11 setup 握手。外置 XQuartz 探测测试在本机有 XQuartz 时单独运行，不依赖其存在作为所有测试的前提。

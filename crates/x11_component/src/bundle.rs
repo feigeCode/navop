@@ -119,6 +119,14 @@ mod tests {
         if archive.target != "macos-aarch64" {
             return;
         }
+        // GitHub 的 Apple Silicon runner 可能没有 Metal 设备。CI 先用随包
+        // loader/ICD 独立运行 vulkaninfo，确认设备存在后才设置这个门禁；
+        // 探测成功后若 yserver 启动失败，测试仍然失败，不能掩盖生产回归。
+        if std::env::var_os("CI").is_some() && std::env::var_os("NAVOP_X11_REAL_GPU_TEST").is_none()
+        {
+            eprintln!("跳过真实 Metal 启动：CI 的 Vulkan 能力探测未通过");
+            return;
+        }
         let root = std::env::temp_dir().join(format!(
             "navop-x11-real-launch-{}-{}",
             std::process::id(),

@@ -240,7 +240,33 @@ jobs:
         if: ${{ matrix.platform == 'macos' }}
         run: |
           brew list lrzsz >/dev/null 2>&1 || brew install lrzsz
+          brew list vulkan-tools >/dev/null 2>&1 || brew install vulkan-tools
           brew list --cask xquartz >/dev/null 2>&1 || brew install --cask xquartz
+      - name: Probe bundled macOS Vulkan device
+        id: x11-gpu
+        if: ${{ matrix.platform == 'macos' }}
+        shell: bash
+        env:
+          X11_ARCHIVE: ${{ steps.x11-component.outputs.archive }}
+        run: |
+          set -euo pipefail
+          probe="$RUNNER_TEMP/navop-x11-vulkan-probe"
+          mkdir -p "$probe"
+          ditto -x -k "$X11_ARCHIVE" "$probe"
+          package="$(find "$probe" -mindepth 1 -maxdepth 1 -type d -name 'yserver-*' -print -quit)"
+          test -n "$package"
+          # GitHub Apple Silicon runner 可能没有 Metal 设备。探测只决定是否
+          # 执行真实握手，不跳过安装、验签、二进制结构及完整包测试。
+          export VK_DRIVER_FILES="$package/icd.d/kosmickrisp_mesa_icd.aarch64.json"
+          export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
+          export DYLD_FALLBACK_LIBRARY_PATH="$package/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+          python3 -c 'import json, pathlib, sys; p = pathlib.Path(sys.argv[1]); d = json.loads(p.read_text()); d["ICD"]["library_path"] = str(p.parent.parent / "lib/libvulkan_kosmickrisp.dylib"); p.write_text(json.dumps(d))' "$VK_DRIVER_FILES"
+          if vulkaninfo --summary > "$probe/vulkaninfo.txt" 2>&1 && grep -q '^Devices:' "$probe/vulkaninfo.txt"; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::当前 runner 没有可用 KosmicKrisp/Metal 设备；真实 GUI 启动留待具备 Metal 的机器验收"
+            cat "$probe/vulkaninfo.txt"
+          fi
       - name: Cache wasm-tools
         if: ${{ matrix.platform == 'linux' || github.event_name != 'pull_request' }}
         uses: actions/cache@v6
@@ -274,6 +300,7 @@ jobs:
         if: ${{ matrix.platform == 'windows' || matrix.platform == 'macos' }}
         env:
           NAVOP_X11_BUNDLED_ARCHIVE: ${{ steps.x11-component.outputs.archive }}
+          NAVOP_X11_REAL_GPU_TEST: ${{ matrix.platform == 'macos' && steps.x11-gpu.outputs.enabled || '' }}
         run: |
           test -n "$NAVOP_X11_BUNDLED_ARCHIVE"
           cargo test --locked -p x11_component --lib --target ${{ matrix.target }}
