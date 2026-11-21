@@ -342,6 +342,7 @@ impl HomePage {
         None
     }
 
+    #[cfg(test)]
     pub(crate) fn shows_host_metrics_strip(
         &self,
         _connection: &StoredConnection,

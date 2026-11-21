@@ -101,8 +101,23 @@ mod tests {
     use crate::X11ComponentError;
     use crate::manifest::{Artifact, ArtifactFormat};
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn sha256_does_not_block_the_async_worker() {
+    #[test]
+    fn unpack_is_offloaded_to_tokio_blocking_pool() {
+        // 直接锁定生产函数的调度路径，避免用计时器阈值或任务调度顺序推断非阻塞。
+        let source = include_str!("install_work.rs");
+        let function = source
+            .split("pub async fn unpack_blocking(")
+            .nth(1)
+            .expect("缺少 unpack_blocking")
+            .split("pub async fn commit_blocking(")
+            .next()
+            .expect("缺少函数边界");
+        assert!(function.contains("tokio::task::spawn_blocking(move || {"));
+        assert!(function.contains("unpack_sync(payload, &artifact, &public_key_base64, &staging)"));
+    }
+
+    #[tokio::test]
+    async fn invalid_hash_is_reported_without_touching_the_staging_directory() {
         let artifact = Artifact {
             version: "1.9.0".into(),
             sha256: "00".repeat(32),
@@ -112,22 +127,13 @@ mod tests {
             executable_path: "yserver".into(),
         };
         let staging = std::env::temp_dir().join("x11-blocking-test");
-        let work = tokio::spawn(super::unpack_blocking(
-            &[7; 64 * 1024 * 1024],
-            artifact,
-            String::new(),
-            staging,
-        ));
-        let timer = tokio::spawn(async {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        });
-        tokio::time::timeout(Duration::from_millis(20), timer)
-            .await
-            .expect("同步哈希会阻塞 current_thread worker")
-            .unwrap();
-        assert!(matches!(
-            work.await.unwrap(),
-            Err(X11ComponentError::Sha256Mismatch { .. })
-        ));
+        let work = tokio::time::timeout(
+            Duration::from_secs(30),
+            super::unpack_blocking(&[7; 64 * 1024 * 1024], artifact, String::new(), staging.clone()),
+        )
+        .await
+        .expect("blocking 哈希应在测试时限内完成");
+        assert!(matches!(work, Err(X11ComponentError::Sha256Mismatch { .. })));
+        assert!(!staging.exists());
     }
 }

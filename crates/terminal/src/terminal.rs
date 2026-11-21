@@ -4102,12 +4102,10 @@ impl Terminal {
         self.ssh_session_manager.as_ref()
     }
 
-    /// 返回该会话已缓存连接的 X11 状态，不触发连接或异步等待。
+    /// 返回当前终端自身已完成 X11 请求的结果。
+    /// 后端安装前不得回退共享 transport 状态，否则其他标签页会被误报为成功。
     pub fn x11_status(&self) -> Option<ssh::X11ForwardingStatus> {
-        self.backend
-            .as_ref()
-            .and_then(|backend| backend.x11_status())
-            .or_else(|| self.ssh_session_manager.as_ref()?.x11_status())
+        self.backend.as_ref().and_then(|backend| backend.x11_status())
     }
 
     pub fn apply_ssh_connection_update(&mut self, update: SshConnectionUpdate) -> Result<()> {

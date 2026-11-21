@@ -335,6 +335,7 @@ impl TerminalView {
             shell_prompt_input_active: false,
             local_command_running: false,
             last_connection_status: None,
+            x11_ready_notified: false,
             suggestion_debounce: None,
             recording_path_prompt_pending: false,
             recording_control_error: None,

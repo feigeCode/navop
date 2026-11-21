@@ -305,6 +305,8 @@ pub struct TerminalView {
     local_command_running: bool,
     /// 上一次已向 TabContainer 广播的连接状态，用于在变化时刷新标签页徽标。
     last_connection_status: Option<one_core::tab_container::TabConnectionStatus>,
+    /// X11 成功只在每次状态跃迁时轻提示一次，不占用终端底部空间。
+    x11_ready_notified: bool,
     /// InlineSuggest 防抖任务（30ms 延迟刷新建议）
     suggestion_debounce: Option<Task<()>>,
     /// 当前 pane 是否正在等待用户选择录制文件保存目录。

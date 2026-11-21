@@ -2790,10 +2790,6 @@ TerminalX11:
     en: "Embedded X server: %{version}"
     zh-CN: "内置 X server：%{version}"
     zh-HK: "內置 X server：%{version}"
-  disabled:
-    en: "Disabled: %{reason}"
-    zh-CN: "已停用：%{reason}"
-    zh-HK: "已停用：%{reason}"
 
 TerminalSessionLog:
   tab_title:
