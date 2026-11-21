@@ -45,7 +45,8 @@ jobs:
           platform="${REQUESTED_PLATFORM:-all}"
           linux='{"target":"x86_64-unknown-linux-gnu","run_on":"ubuntu-latest","platform":"linux"}'
           windows='{"target":"x86_64-pc-windows-msvc","run_on":"windows-2022","platform":"windows"}'
-          macos='{"target":"aarch64-apple-darwin","run_on":"macos-latest","platform":"macos"}'
+          # KosmicKrisp 的真实 X11 握手需要 macOS 26+；macos-15 只能编译。
+          macos='{"target":"aarch64-apple-darwin","run_on":"macos-26","platform":"macos"}'
           case "$platform" in
             all) matrix="[$macos,$linux,$windows]" ;;
             linux) matrix="[$linux]" ;;
@@ -66,14 +67,14 @@ jobs:
           set -euo pipefail
           platform="${REQUESTED_PLATFORM:-all}"
           navop_linux='{"product":"navop","target":"x86_64-unknown-linux-gnu","run_on":"ubuntu-latest","platform":"linux","args":""}'
-          navop_macos='{"product":"navop","target":"aarch64-apple-darwin","run_on":"macos-latest","platform":"macos","args":""}'
+          navop_macos='{"product":"navop","target":"aarch64-apple-darwin","run_on":"macos-26","platform":"macos","args":""}'
           navop_win_x64='{"product":"navop","target":"x86_64-pc-windows-msvc","run_on":"windows-2022","platform":"windows","args":"--features windows-native-rdp"}'
           navop_win_x86='{"product":"navop","target":"i686-pc-windows-msvc","run_on":"windows-2022","platform":"windows","args":"--no-default-features --features wasm-components,windows-native-rdp"}'
           shell_linux='{"product":"navop-shell","target":"x86_64-unknown-linux-gnu","run_on":"ubuntu-latest","platform":"linux","args":""}'
-          shell_macos='{"product":"navop-shell","target":"aarch64-apple-darwin","run_on":"macos-latest","platform":"macos","args":""}'
+          shell_macos='{"product":"navop-shell","target":"aarch64-apple-darwin","run_on":"macos-26","platform":"macos","args":""}'
           shell_win='{"product":"navop-shell","target":"x86_64-pc-windows-msvc","run_on":"windows-2022","platform":"windows","args":""}'
           data_linux='{"product":"navop-data","target":"x86_64-unknown-linux-gnu","run_on":"ubuntu-latest","platform":"linux","args":""}'
-          data_macos='{"product":"navop-data","target":"aarch64-apple-darwin","run_on":"macos-latest","platform":"macos","args":""}'
+          data_macos='{"product":"navop-data","target":"aarch64-apple-darwin","run_on":"macos-26","platform":"macos","args":""}'
           data_win='{"product":"navop-data","target":"x86_64-pc-windows-msvc","run_on":"windows-2022","platform":"windows","args":""}'
           linux="[$navop_linux,$shell_linux,$data_linux]"
           macos="[$navop_macos,$shell_macos,$data_macos]"
@@ -127,38 +128,35 @@ jobs:
     runs-on: ${{ matrix.run_on }}
     steps:
       - uses: actions/checkout@v7
-      - name: Set up Python for Windows X11 component
-        if: ${{ matrix.platform == 'windows' }}
+      - name: Set up Python for embedded X11 component
+        if: ${{ matrix.platform == 'windows' || matrix.platform == 'macos' }}
         uses: actions/setup-python@v6
         with:
           python-version: "3.x"
-      - name: Prepare embedded Windows X11 component
+      - name: Prepare embedded X11 component
         id: x11-component
-        if: ${{ matrix.platform == 'windows' }}
-        shell: pwsh
+        if: ${{ matrix.platform == 'windows' || matrix.platform == 'macos' }}
+        shell: bash
+        env:
+          X11_TARGET: ${{ matrix.platform == 'macos' && 'macos-aarch64' || 'windows-x86_64' }}
         run: |
-          $ErrorActionPreference = "Stop"
-          $archive = Join-Path $env:RUNNER_TEMP "navop-x11-windows-x86_64.zip"
-          # PowerShell 不默认暴露 Git for Windows 的 usr\bin；只在本 step
-          # 补上其中的 OpenSSL，避免依赖 runner 的偶然 PATH，也不改写全局 PATH。
-          $gitOpenSsl = Join-Path $env:ProgramFiles "Git\usr\bin\openssl.exe"
-          if (Test-Path -LiteralPath $gitOpenSsl -PathType Leaf) {
-            $env:Path = "$(Split-Path -Parent $gitOpenSsl);$env:Path"
-          }
-          Get-Command python -ErrorAction Stop | Out-Null
-          Get-Command openssl -ErrorAction Stop | Out-Null
+          set -euo pipefail
+          archive="$RUNNER_TEMP/navop-x11-$X11_TARGET.zip"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # PowerShell 分支仅负责定位 Git for Windows 的 OpenSSL。
+            git_openssl="$PROGRAMFILES/Git/usr/bin/openssl.exe"
+            if [ -f "$git_openssl" ]; then
+              openssl_dir="$(dirname "$git_openssl")"
+              export PATH="$openssl_dir:$PATH"
+            fi
+          fi
+          command -v python
+          command -v openssl
           python --version
           openssl version
-          python script/prepare-windows-x11-component.py `
-            --target windows-x86_64 `
-            --output $archive
-          if ($LASTEXITCODE -ne 0) {
-            throw "Windows X11 component preparation failed with exit code $LASTEXITCODE"
-          }
-          if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
-            throw "Prepared Windows X11 component is missing: '$archive'"
-          }
-          "archive=$archive" >> $env:GITHUB_OUTPUT
+          python script/prepare-x11-component.py --target "$X11_TARGET" --output "$archive"
+          test -s "$archive"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
       # gpui 单个 crate 的 rustc 命令行在 Windows 上约 35K 字符（大量
       # `--extern` / `-L dependency` 长路径），超过 CreateProcess 的 32,767
       # 上限；sccache 冷编译时会以 `os error 206` 失败。把 target 目录换到
@@ -238,9 +236,37 @@ jobs:
       - name: Install lrzsz on Linux
         if: ${{ matrix.platform == 'linux' }}
         run: sudo apt-get update && sudo apt-get install -y lrzsz
-      - name: Install lrzsz on macOS
+      - name: Install X11 test tools on macOS
         if: ${{ matrix.platform == 'macos' }}
-        run: brew list lrzsz >/dev/null 2>&1 || brew install lrzsz
+        run: |
+          brew list lrzsz >/dev/null 2>&1 || brew install lrzsz
+          brew list vulkan-tools >/dev/null 2>&1 || brew install vulkan-tools
+          brew list --cask xquartz >/dev/null 2>&1 || brew install --cask xquartz
+      - name: Probe bundled macOS Vulkan device
+        id: x11-gpu
+        if: ${{ matrix.platform == 'macos' }}
+        shell: bash
+        env:
+          X11_ARCHIVE: ${{ steps.x11-component.outputs.archive }}
+        run: |
+          set -euo pipefail
+          probe="$RUNNER_TEMP/navop-x11-vulkan-probe"
+          mkdir -p "$probe"
+          ditto -x -k "$X11_ARCHIVE" "$probe"
+          package="$(find "$probe" -mindepth 1 -maxdepth 1 -type d -name 'yserver-*' -print -quit)"
+          test -n "$package"
+          # GitHub Apple Silicon runner 可能没有 Metal 设备。探测只决定是否
+          # 执行真实握手，不跳过安装、验签、二进制结构及完整包测试。
+          export VK_DRIVER_FILES="$package/icd.d/kosmickrisp_mesa_icd.aarch64.json"
+          export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
+          export DYLD_FALLBACK_LIBRARY_PATH="$package/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+          python3 -c 'import json, pathlib, sys; p = pathlib.Path(sys.argv[1]); d = json.loads(p.read_text()); d["ICD"]["library_path"] = str(p.parent.parent / "lib/libvulkan_kosmickrisp.dylib"); p.write_text(json.dumps(d))' "$VK_DRIVER_FILES"
+          if vulkaninfo --summary > "$probe/vulkaninfo.txt" 2>&1 && grep -q '^Devices:' "$probe/vulkaninfo.txt"; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::当前 runner 没有可用 KosmicKrisp/Metal 设备；真实 GUI 启动留待具备 Metal 的机器验收"
+            cat "$probe/vulkaninfo.txt"
+          fi
       - name: Cache wasm-tools
         if: ${{ matrix.platform == 'linux' || github.event_name != 'pull_request' }}
         uses: actions/cache@v6
@@ -270,19 +296,14 @@ jobs:
       # 只给 lib 测试注入真实组件：它同时编译内嵌构建并运行
       # configured_archive_matches_its_pinned_manifest，验证 SHA256 + Ed25519。
       # 后续 workspace check / test-windows.ps1 不继承该 env；普通测试不访问组件网络。
-      - name: Test Windows X11 component with real embedded archive
-        if: ${{ matrix.platform == 'windows' }}
-        shell: pwsh
+      - name: Test X11 component with real embedded archive
+        if: ${{ matrix.platform == 'windows' || matrix.platform == 'macos' }}
         env:
           NAVOP_X11_BUNDLED_ARCHIVE: ${{ steps.x11-component.outputs.archive }}
+          NAVOP_X11_REAL_GPU_TEST: ${{ matrix.platform == 'macos' && steps.x11-gpu.outputs.enabled || '' }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:NAVOP_X11_BUNDLED_ARCHIVE)) {
-            throw "NAVOP_X11_BUNDLED_ARCHIVE is missing"
-          }
+          test -n "$NAVOP_X11_BUNDLED_ARCHIVE"
           cargo test --locked -p x11_component --lib --target ${{ matrix.target }}
-          if ($LASTEXITCODE -ne 0) {
-            throw "Embedded x11_component lib tests failed with exit code $LASTEXITCODE"
-          }
       - name: Test Windows
         if: ${{ matrix.platform == 'windows' && github.event_name != 'pull_request' }}
         shell: pwsh

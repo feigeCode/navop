@@ -37,11 +37,6 @@ pub fn render(
         .child(render_mode(cx))
         .child(render_opacity(options, &state, cx))
         .child(render_palette(cx))
-        .children(
-            app_kit::registry()
-                .shell_extras()
-                .and_then(|extras| extras.terminal_theme_section(cx)),
-        )
         .child(render_accent(&state, cx))
         .into_any_element()
 }
@@ -271,15 +266,13 @@ mod tests {
         assert!(source.contains("(\"system\", t!"));
         assert!(source.contains("(\"dark\", t!"));
         assert!(source.contains("ThemeRegistry::global"));
-        assert!(source.contains(
-            ".children(
-            app_kit::registry()
-                .shell_extras()
-                .and_then(|extras| extras.terminal_theme_section(cx)),
-        )"
-        ));
-        assert!(source.contains("TerminalTheme::all(cx.theme())"));
-        assert!(source.contains("settings.terminal_theme = theme_name.to_string()"));
+        // 终端配色已经搬到「设置 → 终端」，外观页不再嵌入终端主题选择。
+        // 断言字面量拆开写：include_str! 读的正是本文件，整串写会命中断言自身。
+        assert!(!source.contains(concat!("terminal_theme", "_section")));
+        assert!(!source.contains(concat!(
+            "settings.terminal_theme",
+            " = theme_name.to_string()"
+        )));
         assert!(source.contains("Slider::new"));
         assert!(source.contains("ColorPicker::new"));
         assert!(source.contains("custom_accent_enabled"));

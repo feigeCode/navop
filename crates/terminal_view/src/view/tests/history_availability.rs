@@ -156,12 +156,16 @@ fn suggestion_popup_opacity_travels_from_the_settings_panel_to_the_dropdown() {
     assert!(events.contains("self.set_suggestion_popup_opacity("));
 
     let preferences = include_str!("../preferences.rs");
-    assert!(preferences.contains("settings.suggestion_popup_opacity = opacity;"));
+    // 弹层透明度改成会话覆盖后不再写全局设置。
+    assert!(
+        preferences.contains("self.session_overrides.suggestion_popup_opacity = Some(opacity);")
+    );
 
     let settings = include_str!("../../settings.rs");
     assert!(
-        settings
-            .contains("settings.terminal_suggestion_popup_opacity = next.suggestion_popup_opacity;")
+        settings.contains(
+            "settings.terminal_suggestion_popup_opacity = next.suggestion_popup_opacity;"
+        )
     );
 
     let appearance = include_str!("../appearance.rs");

@@ -169,7 +169,7 @@ jobs:
           # 资产名（{binary}-{target}.tar.gz|.zip），bundle_name 是 macOS
           # .app 目录名，portable_marker 是便携版标记文件名。全量与独立
           # 产品同 tag 发布，公开产物名统一 {product}-{version}-{label}。
-          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
+          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":"macos-aarch64"}'
           macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","product":"navop","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
           linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","product":"navop","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
           linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","product":"navop","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","public_label":"linux-arm64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":true,"windows_native_rdp":false,"x11_target":""}'
@@ -179,7 +179,7 @@ jobs:
           # 独立产品只覆盖主力平台（无 linux-arm64 / win32），对齐原
           # standalone-products.yml 的平台面；win32 的 shell-plugins 依赖
           # 仅支持 64 位，等独立产品需要 32 位时再单独评估。
-          shell_macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop-shell","binary":"navop-shell","archive":"navop-shell-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
+          shell_macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop-shell","binary":"navop-shell","archive":"navop-shell-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":"macos-aarch64"}'
           shell_macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","product":"navop-shell","binary":"navop-shell","archive":"navop-shell-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
           shell_linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","product":"navop-shell","binary":"navop-shell","archive":"navop-shell-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
           shell_windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","product":"navop-shell","binary":"navop-shell.exe","archive":"navop-shell-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x64","x11_target":"windows-x86_64"}'
@@ -371,44 +371,39 @@ jobs:
           "$RUNNER_TEMP/ziglang/bin/python" -m ziglang version
           cargo-zigbuild --version
 
-      - name: Set up Python for embedded Windows X11 component
-        if: runner.os == 'Windows' && matrix.x11_target != ''
+      - name: Set up Python for embedded X11 component
+        if: matrix.x11_target != ''
         uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 
-      - name: Prepare embedded Windows X11 component
+      - name: Prepare embedded X11 component
         id: x11-component
-        if: runner.os == 'Windows' && matrix.x11_target != ''
-        shell: pwsh
+        if: matrix.x11_target != ''
+        shell: bash
         env:
           X11_TARGET: ${{ matrix.x11_target }}
         run: |
-          $ErrorActionPreference = "Stop"
-          if ($env:X11_TARGET -ne "windows-x86_64") {
-            throw "Unexpected Windows X11 release target: '$env:X11_TARGET'"
-          }
-          $archive = Join-Path $env:RUNNER_TEMP "navop-x11-$env:X11_TARGET.zip"
-          # 只在本 step 暴露 Git for Windows 自带的 OpenSSL；不写 GITHUB_PATH，
-          # 不改变后续 Cargo / RDP probe 的工具解析顺序。
-          $gitOpenSsl = Join-Path $env:ProgramFiles "Git\usr\bin\openssl.exe"
-          if (Test-Path -LiteralPath $gitOpenSsl -PathType Leaf) {
-            $env:Path = "$(Split-Path -Parent $gitOpenSsl);$env:Path"
-          }
-          Get-Command python -ErrorAction Stop | Out-Null
-          Get-Command openssl -ErrorAction Stop | Out-Null
+          set -euo pipefail
+          if [[ "$RUNNER_OS-$X11_TARGET" != "Windows-windows-x86_64" && "$RUNNER_OS-$X11_TARGET" != "macOS-macos-aarch64" ]]; then
+            echo "Unexpected X11 release target: $RUNNER_OS-$X11_TARGET" >&2
+            exit 1
+          fi
+          archive="$RUNNER_TEMP/navop-x11-$X11_TARGET.zip"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            git_openssl="$PROGRAMFILES/Git/usr/bin/openssl.exe"
+            if [ -f "$git_openssl" ]; then
+              openssl_dir="$(dirname "$git_openssl")"
+              export PATH="$openssl_dir:$PATH"
+            fi
+          fi
+          command -v python
+          command -v openssl
           python --version
           openssl version
-          python script/prepare-windows-x11-component.py `
-            --target $env:X11_TARGET `
-            --output $archive
-          if ($LASTEXITCODE -ne 0) {
-            throw "Windows X11 component preparation failed with exit code $LASTEXITCODE"
-          }
-          if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
-            throw "Prepared Windows X11 component is missing: '$archive'"
-          }
-          "archive=$archive" >> $env:GITHUB_OUTPUT
+          python script/prepare-x11-component.py --target "$X11_TARGET" --output "$archive"
+          test -s "$archive"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
 
       - name: Configure MSVC environment
         if: runner.os == 'Windows'
@@ -457,8 +452,12 @@ jobs:
           NAVOP_PUBLIC_BASE_URL: ${{ vars.NAVOP_PUBLIC_BASE_URL }}
           NAVOP_WEBSITE_BASE_URL: ${{ vars.NAVOP_WEBSITE_BASE_URL }}
           ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
+          NAVOP_X11_BUNDLED_ARCHIVE: ${{ steps.x11-component.outputs.archive }}
         run: |
           set -euo pipefail
+          if [ -z "${NAVOP_X11_BUNDLED_ARCHIVE:-}" ]; then
+            unset NAVOP_X11_BUNDLED_ARCHIVE
+          fi
           if [ "${{ needs.prepare.outputs.build_mode }}" = "fast" ]; then
             export CARGO_PROFILE_RELEASE_LTO=thin
             export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
@@ -585,35 +584,27 @@ jobs:
           }
 
       - name: Verify embedded X11 archive in release binary
-        if: runner.os == 'Windows' && matrix.x11_target != ''
-        shell: pwsh
+        if: matrix.x11_target != ''
+        shell: bash
         env:
           NAVOP_X11_BUNDLED_ARCHIVE: ${{ steps.x11-component.outputs.archive }}
           RELEASE_BINARY: target/${{ matrix.target }}/release/${{ matrix.binary }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:NAVOP_X11_BUNDLED_ARCHIVE)) {
-            throw "NAVOP_X11_BUNDLED_ARCHIVE is missing"
-          }
-          # 只读取 Windows 本地产物，不执行其中任何二进制。完整 zip 字节必须
-          # 出现在 exe 中，直接排除 build.rs 静默生成空占位或漏嵌的情况。
-          @'
+          set -euo pipefail
+          test -s "$NAVOP_X11_BUNDLED_ARCHIVE"
+          python3 - "$NAVOP_X11_BUNDLED_ARCHIVE" "$RELEASE_BINARY" <<'PY'
           from pathlib import Path
           import hashlib
-          import os
+          import sys
 
-          archive = Path(os.environ["NAVOP_X11_BUNDLED_ARCHIVE"])
-          binary = Path(os.environ["RELEASE_BINARY"])
+          archive = Path(sys.argv[1])
+          binary = Path(sys.argv[2])
           payload = archive.read_bytes()
           executable = binary.read_bytes()
-          if not payload:
-              raise SystemExit("Prepared X11 archive is empty")
           if payload not in executable:
               raise SystemExit(f"Embedded X11 archive was not found in {binary}")
-          print(
-              f"Verified embedded X11 archive in {binary}: "
-              f"{len(payload)} bytes, sha256={hashlib.sha256(payload).hexdigest()}"
-          )
-          '@ | python -
+          print(f"Verified embedded X11 archive: {len(payload)} bytes, sha256={hashlib.sha256(payload).hexdigest()}")
+          PY
 
       - name: Validate Windows executable manifest
         if: runner.os == 'Windows'

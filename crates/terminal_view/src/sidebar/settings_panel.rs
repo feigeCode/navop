@@ -123,6 +123,8 @@ fn terminal_font_options(
 pub enum SettingsPanelEvent {
     /// 关闭面板
     Close,
+    /// 丢弃当前会话的临时覆盖，回到设置里的全局默认值
+    ResetSessionDefaults,
     /// 字体大小变更
     FontSizeChanged(f32),
     /// 字体变更
@@ -138,7 +140,6 @@ pub enum SettingsPanelEvent {
     /// 高危命令确认开关
     ConfirmHighRiskCommandChanged(bool),
     /// 自动会话日志开关
-    AutoSessionLoggingChanged(bool),
     /// 选中自动复制开关
     AutoCopyChanged(bool),
     /// 自动补全开关
@@ -164,7 +165,6 @@ pub enum SettingsPanelEvent {
     /// 路径同步开关变更
     SyncPathChanged(bool),
     /// 终端面板右上角悬浮工具条（分屏 + 录制）显隐
-    PaneToolbarChanged(bool),
     /// 自定义高亮规则变更
     CustomHighlightsChanged(Vec<TerminalHighlightRule>),
 }
@@ -196,7 +196,6 @@ pub struct SettingsPanel {
     /// 高危命令确认
     confirm_high_risk_command: bool,
     /// 自动保存终端、SSH、串口会话日志
-    auto_session_logging: bool,
     /// 选中自动复制
     auto_copy: bool,
     /// 自动补全
@@ -224,7 +223,6 @@ pub struct SettingsPanel {
     /// 路径与终端同步开关
     sync_path: bool,
     /// 终端面板右上角悬浮工具条显隐
-    pane_toolbar_visible: bool,
     /// 全局自定义高亮规则
     custom_highlights: Vec<TerminalHighlightRule>,
     /// 是否有文件管理器面板（仅 SSH 终端有）
@@ -260,8 +258,6 @@ impl SettingsPanel {
         });
 
         let scrollback_lines = AppSettings::global(cx).terminal_scrollback_lines;
-        let auto_session_logging = AppSettings::global(cx).terminal_auto_session_logging;
-        let pane_toolbar_visible = AppSettings::global(cx).terminal_show_pane_toolbar;
         let selection_highlight = AppSettings::global(cx).terminal_selection_highlight;
         let show_line_timestamps = AppSettings::global(cx).terminal_show_timestamps;
         let show_line_numbers = AppSettings::global(cx).terminal_show_line_numbers;
@@ -435,8 +431,6 @@ impl SettingsPanel {
             cursor_blink: false,
             confirm_multiline_paste: true,
             confirm_high_risk_command: true,
-            auto_session_logging,
-            pane_toolbar_visible,
             auto_copy,
             autocomplete_enabled,
             suggestion_popup_enabled,
@@ -1383,102 +1377,6 @@ impl SettingsPanel {
             )
     }
 
-    fn render_session_logging_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = self.colors();
-        let border = colors.border;
-        let muted_fg = colors.muted_foreground;
-        let auto_session_logging = self.auto_session_logging;
-
-        v_flex()
-            .gap_3()
-            .p_3()
-            .border_t_1()
-            .border_color(border)
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(muted_fg)
-                            .child(t!("Settings.session_logging").to_uppercase()),
-                    )
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .child(t!("Settings.automatic_session_logging")),
-                            )
-                            .child(
-                                Switch::new("automatic-session-logging-switch")
-                                    .checked(auto_session_logging)
-                                    .small()
-                                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
-                                        this.auto_session_logging = *checked;
-                                        cx.emit(SettingsPanelEvent::AutoSessionLoggingChanged(
-                                            *checked,
-                                        ));
-                                    })),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted_fg)
-                            .child(t!("Settings.automatic_session_logging_help")),
-                    ),
-            )
-    }
-
-    /// 终端面板右上角悬浮工具条（分屏 + 录制按钮）显隐。
-    fn render_pane_toolbar_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = self.colors();
-        let border = colors.border;
-        let muted_fg = colors.muted_foreground;
-
-        v_flex()
-            .gap_3()
-            .p_3()
-            .border_t_1()
-            .border_color(border)
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(muted_fg)
-                            .child(t!("Settings.pane_toolbar_section").to_uppercase()),
-                    )
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .justify_between()
-                            .child(div().text_sm().child(t!("Settings.pane_toolbar")))
-                            .child(
-                                Switch::new("pane-toolbar-switch")
-                                    .checked(self.pane_toolbar_visible)
-                                    .small()
-                                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
-                                        this.pane_toolbar_visible = *checked;
-                                        cx.emit(SettingsPanelEvent::PaneToolbarChanged(*checked));
-                                    })),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted_fg)
-                            .child(t!("Settings.pane_toolbar_help")),
-                    ),
-            )
-    }
-
     /// 渲染文件管理器设置区域（仅 SSH 终端有文件管理器时显示）
     fn render_file_manager_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = self.colors();
@@ -1980,12 +1878,52 @@ mod tests {
     }
 
     #[test]
-    fn pane_toolbar_visibility_is_configured_in_the_terminal_sidebar() {
+    fn sidebar_only_keeps_session_scoped_switches() {
+        // 「悬浮工具条」「自动会话日志」是全局默认值，已经搬到「设置 → 终端」；
+        // 侧边栏只管当前会话，防止这两个开关被塞回来。
         let source = include_str!("settings_panel.rs");
-        assert!(source.contains("Switch::new(\"pane-toolbar-switch\")"));
-        assert!(source.contains("SettingsPanelEvent::PaneToolbarChanged"));
-        let events = include_str!("../view/sidebar_events.rs");
-        assert!(events.contains("settings.terminal_show_pane_toolbar = enabled"));
+        // 断言里拼接字符串，避免断言文本本身被当成源码命中（自指）。
+        assert!(!source.contains(concat!("pane-toolbar", "-switch")));
+        assert!(!source.contains(concat!("automatic-session-logging", "-switch")));
+        assert!(!source.contains(concat!("PaneToolbar", "Changed")));
+        assert!(!source.contains(concat!("AutoSessionLogging", "Changed")));
+        // 面板本身不落盘：会话覆盖由 TerminalView 收下，设置文件由「设置 → 终端」写。
+        assert!(!source.contains(concat!("update", "_settings(")));
+        assert!(!source.contains(concat!("AppSettings::", "update_and_save")));
+    }
+
+    #[test]
+    fn session_footer_resets_overrides_instead_of_saving_them() {
+        let source = include_str!("settings_panel.rs");
+        assert!(source.contains(concat!("SettingsPanelEvent::", "ResetSessionDefaults")));
+
+        let sidebar = include_str!("mod.rs");
+        assert!(sidebar.contains("TerminalSidebarEvent::ResetSessionDefaults"));
+
+        let view = include_str!("../view/sidebar_events.rs");
+        assert!(view.contains("self.reset_session_overrides(window, cx);"));
+    }
+
+    #[test]
+    fn session_scope_hint_sits_above_the_first_setting_section() {
+        // 用户改完侧栏设置就关掉面板，提示必须在首屏，不能依赖滚动到底部才看见。
+        let render = include_str!("settings_panel.rs")
+            .rfind("impl Render for SettingsPanel")
+            .map(|offset| &include_str!("settings_panel.rs")[offset..])
+            .expect("应存在设置面板渲染实现");
+
+        let hint = render
+            .find("render_session_scope_hint")
+            .expect("设置面板要给出「只对当前会话生效」的提示");
+        let first_section = render
+            .find("render_search_help_section")
+            .expect("应存在搜索说明区域");
+
+        assert!(hint < first_section, "会话范围提示应排在设置项之前");
+
+        let source = include_str!("settings_panel.rs");
+        assert!(source.contains(concat!("TerminalView.", "session_scope_hint_title")));
+        assert!(source.contains(concat!("TerminalView.", "session_scope_hint_body")));
     }
 
     #[test]
@@ -2044,6 +1982,73 @@ impl Focusable for SettingsPanel {
     }
 }
 
+impl SettingsPanel {
+    /// 面板顶部的会话范围说明。
+    ///
+    /// 侧栏改的是「当前标签页」的临时覆盖，不落盘；全局默认值在设置中心的终端页。
+    /// 提示放在首屏而不是底部，因为多数人改完字体就关面板了。
+    fn render_session_scope_hint(&self) -> impl IntoElement {
+        let colors = self.colors();
+
+        v_flex()
+            .gap_1()
+            .p_3()
+            .bg(colors.muted)
+            .border_b_1()
+            .border_color(colors.border)
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        Icon::new(IconName::Info)
+                            .with_size(Size::Small)
+                            .text_color(colors.accent),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(colors.foreground)
+                            .child(t!("TerminalView.session_scope_hint_title")),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(colors.muted_foreground)
+                    .child(t!("TerminalView.session_scope_hint_body")),
+            )
+    }
+
+    /// 面板底部的会话级操作：这里的改动只影响当前标签页，可以一键回到设置里的全局默认。
+    fn render_session_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.colors();
+        v_flex()
+            .flex_shrink_0()
+            .w_full()
+            .gap_1()
+            .border_t_1()
+            .border_color(colors.border)
+            .px_3()
+            .py_2()
+            .child(
+                Button::new("settings-reset-session-defaults")
+                    .small()
+                    .label(t!("TerminalView.reset_session_settings").to_string())
+                    .on_click(cx.listener(|_this, _event, _window, cx| {
+                        cx.emit(SettingsPanelEvent::ResetSessionDefaults);
+                    })),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(colors.muted_foreground)
+                    .child(t!("TerminalView.reset_session_settings_hint").to_string()),
+            )
+    }
+}
+
 impl Render for SettingsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_file_manager = self.has_file_manager;
@@ -2063,13 +2068,12 @@ impl Render for SettingsPanel {
                             v_flex()
                                 .flex_shrink_0()
                                 .pb_4()
+                                .child(self.render_session_scope_hint())
                                 .child(self.render_search_help_section(cx))
                                 .child(self.render_font_section(cx))
                                 .child(self.render_scrollback_section(cx))
                                 .child(self.render_cursor_section(cx))
                                 .child(self.render_safety_section(cx))
-                                .child(self.render_session_logging_section(cx))
-                                .child(self.render_pane_toolbar_section(cx))
                                 .when(has_file_manager, |el| {
                                     el.child(self.render_file_manager_section(cx))
                                 })
@@ -2078,5 +2082,6 @@ impl Render for SettingsPanel {
                         ),
                 ),
             )
+            .child(self.render_session_footer(cx))
     }
 }

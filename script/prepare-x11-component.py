@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""下载并验证固定的 Windows X11 组件，供 Cargo 构建期内嵌；本脚本不接触私钥。"""
+"""下载并验证固定的 X11 组件，供 Cargo 构建期内嵌；运行时不使用本脚本。"""
 
 import argparse
 import base64
@@ -14,10 +14,16 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 RESOURCE_DIR = ROOT / "resources" / "windows" / "x11-component"
-EXPECTED_COMPONENT_VERSION = "1.9.0-navop.1"
+RELEASE = "https://github.com/feigeCode/yserver/releases/download"
 ARTIFACT_URLS = {
-    "windows-x86_64": "https://github.com/feigeCode/yserver/releases/download/navop-v1.9.0-1/yserver-1.9.0-navop.1-windows-x86_64.zip",
-    "windows-aarch64": "https://github.com/feigeCode/yserver/releases/download/navop-v1.9.0-1/yserver-1.9.0-navop.1-windows-arm64.zip",
+    "windows-x86_64": f"{RELEASE}/navop-v1.9.0-1/yserver-1.9.0-navop.1-windows-x86_64.zip",
+    "windows-aarch64": f"{RELEASE}/navop-v1.9.0-1/yserver-1.9.0-navop.1-windows-arm64.zip",
+    "macos-aarch64": f"{RELEASE}/navop-v1.9.0-1/yserver-1.9.0-navop.2-macos-aarch64.zip",
+}
+EXPECTED_VERSIONS = {
+    "windows-x86_64": "1.9.0-navop.1",
+    "windows-aarch64": "1.9.0-navop.1",
+    "macos-aarch64": "1.9.0-navop.2",
 }
 MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
 ED25519_SPKI_DER_PREFIX = bytes.fromhex("302a300506032b6570032100")
@@ -31,19 +37,18 @@ def prepare(target: str, output: Path) -> dict:
     if component.get("rollout_percent") != 100:
         raise ValueError("随包组件必须 rollout_percent=100")
     artifact = component["artifacts"][target]
-    if artifact.get("version") != EXPECTED_COMPONENT_VERSION:
+    if artifact.get("version") != EXPECTED_VERSIONS[target]:
         raise ValueError("组件版本变化必须同时更新准备脚本的固定版本")
     executable_path = PurePosixPath(artifact.get("executable_path", ""))
+    expected_executable = "yserver" if target.startswith("macos-") else "yserver.exe"
     if (
         artifact.get("format") != "zip"
         or executable_path.is_absolute()
         or ".." in executable_path.parts
-        or executable_path.name != "yserver.exe"
+        or executable_path.name != expected_executable
     ):
-        raise ValueError("随包组件必须声明安全的 yserver.exe 相对路径")
+        raise ValueError(f"随包组件必须声明安全的 {expected_executable} 相对路径")
     url = ARTIFACT_URLS[target]
-    if not url.startswith("https://"):
-        raise ValueError("组件下载必须使用 HTTPS")
     expected_sha256 = artifact["sha256"].lower()
     if len(expected_sha256) != 64 or any(c not in "0123456789abcdef" for c in expected_sha256):
         raise ValueError("组件 SHA256 格式无效")
@@ -56,8 +61,7 @@ def prepare(target: str, output: Path) -> dict:
 
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    # Windows runner 的 TEMP 常在 C:，而 RUNNER_TEMP/输出在 D:；
-    # 与输出同盘的 staging 才能保证 os.replace 原子提交不会 WinError 17。
+    # 与输出同盘的 staging 才能保证 Windows 的 os.replace 原子提交。
     with tempfile.TemporaryDirectory(prefix=".navop-x11-prepare-", dir=output.parent) as temporary:
         temporary = Path(temporary)
         download = temporary / "component.zip"
@@ -88,24 +92,7 @@ def prepare(target: str, output: Path) -> dict:
             check=True,
             stdout=subprocess.DEVNULL,
         )
-        with zipfile.ZipFile(download) as archive:
-            names = set(archive.namelist())
-            root = executable_path.parent
-            required_files = (
-                str(executable_path),
-                str(root / "xauth.exe"),
-                str(root / "licenses" / "rust-crates.txt"),
-            )
-            missing = [name for name in required_files if name not in names]
-            required_xkb_dirs = ("compat", "keycodes", "rules", "symbols", "types")
-            if missing or any(
-                not any(
-                    name.startswith(f"{root}/xkb/{directory}/") and not name.endswith("/")
-                    for name in names
-                )
-                for directory in required_xkb_dirs
-            ):
-                raise ValueError(f"组件包结构不完整：{missing} 或缺少 XKB 键盘数据")
+        verify_archive(target, download, executable_path)
         os.replace(download, output)
 
     if hashlib.sha256(output.read_bytes()).hexdigest() != expected_sha256:
@@ -119,9 +106,45 @@ def prepare(target: str, output: Path) -> dict:
     }
 
 
+def verify_archive(target: str, download: Path, executable_path: PurePosixPath) -> None:
+    with zipfile.ZipFile(download) as archive:
+        names = set(archive.namelist())
+        root = executable_path.parent
+        required_files = [str(executable_path), str(root / "licenses" / "rust-crates.txt")]
+        required_xkb_dirs = ("compat", "keycodes", "rules", "symbols", "types")
+        if target.startswith("macos-"):
+            icd = root / "icd.d" / "kosmickrisp_mesa_icd.aarch64.json"
+            required_files.extend(
+                str(root / name)
+                for name in (
+                    "yserver-xauth",
+                    "lib/libvulkan.1.dylib",
+                    "lib/libvulkan_kosmickrisp.dylib",
+                    str(icd.relative_to(root)),
+                )
+            )
+            missing = [name for name in required_files if name not in names]
+            if not missing:
+                document = json.loads(archive.read(str(icd)))
+                library_path = document.get("ICD", {}).get("library_path", "")
+                if library_path != "@@YSERVER_ROOT@@/lib/libvulkan_kosmickrisp.dylib":
+                    raise ValueError("macOS ICD 必须使用可重定位的 YSERVER_ROOT 占位符")
+        else:
+            required_files.append(str(root / "xauth.exe"))
+            missing = [name for name in required_files if name not in names]
+        if missing or any(
+            not any(
+                name.startswith(f"{root}/xkb/{directory}/") and not name.endswith("/")
+                for name in names
+            )
+            for directory in required_xkb_dirs
+        ):
+            raise ValueError(f"组件包结构不完整：{missing} 或缺少 XKB 键盘数据")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", required=True, choices=["windows-x86_64", "windows-aarch64"])
+    parser.add_argument("--target", required=True, choices=list(ARTIFACT_URLS))
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     print(json.dumps(prepare(args.target, args.output), ensure_ascii=False))

@@ -18,7 +18,7 @@ use gpui::{App, Hsla, Pixels, SharedString, hsla, rgb};
 use gpui_component::Theme;
 use gpui_component::button::ButtonCustomVariant;
 use one_core::settings::{
-    DEFAULT_TERMINAL_THEME, default_grid_font_fallback_families,
+    AppSettings, DEFAULT_TERMINAL_THEME, default_grid_font_fallback_families,
     default_grid_monospace_font_family, is_supported_grid_monospace_font,
     normalize_grid_monospace_font_family,
 };
@@ -193,6 +193,22 @@ impl TerminalTheme {
     pub fn resolve(name: &str, application_theme: &Theme) -> Self {
         Self::find_by_name(name, application_theme)
             .unwrap_or_else(|| Self::from_application_theme(application_theme))
+    }
+
+    /// 窗口透明度是应用级能力，固定终端主题也必须遵守。
+    ///
+    /// 只调整画布背景 alpha；前景、光标、选区和 ANSI 单元格颜色保持不变。
+    pub fn with_window_opacity(mut self, opacity: f32) -> Self {
+        let opacity = if opacity.is_finite() {
+            opacity.clamp(
+                AppSettings::MIN_WINDOW_OPACITY,
+                AppSettings::MAX_WINDOW_OPACITY,
+            )
+        } else {
+            AppSettings::MAX_WINDOW_OPACITY
+        };
+        self.background = self.background.alpha(opacity);
+        self
     }
 
     fn presets() -> Vec<Self> {

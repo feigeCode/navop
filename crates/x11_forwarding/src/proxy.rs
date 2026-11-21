@@ -11,7 +11,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 
 use crate::bridge::{self, CookieExchange};
-use crate::{ForwardRequest, MagicCookie, ServerEndpoint};
+use crate::{ForwardRequest, MagicCookie, ServerEndpoint, X11Result};
 
 /// 本机 X server 要求的认证方式。
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -92,6 +92,19 @@ impl X11Proxy {
         &self.state.endpoint
     }
 
+    /// 使用本机认证信息完成健康检查，不签发或出示 fake cookie。
+    pub async fn probe_local(&self, timeout: std::time::Duration) -> X11Result<()> {
+        match &self.local {
+            LocalAuth::Cookie(cookie) => {
+                crate::probe::probe_endpoint(&self.state.endpoint, cookie, timeout).await
+            }
+            #[cfg(any(target_os = "windows", test))]
+            LocalAuth::None => {
+                crate::probe::probe_endpoint_without_auth(&self.state.endpoint, timeout).await
+            }
+        }
+    }
+
     /// 为一个新 SSH 会话签发转发请求：生成 fake cookie 并登记授权。
     pub fn issue_request(&self, single_use: bool) -> ForwardRequest {
         let fake = MagicCookie::generate();
@@ -147,8 +160,41 @@ impl X11ProxyHandle {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::Duration;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     use super::*;
+    use crate::setup::ClientHello;
+
+    async fn authenticating_server(expected_cookie: MagicCookie) -> ServerEndpoint {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let endpoint = ServerEndpoint::Inet {
+            host: "127.0.0.1".into(),
+            port: listener.local_addr().unwrap().port(),
+        };
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut header = [0; 12];
+            stream.read_exact(&mut header).await.unwrap();
+            let auth_len = ClientHello::auth_section_len(&header).unwrap();
+            let mut packet = header.to_vec();
+            packet.resize(12 + auth_len, 0);
+            stream.read_exact(&mut packet[12..]).await.unwrap();
+            let hello = ClientHello::decode(&packet).unwrap();
+            assert_eq!(hello.auth_name, "MIT-MAGIC-COOKIE-1");
+            if hello.auth_data == expected_cookie.bytes() {
+                stream.write_all(&[1, 0, 11, 0, 0, 0, 0, 0]).await.unwrap();
+            } else {
+                stream
+                    .write_all(&hello.failure_reply("invalid cookie"))
+                    .await
+                    .unwrap();
+            }
+        });
+        endpoint
+    }
 
     fn proxy() -> X11Proxy {
         X11Proxy::new(
@@ -156,6 +202,17 @@ mod tests {
             0,
             MagicCookie::from_slice(&[0x5a; 16]).unwrap(),
         )
+    }
+
+    #[tokio::test]
+    async fn local_probe_presents_real_cookie_without_issuing_a_grant() {
+        let cookie = MagicCookie::from_slice(&[0xa5; 16]).unwrap();
+        let endpoint = authenticating_server(cookie.clone()).await;
+        let proxy = X11Proxy::for_endpoint(endpoint, cookie);
+
+        proxy.probe_local(Duration::from_secs(1)).await.unwrap();
+
+        assert!(proxy.state.grants.is_empty());
     }
 
     #[test]
