@@ -178,7 +178,12 @@ mod tests {
     }
 
     /// 默认构建（没有内嵌组件）里 `Embedded` 必须立刻报「未内嵌」，而不是先尝试安装。
-    #[cfg(not(feature = "bundled"))]
+    /// Linux 上内置组件本身不受支持，会先返回 `UnsupportedPlatform`，因此这个用例只
+    /// 覆盖 macOS / Windows 的「未内嵌」分支。
+    #[cfg(all(
+        not(feature = "bundled"),
+        any(target_os = "macos", target_os = "windows")
+    ))]
     #[tokio::test]
     async fn embedded_without_the_bundled_component_is_a_config_error() {
         let error = embedded(X11ServerMode::Embedded).await.unwrap_err();
