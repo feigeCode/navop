@@ -45,7 +45,6 @@ jobs:
           platform="${REQUESTED_PLATFORM:-all}"
           linux='{"target":"x86_64-unknown-linux-gnu","run_on":"ubuntu-latest","platform":"linux"}'
           windows='{"target":"x86_64-pc-windows-msvc","run_on":"windows-2022","platform":"windows"}'
-          # KosmicKrisp 的真实 X11 握手需要 macOS 26+；macos-15 只能编译。
           macos='{"target":"aarch64-apple-darwin","run_on":"macos-26","platform":"macos"}'
           case "$platform" in
             all) matrix="[$macos,$linux,$windows]" ;;
@@ -114,9 +113,8 @@ jobs:
           fi
 
   # PR 快车道：Linux 跑完整 `cargo test --all`；macOS / Windows 的 workspace
-  # 只做 `cargo check --workspace --all-targets`（含测试目标），不链接、不跑测试；
-  # Windows 额外定向运行真实内嵌 X11 lib 测试。完整三平台测试在 push main
-  # 与 workflow_dispatch 时执行。
+  # 只做 `cargo check --workspace --all-targets`（含测试目标），不链接、不跑测试。
+  # 完整三平台测试在 push main 与 workflow_dispatch 时执行。
   test:
     name: Test (${{ matrix.platform }}, ${{ matrix.target }})
     needs: [prepare, classify]
@@ -128,35 +126,6 @@ jobs:
     runs-on: ${{ matrix.run_on }}
     steps:
       - uses: actions/checkout@v7
-      - name: Set up Python for embedded X11 component
-        if: ${{ matrix.platform == 'windows' || matrix.platform == 'macos' }}
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.x"
-      - name: Prepare embedded X11 component
-        id: x11-component
-        if: ${{ matrix.platform == 'windows' || matrix.platform == 'macos' }}
-        shell: bash
-        env:
-          X11_TARGET: ${{ matrix.platform == 'macos' && 'macos-aarch64' || 'windows-x86_64' }}
-        run: |
-          set -euo pipefail
-          archive="$RUNNER_TEMP/navop-x11-$X11_TARGET.zip"
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            # PowerShell 分支仅负责定位 Git for Windows 的 OpenSSL。
-            git_openssl="$PROGRAMFILES/Git/usr/bin/openssl.exe"
-            if [ -f "$git_openssl" ]; then
-              openssl_dir="$(dirname "$git_openssl")"
-              export PATH="$openssl_dir:$PATH"
-            fi
-          fi
-          command -v python
-          command -v openssl
-          python --version
-          openssl version
-          python script/prepare-x11-component.py --target "$X11_TARGET" --output "$archive"
-          test -s "$archive"
-          echo "archive=$archive" >> "$GITHUB_OUTPUT"
       # gpui 单个 crate 的 rustc 命令行在 Windows 上约 35K 字符（大量
       # `--extern` / `-L dependency` 长路径），超过 CreateProcess 的 32,767
       # 上限；sccache 冷编译时会以 `os error 206` 失败。把 target 目录换到
@@ -236,37 +205,9 @@ jobs:
       - name: Install lrzsz on Linux
         if: ${{ matrix.platform == 'linux' }}
         run: sudo apt-get update && sudo apt-get install -y lrzsz
-      - name: Install X11 test tools on macOS
+      - name: Install lrzsz on macOS
         if: ${{ matrix.platform == 'macos' }}
-        run: |
-          brew list lrzsz >/dev/null 2>&1 || brew install lrzsz
-          brew list vulkan-tools >/dev/null 2>&1 || brew install vulkan-tools
-          brew list --cask xquartz >/dev/null 2>&1 || brew install --cask xquartz
-      - name: Probe bundled macOS Vulkan device
-        id: x11-gpu
-        if: ${{ matrix.platform == 'macos' }}
-        shell: bash
-        env:
-          X11_ARCHIVE: ${{ steps.x11-component.outputs.archive }}
-        run: |
-          set -euo pipefail
-          probe="$RUNNER_TEMP/navop-x11-vulkan-probe"
-          mkdir -p "$probe"
-          ditto -x -k "$X11_ARCHIVE" "$probe"
-          package="$(find "$probe" -mindepth 1 -maxdepth 1 -type d -name 'yserver-*' -print -quit)"
-          test -n "$package"
-          # GitHub Apple Silicon runner 可能没有 Metal 设备。探测只决定是否
-          # 执行真实握手，不跳过安装、验签、二进制结构及完整包测试。
-          export VK_DRIVER_FILES="$package/icd.d/kosmickrisp_mesa_icd.aarch64.json"
-          export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
-          export DYLD_FALLBACK_LIBRARY_PATH="$package/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
-          python3 -c 'import json, pathlib, sys; p = pathlib.Path(sys.argv[1]); d = json.loads(p.read_text()); d["ICD"]["library_path"] = str(p.parent.parent / "lib/libvulkan_kosmickrisp.dylib"); p.write_text(json.dumps(d))' "$VK_DRIVER_FILES"
-          if vulkaninfo --summary > "$probe/vulkaninfo.txt" 2>&1 && grep -q '^Devices:' "$probe/vulkaninfo.txt"; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::当前 runner 没有可用 KosmicKrisp/Metal 设备；真实 GUI 启动留待具备 Metal 的机器验收"
-            cat "$probe/vulkaninfo.txt"
-          fi
+        run: brew list lrzsz >/dev/null 2>&1 || brew install lrzsz
       - name: Cache wasm-tools
         if: ${{ matrix.platform == 'linux' || github.event_name != 'pull_request' }}
         uses: actions/cache@v6
@@ -289,21 +230,10 @@ jobs:
         with:
           arch: x64
       # PR 快车道：macOS / Windows 的 workspace 只编译（含测试目标），不链接、不跑测试。
-      # 完整测试仍在 Linux 以及 push main / 手动触发时跑三平台；X11 定向 lib 测试例外见下。
+      # 完整测试仍在 Linux 以及 push main / 手动触发时跑三平台。
       - name: Check the workspace (PR fast lane)
         if: ${{ github.event_name == 'pull_request' && matrix.platform != 'linux' }}
         run: cargo check --workspace --all-targets
-      # 只给 lib 测试注入真实组件：它同时编译内嵌构建并运行
-      # configured_archive_matches_its_pinned_manifest，验证 SHA256 + Ed25519。
-      # 后续 workspace check / test-windows.ps1 不继承该 env；普通测试不访问组件网络。
-      - name: Test X11 component with real embedded archive
-        if: ${{ matrix.platform == 'windows' || matrix.platform == 'macos' }}
-        env:
-          NAVOP_X11_BUNDLED_ARCHIVE: ${{ steps.x11-component.outputs.archive }}
-          NAVOP_X11_REAL_GPU_TEST: ${{ matrix.platform == 'macos' && steps.x11-gpu.outputs.enabled || '' }}
-        run: |
-          test -n "$NAVOP_X11_BUNDLED_ARCHIVE"
-          cargo test --locked -p x11_component --lib --target ${{ matrix.target }}
       - name: Test Windows
         if: ${{ matrix.platform == 'windows' && github.event_name != 'pull_request' }}
         shell: pwsh

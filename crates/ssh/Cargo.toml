@@ -22,7 +22,6 @@ sha1 = "0.10"
 # SSH and SFTP
 russh.workspace = true
 x11_forwarding.workspace = true
-x11_component.workspace = true
 # Proxy support
 tokio-socks.workspace = true
 

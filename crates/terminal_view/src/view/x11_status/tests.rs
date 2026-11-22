@@ -66,7 +66,7 @@ fn x11_never_renders_a_terminal_session_footer() {
 fn session_notice_copy_exists_in_all_three_languages() {
     for language in ["en", "zh-CN", "zh-HK"] {
         rust_i18n::set_locale(language);
-        for key in ["TerminalX11.external", "TerminalX11.embedded"] {
+        for key in ["TerminalX11.external"] {
             assert_ne!(key, rust_i18n::t!(key), "{language} 缺少文案: {key}");
         }
     }

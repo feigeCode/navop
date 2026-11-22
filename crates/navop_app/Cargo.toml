@@ -10,7 +10,6 @@ gpui = { workspace = true }
 gpui_platform = { workspace = true }
 gpui-component = { workspace = true, features = ["tree-sitter-bash", "tree-sitter-sql"] }
 gpui-component-assets = { workspace = true }
-x11_component = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
@@ -127,6 +126,8 @@ tempfile = "3"
 # 需要时显式开启：`cargo build -p navop_app --features embedded-webview`
 # （Linux 另需 `webkit2gtk-4.1` 开发包，见 `script/install-linux.sh`）。
 default = ["wasm-components", "windows-native-rdp", "nsh-host", "database", "shell"]
+# 内嵌官方固定 X11 组件（离线可用）。默认关闭：组件分发策略未定期间发布构建
+# 不再内嵌；需要时 `cargo build -p navop --features navop/x11-bundled`。
 # 领域门控：独立产品只打开自己需要的领域，公共壳保持与领域无关。
 database = [
     "extension-runtime/database",

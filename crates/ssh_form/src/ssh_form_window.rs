@@ -35,7 +35,6 @@ use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
-use one_core::settings::{AppSettings, X11ServerMode, configured_mode};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     BastionTarget, FtpParams, JumpMode as StorageJumpMode, JumpServerConfig, PreferredOpenMode,
@@ -402,7 +401,7 @@ pub struct SshFormWindow {
     test_result: Option<Result<Option<String>, String>>,
     /// 本次测试连接实际协商出的 X11 状态，不依赖日志文本。
     x11_test_status: Option<X11ConnectionState>,
-    x11_switch_message: Option<String>,
+    x11_retest_message: Option<String>,
     shell_integration_uninstall_result: Option<Result<(), String>>,
     on_saved: Option<SshFormSavedCallback>,
     save_action: SaveAction,
@@ -1573,7 +1572,7 @@ impl SshFormWindow {
             is_uninstalling_shell_integration: false,
             test_result: None,
             x11_test_status: None,
-            x11_switch_message: None,
+            x11_retest_message: None,
             shell_integration_uninstall_result: None,
             on_saved,
             save_action: SaveAction::Close,
@@ -2204,12 +2203,11 @@ impl SshFormWindow {
     ) {
         self.is_testing = true;
         self.x11_test_status = None;
-        self.x11_switch_message = None;
+        self.x11_retest_message = None;
         let target_host = params.host.clone();
         let mut config = self.build_ssh_connect_config(&params);
         config.host_key_verifier = host_key_verifier.clone();
         let x11_requested = config.x11_forwarding;
-        let x11_mode = configured_mode();
         let jump_mfa_capture = CapturedMfaRequest::default();
         let jump_mfa_responses = self.collect_jump_mfa_responses(cx, &signature);
         let jump_password = config
@@ -2254,7 +2252,7 @@ impl SshFormWindow {
             .await;
 
             let x11_state = match &spawn_result {
-                Ok((_, probe)) => X11ConnectionState::from_test(x11_requested, x11_mode, probe),
+                Ok((_, probe)) => X11ConnectionState::from_test(x11_requested, probe),
                 _ => None,
             };
             let jump_mfa_request = match &spawn_result {
@@ -4314,32 +4312,22 @@ fn mfa_prompt_label(prompt: &str) -> String {
 }
 
 impl SshFormWindow {
-    fn switch_x11_to_external(
-        &mut self,
-        _: &ClickEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        AppSettings::update_and_save(cx, |settings| {
-            settings.x11_server_mode = X11ServerMode::External;
-        });
-        self.x11_switch_message = Some(t!("SSH.x11_switching_external").to_string());
+    fn retest_x11_server(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        self.x11_retest_message = Some(t!("SSH.x11_retesting").to_string());
         cx.notify();
-        let task = Tokio::spawn_result(cx, async move {
-            Ok(x11_component::resolve_server(X11ServerMode::External).await)
-        });
+        let task = Tokio::spawn_result(cx, async move { Ok(ssh::resolve_external().await) });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let status = match task.await {
                 Ok(resolution) => resolution.status,
-                Err(error) => one_core::settings::X11ForwardingStatus::Disabled {
+                Err(error) => ssh::X11ForwardingStatus::Disabled {
                     reason: error.to_string(),
                 },
             };
             let _ = this.update(cx, |this, cx| {
                 if let Some(state) = this.x11_test_status.as_mut() {
-                    state.apply_external_resolution(status);
+                    state.refresh_external(status);
                 }
-                this.x11_switch_message = None;
+                this.x11_retest_message = None;
                 cx.notify();
             });
         })
@@ -4348,21 +4336,18 @@ impl SshFormWindow {
 
     fn render_x11_status(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let state = self.x11_test_status.as_ref()?;
-        let disabled = matches!(
-            state.status,
-            one_core::settings::X11ForwardingStatus::Disabled { .. }
-        );
+        let disabled = matches!(state.status, ssh::X11ForwardingStatus::Disabled { .. });
         let color = if disabled {
             cx.theme().danger
         } else {
             cx.theme().success
         };
-        let switch_button = state.should_offer_external().then(|| {
-            Button::new("ssh-x11-use-external")
-                .label(t!("SSH.x11_switch_external").to_string())
+        let retest_button = Some(
+            Button::new("ssh-x11-retest")
+                .label(t!("SSH.x11_retest").to_string())
                 .small()
-                .on_click(cx.listener(Self::switch_x11_to_external))
-        });
+                .on_click(cx.listener(Self::retest_x11_server)),
+        );
         Some(
             v_flex()
                 .mx_6()
@@ -4378,8 +4363,8 @@ impl SshFormWindow {
                 .when(cfg!(target_os = "macos"), |this| {
                     this.child(t!("SSH.x11_macos_xquartz_guidance").to_string())
                 })
-                .when_some(switch_button, |this, button| this.child(button))
-                .when_some(self.x11_switch_message.clone(), |this, message| {
+                .when_some(retest_button, |this, button| this.child(button))
+                .when_some(self.x11_retest_message.clone(), |this, message| {
                     this.child(div().text_color(cx.theme().muted_foreground).child(message))
                 })
                 .text_xs()

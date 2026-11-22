@@ -1,8 +1,7 @@
 //! SSH 测试连接的结构化 X11 状态。
 
-use one_core::settings::{X11ForwardingStatus, X11ServerMode};
 use rust_i18n::t;
-use ssh::{SshChannel as _, SshClient, X11RequestRejected};
+use ssh::{SshChannel as _, SshClient, X11ForwardingStatus, X11RequestRejected};
 
 const REMOTE_GUIDANCE_KEYS: [&str; 2] = [
     "SSH.x11_remote_forwarding_disabled_checklist",
@@ -92,15 +91,10 @@ fn x11_request_error_status(error: &anyhow::Error) -> X11ForwardingStatus {
 pub(crate) struct X11ConnectionState {
     pub(crate) status: X11ForwardingStatus,
     pub(crate) remote_unavailable: bool,
-    mode: X11ServerMode,
 }
 
 impl X11ConnectionState {
-    pub(crate) fn from_test(
-        requested: bool,
-        mode: X11ServerMode,
-        probe: &X11Probe,
-    ) -> Option<Self> {
+    pub(crate) fn from_test(requested: bool, probe: &X11Probe) -> Option<Self> {
         if !requested {
             return None;
         }
@@ -115,7 +109,6 @@ impl X11ConnectionState {
             return Some(Self {
                 status: resolved,
                 remote_unavailable,
-                mode,
             });
         }
         let reason = if remote_unavailable {
@@ -126,7 +119,6 @@ impl X11ConnectionState {
         Some(Self {
             status: X11ForwardingStatus::Disabled { reason },
             remote_unavailable,
-            mode,
         })
     }
 
@@ -138,13 +130,8 @@ impl X11ConnectionState {
         }
     }
 
-    pub(crate) fn should_offer_external(&self) -> bool {
-        self.mode != X11ServerMode::External
-            && matches!(self.status, X11ForwardingStatus::Disabled { .. })
-    }
-
-    pub(crate) fn apply_external_resolution(&mut self, status: X11ForwardingStatus) {
-        self.mode = X11ServerMode::External;
+    /// 重新探测本机 X server 后刷新状态：成功即恢复「就绪」，失败只更新原因。
+    pub(crate) fn refresh_external(&mut self, status: X11ForwardingStatus) {
         self.status = status;
         self.remote_unavailable = false;
     }
@@ -153,9 +140,6 @@ impl X11ConnectionState {
         match &self.status {
             X11ForwardingStatus::External { server } => {
                 t!("SSH.x11_status_external", server = server).to_string()
-            }
-            X11ForwardingStatus::Embedded { version } => {
-                t!("SSH.x11_status_embedded", version = version).to_string()
             }
             X11ForwardingStatus::Disabled { reason } => {
                 t!("SSH.x11_status_disabled", reason = reason).to_string()
@@ -170,10 +154,9 @@ mod tests {
 
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
-    use one_core::settings::{X11ForwardingStatus, X11ServerMode};
     use ssh::{
         ChannelEvent, ForwardRequest, MagicCookie, PtyConfig, ServerEndpoint, SshChannel,
-        SshClient, SshConnectConfig, X11Proxy, X11RequestRejected,
+        SshClient, SshConnectConfig, X11ForwardingStatus, X11Proxy, X11RequestRejected,
     };
 
     use super::{X11ConnectionState, X11Probe, X11RequestOutcome, probe_connection_x11};
@@ -338,8 +321,7 @@ mod tests {
     async fn remote_x11_rejection_is_visible_but_not_an_ssh_error() {
         let mut client = MockClient::new(true, None);
         let probe = probe_connection_x11(&mut client).await;
-        let state = X11ConnectionState::from_test(true, X11ServerMode::External, &probe)
-            .expect("X11 拒绝状态");
+        let state = X11ConnectionState::from_test(true, &probe).expect("X11 拒绝状态");
 
         assert_eq!(X11RequestOutcome::Rejected, probe.outcome);
         assert!(!probe.accepted());
@@ -362,8 +344,7 @@ mod tests {
     async fn x11_transport_failure_does_not_claim_remote_rejection() {
         let mut client = MockClient::new(false, Some("local send failed"));
         let probe = probe_connection_x11(&mut client).await;
-        let state = X11ConnectionState::from_test(true, X11ServerMode::External, &probe)
-            .expect("X11 失败状态");
+        let state = X11ConnectionState::from_test(true, &probe).expect("X11 失败状态");
 
         assert_eq!(X11RequestOutcome::Failed, probe.outcome);
         assert!(!state.remote_unavailable);
@@ -381,7 +362,6 @@ mod tests {
         assert!(
             X11ConnectionState::from_test(
                 false,
-                X11ServerMode::Auto,
                 &probe(
                     X11RequestOutcome::NotAttempted,
                     X11ForwardingStatus::Disabled {
@@ -394,10 +374,9 @@ mod tests {
     }
 
     #[test]
-    fn active_status_preserves_external_or_embedded_details() {
+    fn active_status_preserves_the_external_server_details() {
         let external = X11ConnectionState::from_test(
             true,
-            X11ServerMode::External,
             &probe(
                 X11RequestOutcome::Accepted,
                 X11ForwardingStatus::External {
@@ -410,29 +389,12 @@ mod tests {
             external.status,
             X11ForwardingStatus::External { ref server } if server == ":0"
         ));
-
-        let embedded = X11ConnectionState::from_test(
-            true,
-            X11ServerMode::Embedded,
-            &probe(
-                X11RequestOutcome::Accepted,
-                X11ForwardingStatus::Embedded {
-                    version: "1.2.3".to_string(),
-                },
-            ),
-        )
-        .expect("内置状态");
-        assert!(matches!(
-            embedded.status,
-            X11ForwardingStatus::Embedded { ref version } if version == "1.2.3"
-        ));
     }
 
     #[test]
     fn refused_remote_channel_becomes_visible_disabled_state() {
         let state = X11ConnectionState::from_test(
             true,
-            X11ServerMode::External,
             &probe(
                 X11RequestOutcome::Rejected,
                 X11ForwardingStatus::External {
@@ -447,14 +409,13 @@ mod tests {
     }
 
     #[test]
-    fn local_embedded_failure_preserves_reason_and_offers_external() {
+    fn local_server_failure_preserves_reason() {
         let state = X11ConnectionState::from_test(
             true,
-            X11ServerMode::Auto,
             &probe(
                 X11RequestOutcome::NotAttempted,
                 X11ForwardingStatus::Disabled {
-                    reason: "Vulkan unavailable".to_string(),
+                    reason: "未检测到本机 X server：DISPLAY is not set".to_string(),
                 },
             ),
         )
@@ -464,7 +425,7 @@ mod tests {
         assert!(state.guidance_keys().is_empty());
         assert!(matches!(
             state.status,
-            X11ForwardingStatus::Disabled { ref reason } if reason == "Vulkan unavailable"
+            X11ForwardingStatus::Disabled { ref reason } if reason.contains("DISPLAY is not set")
         ));
     }
 
@@ -472,11 +433,10 @@ mod tests {
     fn remote_guidance_is_limited_to_actual_channel_refusal() {
         let remote = X11ConnectionState::from_test(
             true,
-            X11ServerMode::Embedded,
             &probe(
                 X11RequestOutcome::Rejected,
-                X11ForwardingStatus::Embedded {
-                    version: "1.2.3".to_string(),
+                X11ForwardingStatus::External {
+                    server: ":0".to_string(),
                 },
             ),
         )
@@ -496,39 +456,26 @@ mod tests {
     }
 
     #[test]
-    fn external_selection_hides_the_offer() {
+    fn retesting_the_local_server_replaces_the_disabled_reason() {
         let mut state = X11ConnectionState {
             status: X11ForwardingStatus::Disabled {
-                reason: "Vulkan unavailable".to_string(),
+                reason: "old failure".to_string(),
             },
-            remote_unavailable: false,
-            mode: X11ServerMode::Auto,
+            remote_unavailable: true,
         };
-        assert!(state.should_offer_external());
-        state.apply_external_resolution(X11ForwardingStatus::External {
+        state.refresh_external(X11ForwardingStatus::External {
             server: ":0".to_string(),
         });
-        assert!(!state.should_offer_external());
+        assert!(!state.remote_unavailable);
+        assert!(state.guidance_keys().is_empty());
         assert!(matches!(
             state.status,
             X11ForwardingStatus::External { ref server } if server == ":0"
         ));
-    }
 
-    #[test]
-    fn external_probe_failure_replaces_stale_disabled_reason() {
-        let mut state = X11ConnectionState {
-            status: X11ForwardingStatus::Disabled {
-                reason: "old embedded failure".to_string(),
-            },
-            remote_unavailable: true,
-            mode: X11ServerMode::Auto,
-        };
-        state.apply_external_resolution(X11ForwardingStatus::Disabled {
+        state.refresh_external(X11ForwardingStatus::Disabled {
             reason: "DISPLAY is not reachable".to_string(),
         });
-        assert!(!state.remote_unavailable);
-        assert!(state.guidance_keys().is_empty());
         assert!(matches!(
             state.status,
             X11ForwardingStatus::Disabled { ref reason } if reason == "DISPLAY is not reachable"
@@ -541,14 +488,13 @@ mod tests {
             rust_i18n::set_locale(language);
             for key in [
                 "SSH.x11_status_external",
-                "SSH.x11_status_embedded",
                 "SSH.x11_status_disabled",
                 "SSH.x11_remote_forwarding_disabled_checklist",
                 "SSH.x11_remote_display_restarted",
                 "SSH.x11_untrusted_ssh_x_security",
                 "SSH.x11_macos_xquartz_guidance",
-                "SSH.x11_switch_external",
-                "SSH.x11_switching_external",
+                "SSH.x11_retest",
+                "SSH.x11_retesting",
                 "SSH.x11_channel_open_failed",
                 "SSH.x11_remote_request_rejected",
                 "SSH.x11_request_failed",
@@ -569,8 +515,8 @@ mod tests {
         assert!(window.contains("probe_connection_x11(&mut client).await"));
         assert!(!window.contains("client.x11_forwarding().is_some()"));
         assert!(!window.contains("current_status()"));
-        assert!(window.contains("switch_x11_to_external"));
-        assert!(window.contains("x11_component::resolve_server(X11ServerMode::External).await"));
-        assert!(window.contains("AppSettings::update_and_save"));
+        assert!(window.contains("retest_x11_server"));
+        assert!(window.contains("ssh::resolve_external().await"));
+        assert!(!window.contains("x11_component"));
     }
 }

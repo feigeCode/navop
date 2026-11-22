@@ -2822,10 +2822,6 @@ TerminalX11:
     en: "External X server: %{server}"
     zh-CN: "外部 X server：%{server}"
     zh-HK: "外部 X server：%{server}"
-  embedded:
-    en: "Embedded X server: %{version}"
-    zh-CN: "内置 X server：%{version}"
-    zh-HK: "內置 X server：%{version}"
 
 TerminalSessionLog:
   tab_title:

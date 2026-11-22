@@ -22,7 +22,6 @@ terminal = { workspace = true }
 tokio = { workspace = true }
 tool_runtime = { workspace = true }
 tracing = { workspace = true }
-x11_component = { workspace = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

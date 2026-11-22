@@ -65,7 +65,6 @@ mod update;
 mod window_visibility;
 #[cfg(any(target_os = "windows", test))]
 mod windows_single_instance;
-mod x11_runtime;
 
 use crate::navop_app::NavopApp;
 
@@ -530,10 +529,6 @@ where
     {
         eprintln!("Failed to initialize application paths: {error:#}");
         return;
-    }
-    // 路径初始化后、任何设置加载或 SSH 解析前注入产品真实版本与隔离数据目录。
-    if let Err(error) = x11_runtime::configure_runtime(version) {
-        eprintln!("Failed to configure X11 component runtime: {error:?}");
     }
     // Public MCP 发现文件必须跟着运行模式走：正式版落在数据目录里（与历史位置
     // 一致），开发/便携版落在各自的数据根下。否则 `cargo run` 起开发版就会把

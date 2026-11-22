@@ -1,5 +1,9 @@
 # x11_component
 
+> **当前状态（2026-11-22 更新）**：Navop 产品已统一走外置 X server
+> （XQuartz / 本地 X.org），本 crate 不再被任何产品 crate 依赖，发布与 CI
+> 也不准备、不内嵌组件。下面的安装/进程管理说明保留给独立验证使用。
+
 内置与本机 X11 服务的解析、签名安装和单实例进程管理。内置范围为 Windows x86_64/aarch64 和 Apple Silicon macOS；外置模式继续使用本机 X server，macOS 上为 XQuartz。
 
 ## 应用集成
@@ -7,23 +11,23 @@
 - 启动时调用 `set_data_dir`，传入已经限定产品的数据目录；默认值为 `dirs::data_dir()/navop`，组件根目录只追加 `components/x11`。
 - 调用 `set_navop_version(env!("CARGO_PKG_VERSION").parse()?)`，清单的 `pinned_for_navop` 校验应用版本，而不是 yserver 版本。
 - 使用 `resolve_server(mode)` 获取共享代理；设置变化时调用 `set_configured_mode`。
-- `Auto` 优先选择通过真实 X11 setup 握手的外置服务，失败后尝试内置；`External` 只使用外置服务，不会静默切换；`Embedded` 只使用内置服务。
+- `Auto` 优先选择通过真实 X11 setup 握手的外置服务，失败后尝试内置；`External` 只使用外置服务，不会静默切换；`Embedded` 只使用内置服务。（产品侧已只走外置，见顶部状态说明。）
 - `NAVOP_X11_YSERVER_PATH` 仅供开发/验收注入手动二进制，仍执行相同的 xauth、握手和进程生命周期检查。上游原版会监听所有网卡，因此 TCP 手动入口会 fail-closed；macOS 手动入口使用 Unix socket。
 
-## 内嵌构建
+## 内嵌构建（`bundled` 特性，默认关闭）
 
-正式 Windows full/standalone-shell x86_64 和 macOS full/standalone-shell arm64 构建把完整签名 zip 编进主可执行文件。安装包、portable 和应用自更新都随主程序携带组件，不依赖旁置资源。
+产品侧已不使用本 crate，`bundled` 特性只在独立验证时需要：默认关闭时 `bundle::archive()` 恒为 `None`，`Embedded` 模式明确报「当前构建未内嵌 X11 组件」。需要验证内嵌路径时可显式开启：
 
 ```bash
 python3 script/prepare-x11-component.py \
   --target macos-aarch64 --output "$PWD/target/navop-x11-component.zip"
 NAVOP_X11_BUNDLED_ARCHIVE="$PWD/target/navop-x11-component.zip" \
-  cargo build --release -p navop
+  cargo test -p x11_component --features bundled --lib
 ```
 
-准备脚本只接受仓库内固定清单的版本和构建脚本中的固定 URL，在构建前执行 SHA-256、Ed25519 验签和包结构检查；`build.rs` 不联网。支持的目标为 `windows-x86_64`、`windows-aarch64`、`macos-aarch64`，路径必须是绝对路径。当前 Navop 没有 Windows aarch64 产品 target；Win32、Intel macOS、standalone-data 以及未显式配置内嵌包的开发构建使用空占位，不能误装其他架构的包。
+未开启特性时即使 `NAVOP_X11_BUNDLED_ARCHIVE` 存在也只打印一条 `cargo:warning` 并忽略，避免流水线残留的环境变量把组件意外塞进产物。Navop 的 CI 与发布流程不再涉及该特性。
 
-运行时安装与“修复/重新安装”只读取内嵌 zip，完整走灰度（显式 Embedded 除外）、摘要、签名、安全解压、staging 和原子提交。crate 不包含 HTTP client、远程清单或下载重试逻辑；没有内嵌包、包损坏或与编译目标不符时直接失败，不存在网络回退。
+准备脚本只接受仓库内固定清单的版本和构建脚本中的固定 URL，在构建前执行 SHA-256、Ed25519 验签和包结构检查；`build.rs` 不联网。支持的目标为 `windows-x86_64`、`windows-aarch64`、`macos-aarch64`，路径必须是绝对路径。
 
 ## 发布与信任根
 

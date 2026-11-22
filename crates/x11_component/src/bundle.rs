@@ -1,10 +1,16 @@
 //! 构建期验证后嵌入的固定组件；运行时只接受这份内嵌归档。
+//!
+//! 是否内嵌由 `bundled` 特性决定，默认关闭：组件分发策略未定期间，普通构建与
+//! 发布构建都不把 zip 塞进二进制（`archive()` 恒为 `None`，`Embedded` 模式会
+//! 明确报「当前构建未内嵌 X11 组件」，`Auto` 模式退回外置 X server）。
+//! 需要内嵌时显式开启 `--features x11_component/bundled`。
 
 pub const PINNED_MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../resources/windows/x11-component/navop-x11-manifest.json"
 ));
 
+#[cfg(feature = "bundled")]
 static ARCHIVE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/navop-x11-bundled.zip"));
 
 #[derive(Clone, Copy)]
@@ -13,17 +19,47 @@ pub struct EmbeddedArchive {
     pub bytes: &'static [u8],
 }
 
+/// 本次构建内嵌的归档；未启用 `bundled` 特性或构建期没提供 zip 时为 `None`。
 pub fn archive() -> Option<EmbeddedArchive> {
-    (!ARCHIVE.is_empty()).then_some(EmbeddedArchive {
-        target: env!("NAVOP_X11_BUNDLED_TARGET"),
-        bytes: ARCHIVE,
-    })
+    #[cfg(feature = "bundled")]
+    {
+        return (!ARCHIVE.is_empty()).then_some(EmbeddedArchive {
+            target: env!("NAVOP_X11_BUNDLED_TARGET"),
+            bytes: ARCHIVE,
+        });
+    }
+    #[cfg(not(feature = "bundled"))]
+    {
+        None
+    }
+}
+
+/// 当前构建是否内嵌了固定 X11 组件。
+pub fn bundled() -> bool {
+    archive().is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use sha2::Digest;
+
+    /// 默认（未开 `bundled`）构建必须不内嵌任何归档，`Embedded` 模式因此走
+    /// 「当前构建未内嵌」的错误路径；开启特性且构建期给了 zip 时必须有归档。
+    #[test]
+    fn bundled_feature_controls_the_archive() {
+        #[cfg(feature = "bundled")]
+        {
+            if option_env!("NAVOP_X11_BUNDLED_ARCHIVE").is_some() {
+                assert!(
+                    archive().is_some(),
+                    "提供归档后启用 bundled 特性必须内嵌组件"
+                );
+            }
+        }
+        #[cfg(not(feature = "bundled"))]
+        assert!(archive().is_none(), "未启用 bundled 特性时不得内嵌组件");
+    }
 
     #[test]
     fn pinned_manifest_contains_all_supported_targets() {
@@ -72,7 +108,7 @@ mod tests {
     #[tokio::test]
     async fn configured_archive_installs_complete_component_offline() {
         let Some(archive) = archive() else {
-            assert!(option_env!("NAVOP_X11_BUNDLED_ARCHIVE").is_none());
+            // 默认构建不内嵌组件；本用例只在真实内嵌构建里跑。
             return;
         };
         let root = std::env::temp_dir().join(format!(
@@ -194,7 +230,7 @@ mod tests {
     #[test]
     fn configured_archive_matches_its_pinned_manifest() {
         let Some(archive) = archive() else {
-            assert!(option_env!("NAVOP_X11_BUNDLED_ARCHIVE").is_none());
+            // 默认构建不内嵌组件；本用例只在真实内嵌构建里跑。
             return;
         };
         let manifest = crate::manifest::ComponentManifest::parse(

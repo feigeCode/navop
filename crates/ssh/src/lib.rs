@@ -49,5 +49,7 @@ pub use ssh::{
     connect_via_proxy, defaults, expand_auto_publickey_auth, start_local_port_forward,
     start_local_port_forward_with_config,
 };
-pub use x11_component::X11ForwardingStatus;
-pub use x11_forwarding::{ForwardRequest, MagicCookie, ServerEndpoint, X11Proxy};
+pub use x11_forwarding::{
+    ForwardRequest, MagicCookie, ServerEndpoint, X11ForwardingStatus, X11Proxy, X11Resolution,
+    resolution_generation, resolve_external,
+};

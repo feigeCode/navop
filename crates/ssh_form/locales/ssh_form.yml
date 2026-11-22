@@ -784,10 +784,6 @@ SSH:
     en: "X11 forwarding: local %{server}"
     zh-CN: "X11 转发：本机 %{server}"
     zh-HK: "X11 轉發：本機 %{server}"
-  x11_status_embedded:
-    en: "X11 forwarding: built-in yserver %{version} (Vulkan)"
-    zh-CN: "X11 转发：内置 yserver %{version}（Vulkan）"
-    zh-HK: "X11 轉發：內置 yserver %{version}（Vulkan）"
   x11_status_disabled:
     en: "X11 forwarding: disabled (%{reason})"
     zh-CN: "X11 转发：已停用（%{reason}）"
@@ -809,17 +805,17 @@ SSH:
     zh-CN: "untrusted ssh -X 会受 X11 SECURITY 超时限制；需要可信转发时请使用 ssh -Y。"
     zh-HK: "untrusted ssh -X 會受 X11 SECURITY 逾時限制；需要可信轉發時請使用 ssh -Y。"
   x11_macos_xquartz_guidance:
-    en: "Apple Silicon full builds include yserver; no XQuartz or Homebrew runtime is required. External uses XQuartz with DISPLAY authorization ready. Intel Macs and data-only builds use External."
-    zh-CN: "Apple Silicon 完整版内置 yserver，无需 XQuartz 或 Homebrew 运行库；External 需安装并启动 XQuartz，并确保 DISPLAY 授权就绪。Intel Mac 和纯数据版请选 External。"
-    zh-HK: "Apple Silicon 完整版內置 yserver，無需 XQuartz 或 Homebrew 運行庫；External 需安裝並啟動 XQuartz，並確保 DISPLAY 授權就緒。Intel Mac 和純資料版請選 External。"
-  x11_switch_external:
-    en: Switch to external X server
-    zh-CN: 切换到外部 X server
-    zh-HK: 切換至外部 X server
-  x11_switching_external:
-    en: External mode saved. Detecting the local X server…
-    zh-CN: 已保存 External 模式，正在重新探测本机 X server…
-    zh-HK: 已儲存 External 模式，正在重新偵測本機 X server…
+    en: "macOS needs XQuartz installed and running with DISPLAY authorization ready; re-test after starting it."
+    zh-CN: "macOS 需要安装并启动 XQuartz，且 DISPLAY 授权就绪；启动后可重新检测。"
+    zh-HK: "macOS 需要安裝並啟動 XQuartz，且 DISPLAY 授權就緒；啟動後可重新偵測。"
+  x11_retest:
+    en: Re-test local X server
+    zh-CN: 重新检测本机 X server
+    zh-HK: 重新偵測本機 X server
+  x11_retesting:
+    en: Detecting the local X server…
+    zh-CN: 正在重新探测本机 X server…
+    zh-HK: 正在重新偵測本機 X server…
   x11_channel_open_failed:
     en: "Could not open a temporary SSH channel for the X11 request: %{error}. SSH itself is connected."
     zh-CN: "无法为 X11 请求打开临时 SSH 通道：%{error}。SSH 本身已连接。"

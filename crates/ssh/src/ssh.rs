@@ -13,8 +13,9 @@ use rust_i18n::t;
 use tokio::io::{AsyncRead, AsyncWrite, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, Semaphore, oneshot};
-use x11_component::{X11ForwardingStatus, X11Resolution};
-use x11_forwarding::{ForwardRequest, X11Proxy, X11ProxyHandle};
+use x11_forwarding::{
+    ForwardRequest, X11ForwardingStatus, X11Proxy, X11ProxyHandle, X11Resolution,
+};
 
 use crate::connection_error::{add_jump_channel_rejected_hint, add_private_key_load_hint};
 use crate::remote_forwarding::RemoteForwardTarget;
@@ -3076,14 +3077,10 @@ impl RusshClient {
     }
 }
 
-/// 按设置解析 X server；失败作为可见状态返回，不阻断 SSH 连接。
+/// 解析本机外置 X server；失败作为可见状态返回，不阻断 SSH 连接。
 async fn detect_x11_proxy() -> X11Resolution {
-    let mode = x11_component::configured_mode();
-    let resolution = x11_component::resolve_server(mode).await;
+    let resolution = x11_forwarding::resolve_external().await;
     match &resolution.status {
-        X11ForwardingStatus::Embedded { version } => {
-            tracing::info!(target: "ssh.x11", %version, "内置 yserver 已就绪");
-        }
         X11ForwardingStatus::External { server } => {
             tracing::info!(target: "ssh.x11", %server, "本机 X server 已就绪");
         }

@@ -92,7 +92,15 @@ async fn embedded(mode: X11ServerMode) -> Result<X11Resolution, X11ComponentErro
             std::env::consts::OS
         )));
     }
-    let spec = match manual_binary() {
+    let manual = manual_binary();
+    // 没有内嵌组件时提前给出准确原因：否则 `Auto` 每次都要走到安装阶段才失败，
+    // 状态面板会显示成「安装失败」而不是「本构建未内嵌」。
+    if manual.is_none() && !crate::bundle::bundled() {
+        return Err(X11ComponentError::Config(
+            "当前构建未内嵌 X11 组件（未启用 x11-bundled 特性），请改用外置 X server".into(),
+        ));
+    }
+    let spec = match manual {
         Some(executable) => LaunchSpec::manual(configured_data_dir()?, executable)?,
         None => {
             let config = default_config()?;
@@ -167,6 +175,17 @@ mod tests {
             stream.write_all(&[1, 0, 11, 0, 0, 0, 0, 0]).await.unwrap();
         });
         (endpoint, server)
+    }
+
+    /// 默认构建（没有内嵌组件）里 `Embedded` 必须立刻报「未内嵌」，而不是先尝试安装。
+    #[cfg(not(feature = "bundled"))]
+    #[tokio::test]
+    async fn embedded_without_the_bundled_component_is_a_config_error() {
+        let error = embedded(X11ServerMode::Embedded).await.unwrap_err();
+        assert!(
+            matches!(error, X11ComponentError::Config(ref message) if message.contains("未内嵌 X11 组件")),
+            "unexpected error: {error:?}"
+        );
     }
 
     #[tokio::test]

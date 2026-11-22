@@ -18,6 +18,7 @@ mod display;
 mod error;
 mod probe;
 mod proxy;
+mod resolution;
 mod setup;
 mod xauthority;
 
@@ -27,3 +28,4 @@ pub use display::{DisplayAddress, ServerEndpoint};
 pub use error::{X11Error, X11Result};
 pub use probe::probe_endpoint;
 pub use proxy::{X11Proxy, X11ProxyHandle};
+pub use resolution::{X11ForwardingStatus, X11Resolution, resolution_generation, resolve_external};

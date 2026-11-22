@@ -8395,7 +8395,6 @@ dependencies = [
  "uuid",
  "windows 0.62.2",
  "workspace_explorer",
- "x11_component",
  "x11rb",
  "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=110523127440aefb11ce0cf280ae7c5071337ec5)",
  "zeroize",
@@ -9505,7 +9504,6 @@ dependencies = [
  "tracing",
  "uuid",
  "windows 0.61.3",
- "x11_component",
  "zeroize",
 ]
 
@@ -13603,7 +13601,6 @@ dependencies = [
  "tokio-socks",
  "tokio-util",
  "tracing",
- "x11_component",
  "x11_forwarding",
 ]
 
@@ -13689,7 +13686,6 @@ dependencies = [
  "tokio",
  "tool_runtime",
  "tracing",
- "x11_component",
 ]
 
 [[package]]
