@@ -1,19 +1,13 @@
 use super::*;
 use ssh::X11ForwardingStatus;
 
-fn session_notice(
-    x11_enabled: bool,
-    status: Option<&X11ForwardingStatus>,
-) -> Option<String> {
+fn session_notice(x11_enabled: bool, status: Option<&X11ForwardingStatus>) -> Option<String> {
     if !x11_enabled {
         return None;
     }
     match status? {
         X11ForwardingStatus::External { server } => {
             Some(t!("TerminalX11.external", server = server).to_string())
-        }
-        X11ForwardingStatus::Embedded { version, .. } => {
-            Some(t!("TerminalX11.embedded", version = version).to_string())
         }
         X11ForwardingStatus::Disabled { .. } => None,
     }

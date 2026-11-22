@@ -25,6 +25,12 @@ mod test_support;
 mod vulkan;
 mod xauth;
 
+/// 当前构建是否内嵌了固定 X11 组件（`bundled` 特性）。未内嵌时设置界面不再
+/// 提供「内置」选项，`Embedded` 模式会直接报「当前构建未内嵌 X11 组件」。
+pub fn bundled_available() -> bool {
+    bundle::bundled()
+}
+
 pub use installer::{install_with_config, install_with_config_for_mode, reinstall_with_config};
 pub use metrics::{X11ComponentMetrics, metrics};
 pub use resolver::{installed_version, reinstall, resolve_server};

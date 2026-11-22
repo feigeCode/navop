@@ -4,6 +4,12 @@ version = "0.1.0"
 publish.workspace = true
 edition.workspace = true
 
+[features]
+# 把官方固定组件 zip 在构建期内嵌进二进制（离线可用）。默认关闭：
+# 组件分发策略未定期间，发布构建不再内嵌；需要时显式开启
+# `--features x11_component/bundled`（产品侧用 `<产品>/x11-bundled` 转发）。
+bundled = []
+
 [dependencies]
 base64.workspace = true
 dirs.workspace = true

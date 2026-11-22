@@ -22,7 +22,6 @@ use crate::settings::tool_exposure_settings::{
 };
 use crate::settings::update_channel::{beta_exit_notice_item, update_channel_item};
 use crate::settings::update_mirror::update_mirror_item;
-use crate::settings::x11_settings::x11_setting_group;
 use crate::update;
 use font_kit::{file_type::FileType, font::Font};
 use gpui::http_client::{AsyncBody, Method, Request};
@@ -690,7 +689,6 @@ impl SettingsPanel {
         let file_transfer_group = file_transfer_setting_group(&default_settings);
         let remote_file_editor_group =
             remote_file_editor_setting_group(&default_settings.remote_file_editor, cx);
-        let x11_group = x11_setting_group(default_settings.x11_server_mode);
         let is_portable = one_core::app_paths::is_portable();
         let master_key_setting_title = if is_portable {
             t!("Settings.General.Startup.remember_portable_master_key").to_string()
@@ -1131,7 +1129,7 @@ impl SettingsPanel {
             rest.push(
                 SettingPage::new(t!("Settings.Ssh.title"))
                     .resettable(true)
-                    .groups(vec![ssh_deeplink_setting_group(), x11_group.clone()]),
+                    .groups(vec![ssh_deeplink_setting_group()]),
             );
             rest.push(
                 SettingPage::new(t!("Settings.Sftp.title"))

@@ -1,5 +1,10 @@
 # 内置 yserver X11 转发设计
 
+> **当前状态（2026-11-22 更新）**：产品已统一走外置 X server（XQuartz / 本地
+> X.org），内置模式、设置项与内嵌交付全部下线。`crates/x11_component` 仍留在
+> workspace，但已不被任何产品 crate 依赖，也不再由 CI / 发布流程准备或内嵌；
+> 本文档保留为那段内置方案的设计记录，实现细节以代码为准。
+
 ## 目标与边界
 
 本期让 Windows 用户在不安装 VcXsrv、Apple Silicon macOS 用户在不安装 XQuartz/Homebrew 的情况下使用 X11 转发。macOS 仍可显式选择外置 XQuartz；Intel Mac 没有内置 artifact，使用外置模式。Linux 不纳入本期内置范围，仍使用本机 X server。远端 sshd、远端软件和现有 cookie 委托链路均不改变。
@@ -8,13 +13,10 @@
 
 ## 解析优先级
 
-设置提供 `Auto`、`External`、`Embedded` 三种持久化模式：
-
-1. `Auto`：先探测本机 X server，失败后尝试内置组件；两者都不可用时返回带原因的停用状态。
-2. `External`：只使用本机 X server。
-3. `Embedded`：只使用内置组件，失败时明确提示可改用外部 server。
-
-`crates/x11_component` 负责模式解析、固定清单、内嵌包安装、验签、版本目录、能力预检和进程监督；`crates/ssh` 只读取全局设置并取得解析结果。每个 `RusshClient` 保存自己的状态，避免并发会话相互覆盖。`X11Proxy::for_endpoint` 只替换本机 server 的来源，x11-req、回连通道、fake cookie、真实 cookie 改写和双向中继继续复用。
+产品只使用本机 X server：`crates/x11_forwarding::resolve_external()` 探测 DISPLAY
+与 Xauthority、做一次真实 X11 setup 握手，成功才签发 fake cookie；失败返回带原因
+的停用状态，不阻断 SSH 连接。`crates/ssh` 只取得解析结果，每个 `RusshClient`
+保存自己的状态，避免并发会话相互覆盖。`X11Proxy::for_endpoint` 只替换本机 server 的来源，x11-req、回连通道、fake cookie、真实 cookie 改写和双向中继继续复用。
 
 **本机 endpoint 与远端 DISPLAY 是两套语义。** 远端 DISPLAY 由 sshd 在 accepted x11-req 后分配；远端客户端通过 SSH 通道回连，不会把本机 endpoint 当作远端 display。Windows 内置使用 `127.0.0.1` 上随机 display 对应的 `6000 + display` 端口；macOS 使用随机 Unix socket，发生冲突时在组件锁内轮换。不再宣称 yserver 支持任意 TCP 端口参数。
 
@@ -24,7 +26,9 @@ Windows 组件版本为 `1.9.0-navop.1`，源码固定为 [feigeCode/yserver](ht
 
 运行时清单使用 schema 1，按 `windows-x86_64`、`windows-aarch64`、`macos-aarch64` 选择 artifact。artifact 只包含版本、SHA-256、Ed25519 签名、最低 Vulkan 版本、`format` 和 `executable_path`，不包含 URL 等下载元数据；zip 完整保留 yserver、xauth、`xkb/` 与 licenses。`pinned_for_navop` 匹配当前 Navop 版本，artifact 自身版本独立解析。签名原始字节是完整 zip，不是摘要文本或解压后的单个可执行文件。同一组件版本不得替换不同摘要，更新组件必须提升版本并同步固定清单和构建期地址。
 
-正式 Windows full/standalone-shell x86_64 和 macOS full/standalone-shell arm64 构建前，`script/prepare-x11-component.py` 从脚本内固定地址获取 zip、限制大小、按固定清单校验 SHA-256、Ed25519 签名和包结构，再通过 `NAVOP_X11_BUNDLED_ARCHIVE` 交给 `crates/x11_component/build.rs` 编进主可执行文件。网络访问只发生在构建机，build script 和成品运行时均不联网获取组件。这样 MSI、Burn、DMG、portable 和只替换主程序的自更新都携带同一组件，不依赖旁置 zip。Win32、Intel macOS 没有对应内置产品，standalone-data 不嵌入；这些 target 不得误装其他架构的包。当前 Navop 没有 Windows aarch64 产品 target，但组件安装器保留正确架构选择供后续产品接入。
+（历史流程）开启了内嵌特性（`x11-bundled`）的 Windows full/standalone-shell x86_64 和 macOS full/standalone-shell arm64 构建前，`script/prepare-x11-component.py` 从脚本内固定地址获取 zip、限制大小、按固定清单校验 SHA-256、Ed25519 签名和包结构，再通过 `NAVOP_X11_BUNDLED_ARCHIVE` 交给 `crates/x11_component/build.rs` 编进主可执行文件。网络访问只发生在构建机，build script 和成品运行时均不联网获取组件。这样 MSI、Burn、DMG、portable 和只替换主程序的自更新都携带同一组件，不依赖旁置 zip。Win32、Intel macOS 没有对应内置产品，standalone-data 不嵌入；这些 target 不得误装其他架构的包。当前 Navop 没有 Windows aarch64 产品 target，但组件安装器保留正确架构选择供后续产品接入。
+
+内嵌交付已下线：产品 crate 不再依赖 `crates/x11_component`，发布与 CI 流程也不再准备归档、注入 `NAVOP_X11_BUNDLED_ARCHIVE` 或追加 `x11-bundled` 特性。该 crate 仍保留 `bundled` 特性与固定清单校验逻辑，可用于独立构建验证，但默认和被产品使用时都不会把 zip 编进主可执行文件。
 
 运行时安装和“修复/重新安装”只读取内嵌 zip，仍完整执行灰度、摘要、签名、安全 zip 解压、staging 与原子提交。crate 不包含 HTTP client、远程清单或下载重试逻辑；没有内嵌包、包损坏或目标不符时 fail-closed，不存在网络回退。
 

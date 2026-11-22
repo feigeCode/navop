@@ -169,25 +169,23 @@ jobs:
           # 资产名（{binary}-{target}.tar.gz|.zip），bundle_name 是 macOS
           # .app 目录名，portable_marker 是便携版标记文件名。全量与独立
           # 产品同 tag 发布，公开产物名统一 {product}-{version}-{label}。
-          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":"macos-aarch64"}'
-          macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","product":"navop","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
-          linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","product":"navop","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
-          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","product":"navop","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","public_label":"linux-arm64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":true,"windows_native_rdp":false,"x11_target":""}'
-          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","product":"navop","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x64","x11_target":"windows-x86_64"}'
-          # i686 明确不内嵌；空 x11_target 同时保证不注入 bundle env。
-          windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","product":"navop","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","public_label":"win32","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x86","x11_target":""}'
+          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":false}'
+          macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","product":"navop","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":false}'
+          linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","product":"navop","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":false}'
+          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","product":"navop","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","public_label":"linux-arm64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":true,"windows_native_rdp":false}'
+          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","product":"navop","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x64"}'
+          windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","product":"navop","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","public_label":"win32","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x86"}'
           # 独立产品只覆盖主力平台（无 linux-arm64 / win32），对齐原
           # standalone-products.yml 的平台面；win32 的 shell-plugins 依赖
           # 仅支持 64 位，等独立产品需要 32 位时再单独评估。
-          shell_macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop-shell","binary":"navop-shell","archive":"navop-shell-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":"macos-aarch64"}'
-          shell_macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","product":"navop-shell","binary":"navop-shell","archive":"navop-shell-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
-          shell_linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","product":"navop-shell","binary":"navop-shell","archive":"navop-shell-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
-          shell_windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","product":"navop-shell","binary":"navop-shell.exe","archive":"navop-shell-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x64","x11_target":"windows-x86_64"}'
-          data_macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop-data","binary":"navop-data","archive":"navop-data-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
-          data_macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","product":"navop-data","binary":"navop-data","archive":"navop-data-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
-          data_linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","product":"navop-data","binary":"navop-data","archive":"navop-data-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":false,"x11_target":""}'
-          # standalone-data 与 full i686 不准备、不内嵌；使用内置 X11 时明确失败，无网络回退。
-          data_windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","product":"navop-data","binary":"navop-data.exe","archive":"navop-data-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x64","x11_target":""}'
+          shell_macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop-shell","binary":"navop-shell","archive":"navop-shell-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":false}'
+          shell_macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","product":"navop-shell","binary":"navop-shell","archive":"navop-shell-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":false}'
+          shell_linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","product":"navop-shell","binary":"navop-shell","archive":"navop-shell-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":false}'
+          shell_windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","product":"navop-shell","binary":"navop-shell.exe","archive":"navop-shell-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x64"}'
+          data_macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop-data","binary":"navop-data","archive":"navop-data-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":false}'
+          data_macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","product":"navop-data","binary":"navop-data","archive":"navop-data-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":false}'
+          data_linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","product":"navop-data","binary":"navop-data","archive":"navop-data-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":false}'
+          data_windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","product":"navop-data","binary":"navop-data.exe","archive":"navop-data-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x64"}'
 
           case "$RELEASE_PLATFORM" in
             all)
@@ -371,40 +369,6 @@ jobs:
           "$RUNNER_TEMP/ziglang/bin/python" -m ziglang version
           cargo-zigbuild --version
 
-      - name: Set up Python for embedded X11 component
-        if: matrix.x11_target != ''
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.x"
-
-      - name: Prepare embedded X11 component
-        id: x11-component
-        if: matrix.x11_target != ''
-        shell: bash
-        env:
-          X11_TARGET: ${{ matrix.x11_target }}
-        run: |
-          set -euo pipefail
-          if [[ "$RUNNER_OS-$X11_TARGET" != "Windows-windows-x86_64" && "$RUNNER_OS-$X11_TARGET" != "macOS-macos-aarch64" ]]; then
-            echo "Unexpected X11 release target: $RUNNER_OS-$X11_TARGET" >&2
-            exit 1
-          fi
-          archive="$RUNNER_TEMP/navop-x11-$X11_TARGET.zip"
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            git_openssl="$PROGRAMFILES/Git/usr/bin/openssl.exe"
-            if [ -f "$git_openssl" ]; then
-              openssl_dir="$(dirname "$git_openssl")"
-              export PATH="$openssl_dir:$PATH"
-            fi
-          fi
-          command -v python
-          command -v openssl
-          python --version
-          openssl version
-          python script/prepare-x11-component.py --target "$X11_TARGET" --output "$archive"
-          test -s "$archive"
-          echo "archive=$archive" >> "$GITHUB_OUTPUT"
-
       - name: Configure MSVC environment
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
@@ -452,12 +416,8 @@ jobs:
           NAVOP_PUBLIC_BASE_URL: ${{ vars.NAVOP_PUBLIC_BASE_URL }}
           NAVOP_WEBSITE_BASE_URL: ${{ vars.NAVOP_WEBSITE_BASE_URL }}
           ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
-          NAVOP_X11_BUNDLED_ARCHIVE: ${{ steps.x11-component.outputs.archive }}
         run: |
           set -euo pipefail
-          if [ -z "${NAVOP_X11_BUNDLED_ARCHIVE:-}" ]; then
-            unset NAVOP_X11_BUNDLED_ARCHIVE
-          fi
           if [ "${{ needs.prepare.outputs.build_mode }}" = "fast" ]; then
             export CARGO_PROFILE_RELEASE_LTO=thin
             export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
@@ -517,13 +477,7 @@ jobs:
           NAVOP_PUBLIC_BASE_URL: ${{ vars.NAVOP_PUBLIC_BASE_URL }}
           NAVOP_WEBSITE_BASE_URL: ${{ vars.NAVOP_WEBSITE_BASE_URL }}
           ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
-          # 非内嵌矩阵项的 output 不存在，表达式得到空字符串；下一步立即清除，
-          # 使 build.rs 看到“变量缺失”而不是会报错的空路径。
-          NAVOP_X11_BUNDLED_ARCHIVE: ${{ steps.x11-component.outputs.archive }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:NAVOP_X11_BUNDLED_ARCHIVE)) {
-            Remove-Item Env:NAVOP_X11_BUNDLED_ARCHIVE -ErrorAction SilentlyContinue
-          }
           if ([string]::IsNullOrWhiteSpace($env:VCToolsInstallDir)) {
             throw "VCToolsInstallDir is not configured"
           }
@@ -582,29 +536,6 @@ jobs:
           if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
             throw "Release binary was not created: '$binary'"
           }
-
-      - name: Verify embedded X11 archive in release binary
-        if: matrix.x11_target != ''
-        shell: bash
-        env:
-          NAVOP_X11_BUNDLED_ARCHIVE: ${{ steps.x11-component.outputs.archive }}
-          RELEASE_BINARY: target/${{ matrix.target }}/release/${{ matrix.binary }}
-        run: |
-          set -euo pipefail
-          test -s "$NAVOP_X11_BUNDLED_ARCHIVE"
-          python3 - "$NAVOP_X11_BUNDLED_ARCHIVE" "$RELEASE_BINARY" <<'PY'
-          from pathlib import Path
-          import hashlib
-          import sys
-
-          archive = Path(sys.argv[1])
-          binary = Path(sys.argv[2])
-          payload = archive.read_bytes()
-          executable = binary.read_bytes()
-          if payload not in executable:
-              raise SystemExit(f"Embedded X11 archive was not found in {binary}")
-          print(f"Verified embedded X11 archive: {len(payload)} bytes, sha256={hashlib.sha256(payload).hexdigest()}")
-          PY
 
       - name: Validate Windows executable manifest
         if: runner.os == 'Windows'

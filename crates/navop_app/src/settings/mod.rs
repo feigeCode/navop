@@ -22,5 +22,3 @@ pub mod remote_file_editor_settings;
 pub mod tool_exposure_settings;
 pub mod update_channel;
 pub mod update_mirror;
-pub mod x11_settings;
-mod x11_state;
