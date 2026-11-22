@@ -2,6 +2,8 @@
 //!
 //! 用一次性的后台 SSH 会话采集 CPU、内存、磁盘与网络占用，不打开终端页签；
 //! 结果按连接缓存，过期后再采集。任何失败都只记 debug 日志，不影响首页交互。
+//!
+//! 资源条只在列表布局显示，并压成与地址同一行的紧凑形式：行高不因显示资源而变高。
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -11,9 +13,7 @@ use gpui::{
     AnyElement, App, Context, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, div,
 };
-use gpui_component::{
-    ActiveTheme, Sizable, Size, h_flex, progress::Progress, tooltip::Tooltip, v_flex,
-};
+use gpui_component::{ActiveTheme, Sizable, Size, h_flex, progress::Progress, tooltip::Tooltip};
 use one_core::gpui_tokio::Tokio;
 use one_core::settings::AppSettings;
 use one_core::storage::{
@@ -29,8 +29,12 @@ const HOST_METRICS_TTL: Duration = Duration::from_secs(300);
 const HOST_METRICS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 /// 同时进行的后台采集上限：首页一次可能渲染几十个连接，不能同时拉起几十个 SSH 会话。
 const HOST_METRICS_MAX_IN_FLIGHT: usize = 2;
-/// 资源轨道宽度：容纳英文标签、容量、百分比，并让四项在常见窗口宽度内保持同一行。
+/// 资源轨道宽度：单行内依次放下「标签 · 容量」、比例条与百分比，四项在常见窗口宽度内保持同一行。
 const HOST_METRIC_TRACK_WIDTH_REMS: f32 = 9.0;
+/// 单行轨道里的比例条宽度：只用来表达饱和程度，不再单独占一行。
+const HOST_METRIC_BAR_WIDTH_REMS: f32 = 1.5;
+/// 网络轨道比资源轨道宽：一行要同时容纳「网速」标签与上下行两个速率。
+const HOST_NETWORK_TRACK_WIDTH_REMS: f32 = 10.5;
 
 pub(crate) struct HostMetricsEntry {
     usage: terminal_view::HostResourceUsage,
@@ -336,49 +340,48 @@ fn render_host_metric_track(
     let accessibility_label = tooltip_text.clone();
     let progress_id = SharedString::from(format!("{}-progress", id.as_ref()));
 
-    v_flex()
+    // 单行轨道：标签、比例条与百分比并排，行高与普通说明文字一致，
+    // 资源信息不再额外撑高连接行（redesign §10.2 的紧凑列表）。
+    h_flex()
         .id(id)
         .w(gpui::rems(HOST_METRIC_TRACK_WIDTH_REMS))
         .flex_shrink_0()
+        .items_center()
         .gap_1()
         .child(
-            h_flex()
-                .w_full()
+            div()
+                .flex_1()
                 .min_w_0()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(caption),
-                )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .w_10()
-                        .text_right()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(if value >= 75.0 {
-                            tone
-                        } else {
-                            cx.theme().foreground
-                        })
-                        .child(percent),
-                ),
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(caption),
         )
         .child(
             Progress::new(progress_id)
                 .with_size(Size::XSmall)
                 .color(tone)
                 .value(value.clamp(0.0, 100.0) as f32)
+                .w(gpui::rems(HOST_METRIC_BAR_WIDTH_REMS))
+                .flex_shrink_0()
                 .accessibility_label(accessibility_label),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .w_10()
+                .text_right()
+                .whitespace_nowrap()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(if value >= 75.0 {
+                    tone
+                } else {
+                    cx.theme().foreground
+                })
+                .child(percent),
         )
         .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
         .into_any_element()
@@ -390,66 +393,49 @@ fn render_host_network_track(id: SharedString, rx: String, tx: String, cx: &App)
     let down = t!("Home.host_metrics_network_down", value = rx.clone()).to_string();
     let tooltip_text: SharedString = format!("{label} · {up} · {down}").into();
 
-    v_flex()
+    // 上下行并排成一行：网速只是参考值，不需要单独占一行高度。
+    h_flex()
         .id(id)
-        .w(gpui::rems(HOST_METRIC_TRACK_WIDTH_REMS))
+        .w(gpui::rems(HOST_NETWORK_TRACK_WIDTH_REMS))
         .flex_shrink_0()
-        .gap_0p5()
+        .items_center()
+        .gap_1()
         .child(
-            h_flex()
-                .w_full()
-                .min_w_0()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("↑"),
-                )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .whitespace_nowrap()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child(tx),
-                ),
+            div()
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(label),
         )
         .child(
-            h_flex()
-                .w_full()
-                .min_w_0()
-                .items_center()
-                .gap_1()
-                .child(div().flex_1())
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("↓"),
-                )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .whitespace_nowrap()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child(rx),
-                ),
+            div()
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child("↑"),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .whitespace_nowrap()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(tx),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child("↓"),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .whitespace_nowrap()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(rx),
         )
         .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
         .into_any_element()
