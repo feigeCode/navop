@@ -22,9 +22,12 @@ impl ExtensionManagerView {
     ) {
         match outcome {
             MarketplaceInstallOutcome::Installed(summary) => {
-                self.status = t!("Extension.installed_name", name = summary.name.clone())
-                    .to_string()
-                    .into();
+                self.status = t!(
+                    "Extension.installed_name",
+                    name = summary.display_name.clone()
+                )
+                .to_string()
+                .into();
                 self.refresh_after_extension_change(summary.kind, cx);
                 window.push_notification(
                     Notification::success(t!("Extension.install_complete").to_string()),
@@ -137,9 +140,12 @@ impl ExtensionManagerView {
                 view_alive = true;
                 entity.update(cx, |view, cx| match outcome {
                     Ok(summary) => {
-                        view.status = t!("Extension.installed_name", name = summary.name.clone())
-                            .to_string()
-                            .into();
+                        view.status = t!(
+                            "Extension.installed_name",
+                            name = summary.display_name.clone()
+                        )
+                        .to_string()
+                        .into();
                         view.refresh_after_extension_change(summary.kind, cx);
                         window.push_notification(
                             Notification::success(t!("Extension.install_complete").to_string()),
@@ -173,10 +179,12 @@ impl ExtensionManagerView {
                             view.busy = None;
                             match outcome {
                                 Ok(summary) => {
-                                    view.status =
-                                        t!("Extension.installed_name", name = summary.name.clone())
-                                            .to_string()
-                                            .into();
+                                    view.status = t!(
+                                        "Extension.installed_name",
+                                        name = summary.display_name.clone()
+                                    )
+                                    .to_string()
+                                    .into();
                                     view.refresh_after_extension_change(summary.kind, cx);
                                 }
                                 Err(err) => {

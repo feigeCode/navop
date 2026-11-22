@@ -14,7 +14,10 @@ pub enum ExtensionKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionSummary {
     pub kind: ExtensionKind,
+    /// 安装与生命周期操作用的稳定 ID（复合扩展对应 manifest.id）。
     pub name: String,
+    /// 用户可见名称（复合扩展对应 manifest.name，缺失时回退到安装 ID）。
+    pub display_name: String,
     pub version: String,
     pub path: PathBuf,
     pub description: String,
@@ -48,9 +51,11 @@ impl ExtensionSummary {
         version: impl Into<String>,
         path: PathBuf,
     ) -> Self {
+        let name = name.into();
         Self {
             kind,
-            name: name.into(),
+            display_name: name.clone(),
+            name,
             version: version.into(),
             path,
             description: String::new(),
@@ -65,6 +70,14 @@ impl ExtensionSummary {
 
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
+        self
+    }
+
+    pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
+        let display_name = display_name.into();
+        if !display_name.trim().is_empty() {
+            self.display_name = display_name.trim().to_string();
+        }
         self
     }
 
@@ -231,6 +244,7 @@ fn marketplace_entry_is_update(summary: &ExtensionSummary, entry: &MarketplaceEn
 fn summary_matches_query(summary: &ExtensionSummary, query: &str) -> bool {
     query.is_empty()
         || contains_query(&summary.name, query)
+        || contains_query(&summary.display_name, query)
         || contains_query(&summary.description, query)
         || summary
             .file_extensions

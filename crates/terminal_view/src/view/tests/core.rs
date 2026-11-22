@@ -462,6 +462,22 @@ fn clipboard_image_from_item_ignores_text_clipboard() {
 }
 
 #[test]
+fn clipboard_image_from_item_prefers_image_over_path_text() {
+    let image = Image::from_bytes(ImageFormat::Png, vec![1, 2, 3]);
+    let item = ClipboardItem {
+        entries: vec![
+            ClipboardEntry::String("/tmp/pasted-image.tiff".to_string().into()),
+            ClipboardEntry::Image(image),
+        ],
+    };
+
+    let extracted = clipboard_image_from_item(&item).expect("image should take precedence");
+
+    assert_eq!(ImageFormat::Png, extracted.format);
+    assert_eq!(vec![1, 2, 3], extracted.bytes);
+}
+
+#[test]
 fn clipboard_image_upload_is_only_for_ssh_shell_paste() {
     assert!(should_upload_clipboard_image_to_remote_cli(
         true,

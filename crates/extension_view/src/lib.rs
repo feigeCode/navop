@@ -111,6 +111,28 @@ mod tests {
     }
 
     #[test]
+    fn installed_filter_matches_composite_display_name() {
+        let installed = vec![
+            summary(
+                ExtensionKind::Composite,
+                "com.example.docker-tools",
+                "1.0.0",
+            )
+            .with_display_name("Docker Tools")
+            .with_description("Container helpers"),
+            summary(ExtensionKind::Composite, "com.example.other", "1.0.0")
+                .with_display_name("Other Tools")
+                .with_description("Unrelated"),
+        ];
+
+        let filtered = filter_installed(&installed, "docker", Some(ExtensionKind::Composite));
+
+        assert_eq!(1, filtered.len());
+        assert_eq!("com.example.docker-tools", filtered[0].name);
+        assert_eq!("Docker Tools", filtered[0].display_name);
+    }
+
+    #[test]
     fn marketplace_filter_matches_kind_name_and_file_extensions() {
         let mut entries = vec![
             marketplace_entry(

@@ -155,11 +155,10 @@ impl TerminalView {
         if !self.middle_click_paste {
             return;
         }
-        if let Some(clipboard) = cx.read_from_clipboard() {
-            if let Some(text) = clipboard.text() {
-                self.paste_text(&text, window, cx);
-            }
-        }
+        // 中键粘贴也必须先识别剪贴板图片。直接读取 `clipboard.text()` 会在
+        // 剪贴板同时包含图片和文件路径文本时，把本地临时路径当普通文本粘贴到
+        // 远端，而不是走图片上传流程。
+        self.paste(&Paste, window, cx);
     }
 
     pub(super) fn handle_right_mouse_down(
