@@ -4,6 +4,72 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.24.0] - 2026-11-22
+
+#### 更新内容
+
+- 终端侧边栏设置改为会话级：字号、主题等 20 项只作用于当前会话，不再改写全局配置；底部新增「恢复全局默认」，悬浮工具条与自动会话日志迁入设置页。
+- 设置中心按领域重组为 12 页（通用、数据库、终端、SSH、SFTP、AI、Agent、MCP、同步、账户、快捷键、关于），文件传输、远程编辑器、X11、ssh:// 与 sftp:// 入口归入对应页面；终端与数据库共用「内置 + 自定义 + 系统已装」的等宽字体列表。
+- 终端命令栏折叠时直接展示置顶快捷指令；会话录制入口迁到每个终端面板右上角的工具条，并新增显示开关；搜索入口收口到右上角工具栏与右键菜单；窗口透明度会同步到终端背景；中键粘贴支持图片。
+- SSH 表单把「直连 / 跳板机 / 堡垒机直连」提到基础信息顶部作为单选，堡垒机直连不再重复填写地址与认证，只需补充资产 ID 与登录账号。
+- 新增堡垒机直连（BastionDirect）模式：按 user#account#asset 直连 JumpServer / Koko，由堡垒机代理终端、SFTP 与 exec，不再依赖被策略禁止的 direct-tcpip 端口转发；direct-tcpip 被拒时会补充服务器返回的真实原因。
+- 跳板机体系补齐 MFA / OTP：跳板 SFTP 支持 keyboard-interactive 二次认证，SFTP 主连接、端点与传输连接池都会弹出交互认证；终端共享会话与数据库、Redis、MongoDB 隧道会继承跳板机与代理配置。
+- 新增 ssh:// 与 sftp:// 深链接（默认关闭，可在设置中启用），以及 jms:// 深链接：网页里点击 JumpServer 资产的「连接」可直接唤起 Navop，一次性 token 只用于本次会话，不落库、不写日志；macOS、Windows、Linux 均完成系统协议注册。
+- 凭据与密钥：私钥路径支持选择文件与拖拽；钥匙串条目缺少用户名时回退到连接保存的用户名；生成密钥支持 Ed25519、ECDSA P-256 / P-384、RSA 3072。
+- 首页资源信息增强：列表展示 SSH 上下行网速，并把 CPU、内存、磁盘与系统信息收口到列表；卡片、列表、树形按布局展示远端资源；默认连接布局改为全局导航；批量模式支持按住左键划过连接连续选中。
+- 文件传输新增「默认本地文件夹」设置；遇到同名冲突时，冲突弹窗默认推荐「文件夹合并 / 文件覆盖」，并在提示框中说明合并与覆盖的差别，文件夹选择覆盖仍需二次确认。
+- 标签页支持配置双击动作（无 / 复制 / 重命名 / 关闭）；连接导入协议新增 keybinding 记录类型；导入的 SSH 连接在用户名或密码为空时自动提示登录。
+- 笔记可在设置中选择默认视图（所见即所得 / Markdown 源码），单篇笔记仍可随时切换。
+- AI 供应商新增「接口协议」选择：可在 /chat/completions 与 /responses 之间切换，兼容豆包等只在 Response API 上可用的服务；粘贴完整的 /chat/completions 地址不会再被二次拼接。
+- 扩展贡献的连接类型接入「新建连接」向导；工具箱不再为贡献面板的扩展重复显示空 app；复合扩展统一使用 manifest 名称展示。
+
+#### 修复与优化
+
+- 修复默认供应商是无 Key 的本机 OpenAI 兼容网关（如 magpie、LM Studio、llama.cpp）时，AI 工作台整块只显示「API key required for OpenAI Compatible」：OpenAI 兼容供应商现在允许留空 Key（仍要求 API Base），构建工作台时会跳过不可用的供应商并保留其余模型，全部不可用时回退到未配置聊天壳。
+- AI 历史任务现在按 SSH 资源记录所属主机，恢复会话后仍能辨认原主机；@ 列表不再重复追加工作区文件。
+- 修复堡垒机直连共享会话在 GPUI executor 上直接等待 Tokio 任务导致的 panic，以及「连接时输入密码」只注入目标主机、运行时密码到不了堡垒机认证的问题。
+- 修复受限会话（堡垒机文件根目录）下跟随终端目录反复报错：只在跟随本身失败时停用跟随并退回根目录，用户手动进入的目录出错仍按原逻辑回退。
+- SFTP 目录枚举增加 30 秒超时；堡垒机直连访问受限根目录之外的路径时，提示改为说明「只开放受限 SFTP 根目录」而不是文件不存在；遇到盘符形态的合法文件名（如 c:）不再让整个目录读取失败，非法条目改为跳过并记录日志。
+- 修复首页资源采集在 GPUI 后台线程调用 SSH 建连、因缺少 Tokio reactor 导致应用崩溃的问题。
+- 修复 Windows 原生 RDP 会话中 Navop 每帧重置光标、与 ActiveX 控件互相覆盖，导致远端窗口边框光标来回跳动、难以拖动调整大小。
+- 修复 one-ui 单元格编辑时文字横向跳动，以及数据表选中行高亮丢失。
+- 剪贴板图片统一转为 PNG 后再上传，macOS 截图等 TIFF 格式可正常粘贴到终端与 SFTP。
+- 回滚固定三列导航壳，恢复原有可折叠导航布局。
+- 补齐 SFTP keyboard-interactive 取消提示的中英繁文案；本地目录初始化在全局设置缺失时回退家目录。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.24.0) 下载桌面端安装包。
+
+#### What's New
+
+- Terminal sidebar settings are now session-scoped: font size, theme and 18 other options only affect the current session instead of rewriting global configuration. A "Restore global defaults" action sits at the bottom, and the floating toolbar and automatic session log moved into Settings.
+- Settings is reorganized into 12 domain pages (General, Database, Terminal, SSH, SFTP, AI, Agent, MCP, Sync, Account, Shortcuts, About). File transfer, remote editor, X11, ssh:// and sftp:// entries live on their related pages, and Terminal and Database share one monospace font list covering built-in, custom and installed fonts.
+- The collapsed terminal command bar now shows pinned quick commands. Session recording moved to each terminal pane's top-right toolbar with its own toggle, search moved to the toolbar and context menu, window transparency is applied to the terminal background, and middle-click paste now handles images.
+- The SSH form now puts Direct / Jump host / Bastion direct at the top of Basic information as a single choice. Bastion direct no longer asks you to re-enter the address and credentials; only the asset ID and login account are needed.
+- New Bastion direct (BastionDirect) mode connects to JumpServer / Koko with user#account#asset and lets the bastion proxy terminal, SFTP and exec, so it no longer depends on direct-tcpip forwarding that policies often reject. When direct-tcpip is rejected, the server's real reason is included.
+- Jump host support now covers MFA / OTP: jump SFTP supports keyboard-interactive second-factor authentication, and the main SFTP connection, endpoints and transfer pool all prompt for it. Shared terminal sessions and database, Redis and MongoDB tunnels inherit jump host and proxy settings.
+- New ssh:// and sftp:// deep links (off by default, enable them in Settings) and jms:// deep links: clicking Connect on a JumpServer asset in the browser opens Navop directly. The one-time token is used only for that session and is never stored or logged. macOS, Windows and Linux all register the schemes.
+- Credentials and keys: private key paths can be picked or dragged in, keychain entries without a username fall back to the connection's saved username, and key generation supports Ed25519, ECDSA P-256 / P-384 and RSA 3072.
+- Home shows more resource information: the list includes SSH upload/download speed and consolidates CPU, memory, disk and system details. Cards, list and tree views show remote resources according to the layout, the default connection layout is now global navigation, and batch mode supports click-and-drag selection.
+- File transfer gains a default local folder setting. The conflict prompt now recommends merging folders and overwriting files by default, with an explanation of the difference; overwriting a folder still asks for confirmation.
+- Tabs support a configurable double-click action (none / duplicate / rename / close). The connection-import protocol accepts keybinding records, and imported SSH connections prompt for a missing username or password.
+- Notes can default to either the WYSIWYG or Markdown source view in Settings, and each note can still switch at any time.
+- AI providers gain an API mode choice between /chat/completions and /responses, covering services such as Doubao that only work with the Response API. Pasting a full /chat/completions URL no longer appends the path twice.
+- Connection kinds contributed by extensions now appear in the New Connection wizard, the toolbox no longer lists empty apps for contributed panels, and composite extensions use their manifest name.
+
+#### Fixes and Improvements
+
+- Fixed the AI workbench showing only "API key required for OpenAI Compatible" when the default provider is a keyless local OpenAI-compatible gateway such as magpie, LM Studio or llama.cpp. OpenAI-compatible providers may now leave the key empty (an API base is still required), unusable providers are skipped while the remaining models stay available, and the chat shell falls back to its unconfigured state when none work.
+- AI history now records which SSH host a task belongs to, so a restored session still shows its host, and the @ list no longer appends workspace files repeatedly.
+- Fixed a panic when a shared Bastion direct session awaited a Tokio task on the GPUI executor, and fixed runtime-entered passwords not reaching the bastion authentication in that mode.
+- Fixed repeated errors when following the terminal directory in a restricted session (such as a bastion file root). Following is now disabled and the panel returns to the root only when following itself fails; manually opened directories keep the original fallback.
+- SFTP directory listing now times out after 30 seconds. On Bastion direct, paths outside the allowed root explain that only a restricted SFTP root is available instead of claiming the file does not exist. Legal drive-letter names such as c: no longer break the whole directory listing, and invalid entries are skipped and logged.
+- Fixed a crash when home resource collection called SSH connection setup from a GPUI background thread without a Tokio reactor.
+- Fixed Navop resetting the cursor every frame in native Windows RDP sessions, fighting the ActiveX control and making window borders hard to resize.
+- Fixed text shifting horizontally while editing one-ui cells and restored selected-row highlighting in data tables.
+- Clipboard images are normalized to PNG before upload, so macOS TIFF screenshots paste correctly into terminals and SFTP.
+- Reverted the fixed three-column navigation shell and restored the previous collapsible navigation layout.
+- Added missing Simplified Chinese, English and Traditional Chinese text for the SFTP keyboard-interactive cancel prompt, and local directory initialization now falls back to the home directory when global settings are missing.
+
 ## [v0.23.4] - 2026-11-18
 
 本版本把连接迁移包升级为密码保护格式，并补齐文件面板的隐藏文件入口与一批 SSH、构建侧修复。
