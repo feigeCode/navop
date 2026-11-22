@@ -30,7 +30,8 @@ use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
 use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
 use alacritty_terminal::term::TermMode;
 use gpui::{
-    Bounds, ClipboardItem, Image, ImageFormat, Keystroke, Modifiers, MouseButton, Point, px, size,
+    Bounds, ClipboardEntry, ClipboardItem, Image, ImageFormat, Keystroke, Modifiers, MouseButton,
+    Point, px, size,
 };
 use one_core::storage::models::{SerialParams, SshAuthMethod, SshParams, StoredConnection};
 use std::cell::Cell as StdCell;

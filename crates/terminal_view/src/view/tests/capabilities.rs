@@ -828,6 +828,25 @@ fn playback_mouse_paste_handlers_reject_before_reporting_or_ui_side_effects() {
 }
 
 #[test]
+fn middle_click_paste_uses_image_aware_paste_path() {
+    let source = include_str!("../mouse_down.rs");
+    let middle_click = function_region(
+        source,
+        "pub(super) fn handle_middle_mouse_down",
+        "pub(super) fn handle_right_mouse_down",
+    );
+
+    assert!(
+        middle_click.contains("self.paste(&Paste, window, cx)"),
+        "middle-click paste must share the normal image-aware paste path"
+    );
+    assert!(
+        !middle_click.contains("cx.read_from_clipboard()"),
+        "middle-click paste must not bypass image handling by reading clipboard text directly"
+    );
+}
+
+#[test]
 fn playback_stale_sgr_press_never_clears_the_local_selection() {
     let source = include_str!("../mouse_selection.rs");
     let mouse_up = function_region(
