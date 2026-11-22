@@ -43,7 +43,7 @@ use gpui_component::{
     select::{Select, SelectItem, SelectState},
     setting::{
         NumberFieldOptions, SelectIndex, SettingField, SettingGroup, SettingItem, SettingPage,
-        Settings,
+        Settings, SettingsState,
     },
     switch::Switch,
     tag, v_flex,
@@ -579,6 +579,12 @@ pub struct SettingsPanel {
     acp_agents_view: Entity<AcpAgentsView>,
     update_check_state: Entity<update::UpdateCheckState>,
     _update_check_subscription: gpui::Subscription,
+    /// 设置视图的状态：选中的页、搜索词和每页的滚动位置。
+    ///
+    /// 窗口只为当前帧渲染过的元素保留 `use_keyed_state`；设置页在主标签切走时
+    /// 会被卸载，切回来时状态早已重建，页面就跳回顶部。所以这里自己持有它，
+    /// 首次渲染时按 `initial_page` 创建。
+    settings_state: Option<Entity<SettingsState>>,
     size: Size,
     group_variant: GroupBoxVariant,
     initial_page: InitialPage,
@@ -628,6 +634,7 @@ impl SettingsPanel {
             acp_agents_view,
             update_check_state,
             _update_check_subscription,
+            settings_state: None,
             size: Size::default(),
             group_variant: GroupBoxVariant::Outline,
             initial_page,
@@ -2049,15 +2056,30 @@ impl Render for SettingsPanel {
             InitialPage::LlmProviders => ("main-app-settings-llm-providers", llm_providers_page_ix),
             InitialPage::First => ("main-app-settings", 0),
         };
+        // 由设置页自己持有状态，切走主标签再回来时选中页和滚动位置都还在。
+        let settings_state = match self.settings_state.clone() {
+            Some(state) => state,
+            None => {
+                let state = cx.new(|cx| {
+                    SettingsState::new(
+                        window,
+                        cx,
+                        SelectIndex {
+                            page_ix,
+                            ..Default::default()
+                        },
+                    )
+                });
+                self.settings_state = Some(state.clone());
+                state
+            }
+        };
 
         div().track_focus(&self.focus_handle).size_full().child(
             Settings::new(settings_id)
                 .with_size(self.size)
                 .with_group_variant(self.group_variant)
-                .default_selected_index(SelectIndex {
-                    page_ix,
-                    ..Default::default()
-                })
+                .with_state(settings_state)
                 .pages(pages),
         )
     }

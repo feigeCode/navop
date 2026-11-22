@@ -5083,7 +5083,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.9.0"
-source = "git+https://github.com/feigeCode/gpui-kit?rev=36266413cd4f73e6b1d43e03f94e927b61b2bb9e#36266413cd4f73e6b1d43e03f94e927b61b2bb9e"
+source = "git+https://github.com/feigeCode/gpui-kit?rev=6280be264e85150ca0ea98899e9c8aa10ab65a8e#6280be264e85150ca0ea98899e9c8aa10ab65a8e"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5124,7 +5124,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.9.0"
-source = "git+https://github.com/feigeCode/gpui-kit?rev=36266413cd4f73e6b1d43e03f94e927b61b2bb9e#36266413cd4f73e6b1d43e03f94e927b61b2bb9e"
+source = "git+https://github.com/feigeCode/gpui-kit?rev=6280be264e85150ca0ea98899e9c8aa10ab65a8e#6280be264e85150ca0ea98899e9c8aa10ab65a8e"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5177,7 +5177,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.9.0"
-source = "git+https://github.com/feigeCode/gpui-kit?rev=36266413cd4f73e6b1d43e03f94e927b61b2bb9e#36266413cd4f73e6b1d43e03f94e927b61b2bb9e"
+source = "git+https://github.com/feigeCode/gpui-kit?rev=6280be264e85150ca0ea98899e9c8aa10ab65a8e#6280be264e85150ca0ea98899e9c8aa10ab65a8e"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -5510,7 +5510,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit"
 version = "0.9.0"
-source = "git+https://github.com/feigeCode/gpui-kit?rev=36266413cd4f73e6b1d43e03f94e927b61b2bb9e#36266413cd4f73e6b1d43e03f94e927b61b2bb9e"
+source = "git+https://github.com/feigeCode/gpui-kit?rev=6280be264e85150ca0ea98899e9c8aa10ab65a8e#6280be264e85150ca0ea98899e9c8aa10ab65a8e"
 dependencies = [
  "gpui-base",
  "gpui-pre",
@@ -5522,7 +5522,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.9.0"
-source = "git+https://github.com/feigeCode/gpui-kit?rev=36266413cd4f73e6b1d43e03f94e927b61b2bb9e#36266413cd4f73e6b1d43e03f94e927b61b2bb9e"
+source = "git+https://github.com/feigeCode/gpui-kit?rev=6280be264e85150ca0ea98899e9c8aa10ab65a8e#6280be264e85150ca0ea98899e9c8aa10ab65a8e"
 dependencies = [
  "anyhow",
  "gpui-fast",
@@ -5653,7 +5653,7 @@ dependencies = [
 [[package]]
 name = "gpui-webview"
 version = "0.9.0"
-source = "git+https://github.com/feigeCode/gpui-kit?rev=36266413cd4f73e6b1d43e03f94e927b61b2bb9e#36266413cd4f73e6b1d43e03f94e927b61b2bb9e"
+source = "git+https://github.com/feigeCode/gpui-kit?rev=6280be264e85150ca0ea98899e9c8aa10ab65a8e#6280be264e85150ca0ea98899e9c8aa10ab65a8e"
 dependencies = [
  "anyhow",
  "gpui-kit",
