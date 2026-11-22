@@ -9,7 +9,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 #### 更新内容
 
 - 终端侧边栏设置改为会话级：字号、主题等 20 项只作用于当前会话，不再改写全局配置；底部新增「恢复全局默认」，悬浮工具条与自动会话日志迁入设置页。
-- 设置中心按领域重组为 12 页（通用、数据库、终端、SSH、SFTP、AI、Agent、MCP、同步、账户、快捷键、关于），文件传输、远程编辑器、X11、ssh:// 与 sftp:// 入口归入对应页面；终端与数据库共用「内置 + 自定义 + 系统已装」的等宽字体列表。
+- 设置中心按领域重组为 12 页（通用、数据库、终端、SSH、SFTP、AI、Agent、MCP、同步、账户、快捷键、关于），文件传输、远程编辑器、ssh:// 与 sftp:// 入口归入对应页面；终端与数据库共用「内置 + 自定义 + 系统已装」的等宽字体列表。
 - 终端命令栏折叠时直接展示置顶快捷指令；会话录制入口迁到每个终端面板右上角的工具条，并新增显示开关；搜索入口收口到右上角工具栏与右键菜单；窗口透明度会同步到终端背景；中键粘贴支持图片。
 - SSH 表单把「直连 / 跳板机 / 堡垒机直连」提到基础信息顶部作为单选，堡垒机直连不再重复填写地址与认证，只需补充资产 ID 与登录账号。
 - 新增堡垒机直连（BastionDirect）模式：按 user#account#asset 直连 JumpServer / Koko，由堡垒机代理终端、SFTP 与 exec，不再依赖被策略禁止的 direct-tcpip 端口转发；direct-tcpip 被拒时会补充服务器返回的真实原因。
@@ -42,7 +42,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 #### What's New
 
 - Terminal sidebar settings are now session-scoped: font size, theme and 18 other options only affect the current session instead of rewriting global configuration. A "Restore global defaults" action sits at the bottom, and the floating toolbar and automatic session log moved into Settings.
-- Settings is reorganized into 12 domain pages (General, Database, Terminal, SSH, SFTP, AI, Agent, MCP, Sync, Account, Shortcuts, About). File transfer, remote editor, X11, ssh:// and sftp:// entries live on their related pages, and Terminal and Database share one monospace font list covering built-in, custom and installed fonts.
+- Settings is reorganized into 12 domain pages (General, Database, Terminal, SSH, SFTP, AI, Agent, MCP, Sync, Account, Shortcuts, About). File transfer, remote editor, ssh:// and sftp:// entries live on their related pages, and Terminal and Database share one monospace font list covering built-in, custom and installed fonts.
 - The collapsed terminal command bar now shows pinned quick commands. Session recording moved to each terminal pane's top-right toolbar with its own toggle, search moved to the toolbar and context menu, window transparency is applied to the terminal background, and middle-click paste now handles images.
 - The SSH form now puts Direct / Jump host / Bastion direct at the top of Basic information as a single choice. Bastion direct no longer asks you to re-enter the address and credentials; only the asset ID and login account are needed.
 - New Bastion direct (BastionDirect) mode connects to JumpServer / Koko with user#account#asset and lets the bastion proxy terminal, SFTP and exec, so it no longer depends on direct-tcpip forwarding that policies often reject. When direct-tcpip is rejected, the server's real reason is included.
