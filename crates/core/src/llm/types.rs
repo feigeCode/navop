@@ -125,9 +125,15 @@ impl ProviderType {
         ]
     }
 
-    /// 是否需要用户提供 API Key。只有本地部署的 Ollama / Xinference 可以不填。
+    /// 是否需要用户提供 API Key。
+    ///
+    /// Ollama / Xinference 是本地部署服务；OpenAI 兼容端点的鉴权由服务端决定，
+    /// 本机网关（LM Studio、llama.cpp、magpie 等）通常不需要 Key，因此也允许留空。
     pub fn requires_api_key(&self) -> bool {
-        !matches!(self, ProviderType::Ollama | ProviderType::Xinference)
+        !matches!(
+            self,
+            ProviderType::Ollama | ProviderType::Xinference | ProviderType::OpenAICompatible
+        )
     }
 }
 
@@ -317,16 +323,20 @@ mod tests {
         );
     }
 
-    /// 内置 provider 下线后，只剩本地部署的两家可以不填 API Key。
+    /// 本地部署的 Ollama / Xinference，以及鉴权由服务端决定的 OpenAI 兼容端点可以不填 API Key。
     #[test]
-    fn only_local_providers_skip_api_key() {
+    fn only_keyless_providers_skip_api_key() {
         let without_api_key: Vec<ProviderType> = ProviderType::all()
             .into_iter()
             .filter(|provider_type| !provider_type.requires_api_key())
             .collect();
 
         assert_eq!(
-            vec![ProviderType::Ollama, ProviderType::Xinference],
+            vec![
+                ProviderType::Ollama,
+                ProviderType::Xinference,
+                ProviderType::OpenAICompatible
+            ],
             without_api_key
         );
     }

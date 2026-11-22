@@ -3,7 +3,7 @@
   "components": {
     "x11-server": {
       "channel": "stable",
-      "pinned_for_navop": ">=0.23.4, <0.24.0",
+      "pinned_for_navop": ">=0.23.4, <0.25.0",
       "rollout_percent": 100,
       "artifacts": {
         "windows-x86_64": {

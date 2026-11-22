@@ -1205,7 +1205,7 @@ impl AgentChatViewConfig {
         registry: ToolRegistry,
     ) -> anyhow::Result<Self> {
         let fallback_registry = registry.clone();
-        let specs = runtime_specs_from_provider_configs(provider_configs, registry)?;
+        let specs = runtime_specs_from_provider_configs(provider_configs, registry);
         Self::from_runtime_specs(resources, mentions, specs, fallback_registry)
     }
 
@@ -1219,7 +1219,7 @@ impl AgentChatViewConfig {
     ) -> anyhow::Result<Self> {
         let fallback_registry = registry.clone();
         let specs =
-            runtime_specs_from_provider_state(provider_configs, registry, provider_state).await?;
+            runtime_specs_from_provider_state(provider_configs, registry, provider_state).await;
         Self::from_runtime_specs(resources, mentions, specs, fallback_registry)
     }
 
@@ -9234,34 +9234,60 @@ fn refreshed_model_selection(
 fn runtime_specs_from_provider_configs(
     provider_configs: Vec<ProviderConfig>,
     registry: ToolRegistry,
-) -> anyhow::Result<Vec<RuntimeBuildSpec>> {
+) -> Vec<RuntimeBuildSpec> {
     let mut specs = Vec::new();
     for config in provider_configs.into_iter().filter(|config| config.enabled) {
-        let provider: Arc<dyn LlmProvider> = Arc::new(LlmConnector::from_config(&config)?);
+        let provider: Arc<dyn LlmProvider> = match LlmConnector::from_config(&config) {
+            Ok(provider) => Arc::new(provider),
+            Err(error) => {
+                // 单个 provider 配置有误（例如云端供应商缺 API Key、API Base 非法）
+                // 不应让整个 AI 工作台构建失败：跳过它并保留其余可用模型，用户仍可
+                // 在设置页修正该供应商。
+                tracing::warn!(
+                    provider_id = config.id,
+                    provider_name = %config.name,
+                    %error,
+                    "Skip unusable LLM provider while building agent runtime specs"
+                );
+                continue;
+            }
+        };
         specs.extend(runtime_specs_for_provider_config(
             &config,
             provider,
             registry.clone(),
         ));
     }
-    Ok(specs)
+    specs
 }
 
 async fn runtime_specs_from_provider_state(
     provider_configs: Vec<ProviderConfig>,
     registry: ToolRegistry,
     provider_state: GlobalProviderState,
-) -> anyhow::Result<Vec<RuntimeBuildSpec>> {
+) -> Vec<RuntimeBuildSpec> {
     let mut specs = Vec::new();
     for config in provider_configs.into_iter().filter(|config| config.enabled) {
-        let provider = provider_state.manager().get_provider(&config).await?;
+        let provider = match provider_state.manager().get_provider(&config).await {
+            Ok(provider) => provider,
+            Err(error) => {
+                // 同上：缓存构建失败的单个 provider 只跳过，不影响整块工作台。
+                tracing::warn!(
+                    provider_id = config.id,
+                    provider_name = %config.name,
+                    %error,
+                    "Skip unusable LLM provider while building agent runtime specs"
+                );
+                continue;
+            }
+        };
         specs.extend(runtime_specs_for_provider_config(
             &config,
             provider,
             registry.clone(),
         ));
     }
-    Ok(specs)
+    specs
 }
 
 fn runtime_specs_for_provider_config(
@@ -18656,8 +18682,7 @@ mod tests {
             ..Default::default()
         };
 
-        let specs = runtime_specs_from_provider_configs(vec![config], ToolRegistry::new())
-            .expect("ollama provider config should build without network");
+        let specs = runtime_specs_from_provider_configs(vec![config], ToolRegistry::new());
 
         assert_eq!(specs.len(), 2);
         assert_eq!(specs[0].option.provider_id.as_ref(), "7");
@@ -18708,6 +18733,65 @@ mod tests {
     }
 
     #[test]
+    fn unusable_provider_is_skipped_without_breaking_agent_chat() {
+        let unusable = ProviderConfig {
+            id: 7,
+            name: "CloudWithoutKey".to_string(),
+            provider_type: ProviderType::OpenAI,
+            model: "gpt-4o-mini".to_string(),
+            is_default: true,
+            ..Default::default()
+        };
+        let healthy = ProviderConfig {
+            id: 8,
+            name: "Local Ollama".to_string(),
+            provider_type: ProviderType::Ollama,
+            model: "qwen3:14b".to_string(),
+            ..Default::default()
+        };
+
+        let config = AgentChatViewConfig::from_provider_configs(
+            ResourceContext::new(),
+            vec![],
+            vec![unusable, healthy],
+            ToolRegistry::new(),
+        )
+        .expect("单个不可用 provider 不应阻断整个 AI 工作台");
+
+        assert_eq!(1, config.model_options.len());
+        assert_eq!(
+            config.selected_model_id,
+            Some(SharedString::from("provider:8:qwen3:14b"))
+        );
+        assert_eq!(config.runtime.services().model.model_name(), "qwen3:14b");
+    }
+
+    #[test]
+    fn all_unusable_providers_fall_back_to_unconfigured_chat_shell() {
+        let unusable = ProviderConfig {
+            id: 7,
+            name: "CloudWithoutKey".to_string(),
+            provider_type: ProviderType::OpenAI,
+            model: "gpt-4o-mini".to_string(),
+            is_default: true,
+            ..Default::default()
+        };
+
+        let config = AgentChatViewConfig::from_provider_configs(
+            ResourceContext::new(),
+            vec![],
+            vec![unusable],
+            ToolRegistry::new(),
+        )
+        .expect("所有 provider 不可用时仍应返回聊天壳，供用户去设置页修正");
+
+        assert!(config.model_options.is_empty());
+        assert_eq!(None, config.selected_model_id);
+        assert!(config.runtime_factory.is_none());
+        assert_eq!(config.runtime.services().model.model_name(), "unconfigured");
+    }
+
+    #[test]
     fn runtime_specs_factory_rejects_unknown_model_option() {
         let provider = ProviderConfig {
             id: 7,
@@ -18749,8 +18833,7 @@ mod tests {
             ..Default::default()
         };
 
-        let specs = runtime_specs_from_provider_configs(vec![config], ToolRegistry::new())
-            .expect("ollama provider config should build without network");
+        let specs = runtime_specs_from_provider_configs(vec![config], ToolRegistry::new());
 
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].option.provider_label.as_ref(), "Ollama");

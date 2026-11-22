@@ -237,8 +237,11 @@ fn client_from_config(config: &ProviderConfig, options: ClientOptions<'_>) -> Re
             options,
         ),
         ProviderType::AzureOpenAI => azure_openai_client(config, options),
+        // 通用 OpenAI 兼容端点既可能是云端服务，也可能是 LM Studio / llama.cpp /
+        // magpie 这类本机网关；后者不校验鉴权，留空 API Key 是合法配置。真正需要
+        // 鉴权的云服务会在请求时返回 401，不应在构建阶段一刀切拦下。
         ProviderType::OpenAICompatible => openai_compatible_client(
-            required_api_key(config, "OpenAI Compatible")?,
+            config.api_key.as_deref().unwrap_or(""),
             required_base_url(config, "OpenAI Compatible")?,
             &config.name,
             &extra_headers,
@@ -685,6 +688,38 @@ mod tests {
             &config,
             Some("http://"),
         ));
+    }
+
+    #[test]
+    fn openai_compatible_without_api_key_builds_for_keyless_local_gateway() {
+        let config = ProviderConfig {
+            provider_type: ProviderType::OpenAICompatible,
+            name: "magpie".to_string(),
+            api_key: None,
+            api_base: Some("http://127.0.0.1:3425/v1".to_string()),
+            model: "deepseek-v4-flash".to_string(),
+            ..Default::default()
+        };
+
+        LlmConnector::from_config(&config).expect("无需鉴权的本地 OpenAI 兼容网关不应要求 API key");
+    }
+
+    #[test]
+    fn openai_compatible_still_requires_api_base() {
+        let config = ProviderConfig {
+            provider_type: ProviderType::OpenAICompatible,
+            name: "magpie".to_string(),
+            api_key: None,
+            api_base: None,
+            model: "deepseek-v4-flash".to_string(),
+            ..Default::default()
+        };
+
+        let error = LlmConnector::from_config(&config)
+            .err()
+            .expect("OpenAI 兼容端点必须显式配置 API Base");
+
+        assert_eq!("Base URL required for OpenAI Compatible", error.to_string());
     }
 
     #[tokio::test]

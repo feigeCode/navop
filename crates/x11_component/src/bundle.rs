@@ -55,6 +55,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn pinned_manifest_covers_the_next_release_line() {
+        crate::manifest::ComponentManifest::parse(PINNED_MANIFEST, &semver::Version::new(0, 24, 0))
+            .expect("0.24.0 发布线必须能解析内置清单");
+        assert!(
+            crate::manifest::ComponentManifest::parse(
+                PINNED_MANIFEST,
+                &semver::Version::new(0, 25, 0),
+            )
+            .is_err(),
+            "超出固定范围的版本必须被拒绝"
+        );
+    }
+
     #[tokio::test]
     async fn configured_archive_installs_complete_component_offline() {
         let Some(archive) = archive() else {
