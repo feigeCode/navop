@@ -139,17 +139,20 @@ impl ExtensionManagerView {
             return;
         }
 
-        let name = summary.name.clone();
+        let extension_id = summary.name.clone();
+        let display_name = summary.display_name.clone();
         let kind = summary.kind;
-        self.busy = Some(format!("uninstall:{name}"));
-        self.status = t!("Extension.uninstalling", name = name).to_string().into();
+        self.busy = Some(format!("uninstall:{extension_id}"));
+        self.status = t!("Extension.uninstalling", name = display_name.clone())
+            .to_string()
+            .into();
 
         let host = self.host.clone();
         let refresh_host = host.clone();
-        let close_task = crate::shell::close_shell_extension(&name, window, cx);
+        let close_task = crate::shell::close_shell_extension(&extension_id, window, cx);
         let entity = cx.entity().downgrade();
         let window_handle = window.window_handle();
-        let gate_id = name.clone();
+        let gate_id = extension_id;
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
             if !close_task.await {
                 let _ = cx.update(|cx| {
@@ -172,14 +175,14 @@ impl ExtensionManagerView {
                 view_alive = true;
                 entity.update(cx, |view, cx| {
                     match outcome {
-                        Ok(name) => {
-                            view.status = t!("Extension.uninstalled", name = name.clone())
+                        Ok(_) => {
+                            view.status = t!("Extension.uninstalled", name = display_name.clone())
                                 .to_string()
                                 .into();
                             view.refresh_after_extension_change(kind, cx);
                             window.push_notification(
                                 Notification::success(
-                                    t!("Extension.uninstalled", name = name).to_string(),
+                                    t!("Extension.uninstalled", name = display_name).to_string(),
                                 ),
                                 cx,
                             );
@@ -227,17 +230,18 @@ impl ExtensionManagerView {
         if self.busy.is_some() {
             return;
         }
-        let name = summary.name.clone();
-        self.busy = Some(format!("reload:{name}"));
-        self.status = t!("Extension.reloading", name = name.clone())
+        let extension_id = summary.name.clone();
+        let display_name = summary.display_name.clone();
+        self.busy = Some(format!("reload:{extension_id}"));
+        self.status = t!("Extension.reloading", name = display_name.clone())
             .to_string()
             .into();
-        let close_task = crate::shell::close_shell_extension(&name, window, cx);
+        let close_task = crate::shell::close_shell_extension(&extension_id, window, cx);
         let host = self.host.clone();
         let refresh_host = host.clone();
         let entity = cx.entity().downgrade();
         let window_handle = window.window_handle();
-        let gate_id = name.clone();
+        let gate_id = extension_id;
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
             if !close_task.await {
                 let _ = cx.update(|cx| {
@@ -262,8 +266,8 @@ impl ExtensionManagerView {
                             let reloaded_name = installed
                                 .iter()
                                 .find(|installed| installed.path == summary.path)
-                                .map(|installed| installed.name.clone())
-                                .unwrap_or(name);
+                                .map(|installed| installed.display_name.clone())
+                                .unwrap_or(display_name);
                             apply_installed_reload_success(
                                 &mut view.installed,
                                 &mut view.busy,
@@ -432,9 +436,12 @@ fn finish_extension_action_without_window(
         view.busy = None;
         match outcome {
             Ok(MarketplaceInstallOutcome::Installed(summary)) => {
-                view.status = t!("Extension.installed_name", name = summary.name.clone())
-                    .to_string()
-                    .into();
+                view.status = t!(
+                    "Extension.installed_name",
+                    name = summary.display_name.clone()
+                )
+                .to_string()
+                .into();
                 view.refresh_after_extension_change(summary.kind, cx);
             }
             Ok(MarketplaceInstallOutcome::NeedsPermission(downloaded)) => {

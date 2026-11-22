@@ -367,23 +367,27 @@ fn install_staging_with_permission(
 }
 
 fn to_view_summary(summary: host_extension::ExtensionSummary) -> extension_view::ExtensionSummary {
-    let shell_app = if summary.kind == host_extension::ExtensionKind::Composite {
-        load_from_dir(&summary.path).ok().and_then(|manifest| {
-            manifest.contributes.shell_app.map(|app| {
-                extension_view::ShellAppSummary::new(
-                    app.title.unwrap_or_else(|| summary.name.clone()),
-                )
-            })
+    let manifest = (summary.kind == host_extension::ExtensionKind::Composite)
+        .then(|| load_from_dir(&summary.path).ok())
+        .flatten();
+    let display_name = manifest
+        .as_ref()
+        .map(|manifest| manifest.name.trim())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&summary.name)
+        .to_string();
+    let shell_app = manifest.and_then(|manifest| {
+        manifest.contributes.shell_app.map(|app| {
+            extension_view::ShellAppSummary::new(app.title.unwrap_or_else(|| display_name.clone()))
         })
-    } else {
-        None
-    };
+    });
     extension_view::ExtensionSummary::new(
         to_view_kind(summary.kind),
         summary.name,
         summary.version,
         summary.path,
     )
+    .with_display_name(display_name)
     .with_description(summary.description)
     .with_file_extensions(summary.file_extensions)
     .with_languages(summary.languages)
@@ -699,6 +703,34 @@ mod tests {
             vec!["rust".to_string(), "typescript".to_string()],
             view.languages
         );
+    }
+
+    #[test]
+    fn composite_view_summary_uses_manifest_name_for_display() {
+        let dir = tempfile::tempdir().expect("temporary extension directory");
+        std::fs::write(
+            dir.path().join("extension.json"),
+            r#"{
+                "schema_version": 1,
+                "id": "com.example.docker-tools",
+                "name": "Docker Tools",
+                "version": "1.2.3",
+                "description": "Manage containers",
+                "engines": { "onetcli": ">=0.1.0" }
+            }"#,
+        )
+        .expect("write extension manifest");
+        let summary = host_extension::ExtensionSummary::new(
+            host_extension::ExtensionKind::Composite,
+            "com.example.docker-tools",
+            "1.2.3",
+            dir.path().to_path_buf(),
+        );
+
+        let view = to_view_summary(summary);
+
+        assert_eq!("com.example.docker-tools", view.name);
+        assert_eq!("Docker Tools", view.display_name);
     }
 
     #[test]

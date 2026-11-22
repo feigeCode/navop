@@ -64,7 +64,7 @@ pub(crate) fn installed_card(
     crate::cards::card_shell(
         card_shell_data(
             summary.kind,
-            summary.name.clone(),
+            summary.display_name.clone(),
             summary.version.clone(),
             summary.description.clone(),
             summary.languages.clone(),
@@ -167,6 +167,17 @@ fn card_shell_data(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn installed_card_title_uses_display_name() {
+        let source = include_str!("card_view.rs");
+
+        assert!(source.contains("summary.display_name.clone()"));
+        assert!(
+            !source.contains("summary.name.clone(),\n            summary.version"),
+            "已安装扩展卡片不能用安装 ID 当标题"
+        );
+    }
+
     /// 卡片按钮在 `ExtensionManagerView` 上挂 listener，且安装按钮要阻止冒泡
     /// 到「整卡点击打开详情」。
     #[test]
