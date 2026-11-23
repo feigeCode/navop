@@ -10,6 +10,10 @@ impl HomePage {
     ) {
         match application {
             NavigationApplication::AiWorkbench => self.add_ai_workbench_tab(window, cx),
+            NavigationApplication::Monitor => {
+                #[cfg(feature = "shell")]
+                self.add_monitor_tab(window, cx);
+            }
             NavigationApplication::Team => self.add_team_tab(window, cx),
             NavigationApplication::Notes => self.add_notes_tab(window, cx),
             NavigationApplication::Toolbox => self.add_toolbox_tab(window, cx),
