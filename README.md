@@ -41,6 +41,7 @@
 
   <p>
     <a href="README_CN.md">中文</a> ·
+    <a href="README_JA.md">日本語</a> ·
     <a href="https://docs.navop.dev/en-US/">Documentation</a> ·
     <a href="https://navop.dev/en-US/extensions">Download center</a> ·
     <a href="#built-with-rust--gpui">Rust + GPUI</a> ·
