@@ -46,11 +46,15 @@ pub(super) struct SidebarPalette {
 }
 
 impl SidebarPalette {
-    fn app(cx: &gpui::App) -> Self {
+    fn app(sidebar: &PersistentConnectionSidebar, cx: &gpui::App) -> Self {
         use gpui_component::ActiveTheme as _;
 
-        // 与主窗口背景统一，停靠时侧栏不再像独立拼接的面板。
-        let background = cx.theme().background;
+        // 连接列表使用独立内容表面，不与 Tab/应用菜单混成同一色块。
+        let background = if sidebar.home_navigation_layout || sidebar.home_embedded {
+            crate::chrome_palette::chrome_palette(cx).content
+        } else {
+            cx.theme().sidebar
+        };
         Self {
             background,
             rail_background: shade(background, cx.theme().is_dark()),
@@ -324,6 +328,23 @@ impl PersistentConnectionSidebar {
         self.render_docked_tree(cx)
     }
 
+    /// 同一个连接树 Entity 由外壳按资源计划换宿主；不创建第二棵树或重新加载连接。
+    pub(crate) fn render_application_resource(
+        &mut self,
+        width: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if one_core::settings::AppSettings::global(cx).app_layout
+            == one_core::settings::AppLayout::GlobalNavigation
+        {
+            self.home_embedded = true;
+            self.home_navigation_layout = true;
+            self.render_tree_impl(Some(width), cx)
+        } else {
+            self.render_home_navigation_tree(width, cx)
+        }
+    }
+
     #[cfg(feature = "shell")]
     pub(crate) fn set_terminal_palette(
         &mut self,
@@ -338,7 +359,7 @@ impl PersistentConnectionSidebar {
         if let Some(palette) = self.terminal_palette {
             return palette;
         }
-        SidebarPalette::app(cx)
+        SidebarPalette::app(self, cx)
     }
 }
 
@@ -378,15 +399,18 @@ mod tests {
     }
 
     #[test]
-    fn docked_tree_unifies_with_window_background_and_uses_single_divider() {
+    fn connection_tree_separates_home_layers_without_stacked_borders() {
         let implementation = include_str!("mod.rs");
         let tree = include_str!("tree.rs");
         let tree_implementation = tree.split("#[cfg(test)]").next().unwrap();
 
-        // 停靠时侧栏背景与主窗口背景统一，减少拼接感
-        assert!(implementation.contains("cx.theme().background"));
-        // 右侧分隔统一由 resize 手柄的可见线承担，各分段不再叠加 border_r
+        // 连接列表和 Tab 栏共享外壳内容色，深色下必须比菜单和常驻栏更亮。
+        assert!(implementation.contains("sidebar.home_navigation_layout || sidebar.home_embedded"));
+        assert!(implementation.contains("crate::chrome_palette::chrome_palette(cx).content"));
+        assert!(implementation.contains("SidebarPalette::app(self, cx)"));
         assert!(!tree_implementation.contains(".border_r_1()"));
+        assert!(!tree_implementation.contains(".border_b_1()"));
+        assert!(tree_implementation.contains("tree.border_l_1().border_color(palette.border)"));
     }
 
     #[test]
@@ -400,11 +424,9 @@ mod tests {
         assert!(!content.contains("render_home_tree(cx)"));
         // Tree 布局经 set_home_embedded 让侧栏以子实体输出主页树；
         // 全局导航布局由 home_navigation_layout 单独驱动，不走该入口。
-        assert!(
-            content.contains(
-                "set_home_embedded(self.connection_layout == ConnectionLayout::Tree, cx)"
-            )
-        );
+        assert!(content.contains("sidebar.set_home_embedded("));
+        assert!(content.contains("self.connection_layout == ConnectionLayout::Tree"));
+        assert!(content.contains("!HomePage::uses_global_navigation_layout(cx)"));
         assert!(implementation.contains("impl gpui::Render for PersistentConnectionSidebar"));
         assert!(implementation.contains("self.home_embedded"));
     }

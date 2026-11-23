@@ -5,6 +5,15 @@ use one_ui::IconSize;
 impl HomePage {
     pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
+        // 应用菜单与连接资源栏是两个独立折叠对象，互不改写对方状态。
+        let expanded = !self.sidebar_collapsed;
+        if one_core::settings::AppSettings::try_update_and_save(cx, |settings| {
+            settings.home_navigation_menu_expanded = expanded;
+        })
+        .is_err()
+        {
+            self.sidebar_collapsed = !self.sidebar_collapsed;
+        }
         cx.notify();
     }
 

@@ -17,12 +17,11 @@ pub(crate) enum NavigationApplication {
 
 pub(crate) fn home_applications(show_team: bool) -> Vec<NavigationApplication> {
     use NavigationApplication::*;
-    let mut applications = vec![AiWorkbench];
+    let mut applications = vec![AiWorkbench, Notes];
     if show_team {
         applications.push(Team);
     }
     applications.extend([
-        Notes,
         Extensions,
         Toolbox,
         CredentialVault,
@@ -41,6 +40,21 @@ pub(crate) fn home_applications(show_team: bool) -> Vec<NavigationApplication> {
 }
 
 impl NavigationApplication {
+    pub(crate) fn content_key(self) -> &'static str {
+        match self {
+            Self::AiWorkbench => "AiWorkbench",
+            Self::Team => "TeamManagement",
+            Self::Notes => "Notes",
+            Self::JsonFormatter => "JsonFormatter",
+            Self::Toolbox => "Toolbox",
+            Self::SessionLogs => "SessionLogs",
+            Self::CredentialVault => "CredentialVault",
+            Self::KnownHosts => "KnownHosts",
+            Self::Extensions => "ExtensionManager",
+            Self::Settings => "Settings",
+        }
+    }
+
     pub(crate) fn label(self) -> String {
         match self {
             Self::AiWorkbench => {
@@ -84,8 +98,8 @@ mod tests {
         use NavigationApplication::*;
         let mut with_team = vec![
             AiWorkbench,
-            Team,
             Notes,
+            Team,
             Extensions,
             Toolbox,
             CredentialVault,

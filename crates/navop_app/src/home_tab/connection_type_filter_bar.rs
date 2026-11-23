@@ -11,9 +11,6 @@ use one_ui::IconSize;
 const FILTER_GAP_REM: f32 = 0.25;
 /// 像素取整误差的安全余量：宁可少放一个 chip，也要先保证「更多」放得下。
 const FIT_SAFETY_MARGIN: f32 = 1.0;
-/// 选中胶囊使用轻量主色底，避免 Button active 色过重。
-const SELECTED_BACKGROUND_OPACITY: f32 = 0.10;
-const SELECTED_BORDER_OPACITY: f32 = 0.55;
 
 /// 筛选条的测量与可见性状态，随 `HomePage` 生命周期保留。
 #[derive(Default)]
@@ -218,7 +215,7 @@ impl HomePage {
         .into_any_element()
     }
 
-    /// 所有 chip 都保留 1px 胶囊边框，避免选中后宽度变化破坏测量缓存。
+    /// 所有 chip 保留一致的尺寸；选中态只改变中性底色，不改变测量结果。
     fn render_connection_type_chip(
         &self,
         filter: &ConnectionFilter,
@@ -230,8 +227,8 @@ impl HomePage {
         let activate = filter.clone();
         Button::new(SharedString::from(format!("home-type-filter-{index}")))
             .small()
-            .rounded(cx.theme().radius_full())
-            .outline()
+            .rounded_md()
+            .ghost()
             .icon(connection_filter_icon(filter))
             .label(label)
             .selected(selected)
@@ -255,8 +252,8 @@ impl HomePage {
         let view = cx.entity();
         Button::new("home-type-filter-more")
             .small()
-            .rounded(cx.theme().radius_full())
-            .outline()
+            .rounded_md()
+            .ghost()
             .icon(IconName::Ellipsis.mono().with_size(IconSize::Small))
             .label(t!("Home.connection_filter_more"))
             .selected(hidden_selected)
@@ -278,13 +275,11 @@ impl HomePage {
     }
 }
 
-/// 截图中的选中态：浅主色背景、柔和主色边框、清晰主色前景。
+/// 选中态与侧栏一致，只用中性底色和前景，不再叠加品牌蓝边/蓝字。
 fn selected_filter_style(button: Button, cx: &App) -> Button {
     button
-        .primary()
-        .bg(cx.theme().primary.opacity(SELECTED_BACKGROUND_OPACITY))
-        .border_color(cx.theme().primary.opacity(SELECTED_BORDER_OPACITY))
-        .text_color(cx.theme().primary)
+        .bg(cx.theme().sidebar_accent)
+        .text_color(cx.theme().sidebar_accent_foreground)
 }
 
 /// 筛选 chip 的统一线稿图标；「全部类型」沿用工具栏的 Apps 网格图标。

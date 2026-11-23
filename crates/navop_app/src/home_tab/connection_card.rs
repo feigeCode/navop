@@ -51,7 +51,7 @@ impl HomePage {
             .id(card_id.clone())
             .w_full()
             .h(gpui::rems(CONNECTION_CARD_HEIGHT_REMS))
-            .rounded(px(12.0))
+            .rounded(px(8.0))
             .bg(cx.theme().background)
             .px_3()
             .when(recent, |this| this.py_2())

@@ -515,6 +515,9 @@ pub trait TabContent: EventEmitter<TabContentEvent> + Render + Focusable {
         None
     }
 
+    /// 内容激活前切换主资源宿主，业务实现只改原实体状态。
+    fn set_external_primary_sidebar(&mut self, external: bool, cx: &mut Context<Self>) {}
+
     /// Called when tab becomes active
     fn on_activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {}
 
@@ -621,6 +624,8 @@ pub trait TabContentView: 'static + Send + Sync {
     fn view(&self) -> AnyView;
     fn dump(&self, cx: &App) -> serde_json::Value;
     fn sidebar_contributions(&self, cx: &App) -> Vec<SidebarContribution>;
+    /// 在内容构造前切换主资源宿主，避免内部树与外壳树共存一帧。
+    fn set_external_primary_sidebar(&self, external: bool, cx: &mut App) {}
     fn subscribe_events(&self, window: &mut Window, cx: &mut Context<TabContainer>)
     -> Subscription;
 
@@ -752,6 +757,12 @@ impl<T: TabContent> TabContentView for Entity<T> {
 
     fn sidebar_contributions(&self, cx: &App) -> Vec<SidebarContribution> {
         self.read(cx).sidebar_contributions(cx)
+    }
+
+    fn set_external_primary_sidebar(&self, external: bool, cx: &mut App) {
+        self.update(cx, |this, cx| {
+            this.set_external_primary_sidebar(external, cx)
+        });
     }
 
     fn lockable(&self, cx: &App) -> bool {
@@ -1144,6 +1155,7 @@ pub struct TabContainer {
     left_padding: Option<gpui::Pixels>,
     top_padding: Option<gpui::Pixels>,
     navigation_sidebar_expanded: Option<bool>,
+    resource_sidebar_toggle_visible: Option<bool>,
     reserve_navigation_sidebar_toggle: bool,
     home_active: Option<bool>,
     on_home: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
@@ -1191,6 +1203,7 @@ pub struct TabContainer {
     sidebar_bounds: Bounds<Pixels>,
     /// 全局后台任务面板入口，渲染在标签栏最右侧（dropdown 之后、窗口控件之前）。
     background_task_panel: Entity<BackgroundTaskPanel>,
+    external_primary_sidebar: bool,
 }
 
 impl EventEmitter<TabContainerEvent> for TabContainer {}
@@ -1214,6 +1227,7 @@ impl TabContainer {
             left_padding: None,
             top_padding: None,
             navigation_sidebar_expanded: None,
+            resource_sidebar_toggle_visible: None,
             reserve_navigation_sidebar_toggle: false,
             home_active: None,
             on_home: None,
@@ -1248,6 +1262,7 @@ impl TabContainer {
             sidebar_resizing: None,
             sidebar_bounds: Bounds::default(),
             background_task_panel: cx.new(|cx| BackgroundTaskPanel::new(cx)),
+            external_primary_sidebar: false,
         }
     }
 
@@ -1295,6 +1310,14 @@ impl TabContainer {
     pub fn with_macos_titlebar_inset(mut self, inset: bool) -> Self {
         self.macos_titlebar_inset = inset;
         self
+    }
+
+    /// 主窗口左侧已有应用导航时，由该导航独立避让系统按钮。
+    pub fn set_macos_titlebar_inset(&mut self, inset: bool, cx: &mut Context<Self>) {
+        if self.macos_titlebar_inset != inset {
+            self.macos_titlebar_inset = inset;
+            cx.notify();
+        }
     }
 
     pub fn with_top_padding(mut self, padding: gpui::Pixels) -> Self {
@@ -1405,8 +1428,18 @@ impl TabContainer {
     }
 
     pub fn set_navigation_sidebar_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
-        if self.navigation_sidebar_expanded != Some(expanded) {
-            self.navigation_sidebar_expanded = Some(expanded);
+        let visible = self.resource_sidebar_toggle_visible.unwrap_or(true);
+        let expanded = Some(expanded && visible);
+        if self.navigation_sidebar_expanded != expanded {
+            self.navigation_sidebar_expanded = expanded;
+            cx.notify();
+        }
+    }
+
+    /// 资源栏的展开状态全局保留，但当前标签没有可挂载资源时不显示无效按钮。
+    pub fn set_resource_sidebar_toggle_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.resource_sidebar_toggle_visible != Some(visible) {
+            self.resource_sidebar_toggle_visible = Some(visible);
             cx.notify();
         }
     }
@@ -1657,6 +1690,9 @@ impl TabContainer {
         self.deactivate_active_content(window, cx);
         self.active_pinned_index = Some(index);
         if let Some(pinned) = self.pinned_tabs.get(index) {
+            pinned
+                .content()
+                .set_external_primary_sidebar(self.external_primary_sidebar, cx);
             pinned.content().on_activate(window, cx);
             pinned
                 .content()
@@ -1826,6 +1862,15 @@ impl TabContainer {
             .and_then(|index| self.pinned_tabs.get(index))
     }
 
+    /// 外壳读取稳定内容键和原业务 View，仅改变宿主，不替换标签内容。
+    pub fn active_content_snapshot(&self) -> Option<Arc<dyn TabContentView>> {
+        self.active_content()
+    }
+
+    pub fn pinned_tabs(&self) -> &[TabItem] {
+        &self.pinned_tabs
+    }
+
     fn active_content(&self) -> Option<Arc<dyn TabContentView>> {
         self.active_pinned_tab()
             .map(|tab| tab.content().clone())
@@ -1892,6 +1937,8 @@ impl TabContainer {
     /// Add a new tab and activate it
     pub fn add_and_activate_tab(&mut self, tab: TabItem, cx: &mut Context<Self>) {
         let id = tab.id().to_string();
+        tab.content()
+            .set_external_primary_sidebar(self.external_primary_sidebar, cx);
         self.tabs.push(tab);
         self.active_index = self.tabs.len() - 1;
         self.active_pinned_index = None;
@@ -1956,6 +2003,8 @@ impl TabContainer {
     ) {
         let id = tab.id().to_string();
         let focus_handle = tab.content.focus_handle(cx);
+        tab.content()
+            .set_external_primary_sidebar(self.external_primary_sidebar, cx);
         self.deactivate_active_content(window, cx);
         self.subscribe_tab_content(&tab, window, cx);
         self.tabs.push(tab);
@@ -2575,6 +2624,11 @@ impl TabContainer {
             self.tab_bar_scroll_handle.scroll_to_item(index);
             let new_tab = &self.tabs[index];
             if switching_content {
+                new_tab
+                    .content()
+                    .set_external_primary_sidebar(self.external_primary_sidebar, cx);
+            }
+            if switching_content {
                 new_tab.content().on_activate(window, cx);
                 new_tab
                     .content()
@@ -3012,6 +3066,46 @@ impl TabContainer {
             Size::Medium => px(140.0),
             Size::Large => px(180.0),
         }
+    }
+
+    /// 应用外壳借用业务对象树；右侧 AI 工具等贡献仍由原工作区承载。
+    pub fn application_resource_view(&self, cx: &App) -> Option<gpui::AnyView> {
+        self.active_sidebar_contributions(cx)
+            .into_iter()
+            .find(|panel| {
+                panel.default_placement == SidebarPlacement::Left
+                    && matches!(
+                        panel.id.local_id,
+                        "database.tree" | "redis.tree" | "mongodb.tree"
+                    )
+            })
+            .map(|panel| panel.view)
+    }
+
+    pub fn set_external_primary_sidebar(&mut self, external: bool, cx: &mut Context<Self>) {
+        if self.external_primary_sidebar != external {
+            self.external_primary_sidebar = external;
+            if let Some(content) = self.active_content_snapshot() {
+                content.set_external_primary_sidebar(external, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// 折叠/展开前同步切换原业务树宿主，不能等下一次外壳绘制再恢复内嵌树。
+    pub fn prepare_external_primary_sidebar(&self, external: bool, cx: &mut App) {
+        if let Some(content) = self.active_content_snapshot() {
+            content.set_external_primary_sidebar(external, cx);
+        }
+    }
+
+    /// A 的外壳承载主对象树，B 保留原工作区树。
+    pub fn set_layout_mode(&mut self, cx: &mut Context<Self>) {
+        let external = crate::settings::AppSettings::global(cx).app_layout
+            == crate::settings::AppLayout::GlobalNavigation
+            && self.navigation_sidebar_expanded.unwrap_or(false);
+        // 必须同步原业务实体，不能只改过滤标志，否则切布局后 External 树没有宿主。
+        self.set_external_primary_sidebar(external, cx);
     }
 
     fn active_sidebar_contributions(&self, cx: &App) -> Vec<SidebarContribution> {
@@ -3846,7 +3940,15 @@ impl TabContainer {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let layout = one_ui::theme_geometry().layout;
-        let panels = self.resolved_sidebar_panels(cx);
+        let mut panels = self.resolved_sidebar_panels(cx);
+        if self.external_primary_sidebar {
+            panels.retain(|panel| {
+                !matches!(
+                    panel.contribution.id.local_id,
+                    "database.tree" | "redis.tree" | "mongodb.tree"
+                )
+            });
+        }
         let left = Self::sidebar_panels_for(&panels, SidebarPlacement::Left);
         let right = Self::sidebar_panels_for(&panels, SidebarPlacement::Right);
         let bottom = Self::sidebar_panels_for(&panels, SidebarPlacement::Bottom);
@@ -3994,8 +4096,7 @@ impl TabContainer {
             .iter()
             .any(|panel| panel.visible || (!panel.visible && panel.contribution.policy.hideable));
         let active_view = active_tab.map(|tab| tab.content().view());
-
-        div()
+        let content_root = div()
             .id("tab-content")
             .debug_selector(|| "tab-content".to_owned())
             .flex_1()
@@ -4003,13 +4104,76 @@ impl TabContainer {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
+            .flex()
+            .items_stretch()
             .when(!has_sidebar_layout, |el| {
                 el.child(Self::render_active_tab_view(active_view.clone()))
             })
             .when(has_sidebar_layout, |el| {
                 let content = Self::render_active_tab_view(active_view);
                 el.child(self.render_content_with_sidebars(content, cx))
-            })
+            });
+
+        // 外壳可只取 Tab 内容、把 Tab 栏放到另一行。此时必须保留原 Render
+        // 的焦点、快捷键、绝对定位内容宿主和尺寸约束，不能只借一棵裸 View。
+        let focus_handle = self.focus_handle(cx);
+        let content_host = div()
+            .id("tab-container-content-host")
+            .track_focus(&focus_handle)
+            .key_context(TAB_CONTAINER_CONTEXT)
+            .relative()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .child(
+                v_flex()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .bottom_0()
+                    .left_0()
+                    .min_w_0()
+                    .min_h_0()
+                    .items_stretch()
+                    .overflow_hidden()
+                    .child(content_root),
+            );
+        self.with_tab_number_actions(content_host, cx)
+    }
+
+    fn with_tab_number_actions<E>(&self, element: E, cx: &mut Context<Self>) -> E
+    where
+        E: InteractiveElement,
+    {
+        element
+            .on_action(cx.listener(|this, _: &SwitchToTab1, window, cx| {
+                this.activate_tab_number(1, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab2, window, cx| {
+                this.activate_tab_number(2, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab3, window, cx| {
+                this.activate_tab_number(3, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab4, window, cx| {
+                this.activate_tab_number(4, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab5, window, cx| {
+                this.activate_tab_number(5, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab6, window, cx| {
+                this.activate_tab_number(6, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab7, window, cx| {
+                this.activate_tab_number(7, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab8, window, cx| {
+                this.activate_tab_number(8, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab9, window, cx| {
+                this.activate_tab_number(9, window, cx);
+            }))
     }
 
     fn tab_switcher_entries(&self, cx: &App) -> Vec<TabSwitcherEntry> {
@@ -4063,21 +4227,22 @@ impl TabContainer {
         let view = cx.entity();
 
         let theme = cx.theme();
-        let bg_color = self.tab_bar_bg_color.unwrap_or(theme.tab);
+        let bg_color = self.tab_bar_bg_color.unwrap_or(theme.tab_bar);
         let border_color = self.tab_bar_border_color.unwrap_or(theme.border);
-        let active_tab_color = self.active_tab_bg_color.unwrap_or(theme.tab_active);
-        let hover_tab_color = self
-            .inactive_tab_hover_color
-            .unwrap_or(theme.tab.opacity(0.8));
-        let inactive_tab_color = self.inactive_tab_bg_color.unwrap_or(theme.tab.opacity(0.5));
+        let active_tab_color = self.active_tab_bg_color.unwrap_or(theme.background);
+        let hover_tab_color = self.inactive_tab_hover_color.unwrap_or(theme.list_hover);
+        let inactive_tab_color = self
+            .inactive_tab_bg_color
+            .unwrap_or(gpui::transparent_black());
         let text_color = self.tab_text_color.unwrap_or(theme.tab_foreground);
+        let inactive_text_color = theme.muted_foreground;
         let close_btn_color = self
             .tab_close_button_color
             .unwrap_or(theme.muted_foreground);
         let close_btn_hover_color = theme.secondary_hover;
         let activity_color = theme.success;
-        let inactive_tab_border_color = border_color.opacity(0.65);
-        let active_tab_border_color = theme.primary.opacity(0.85);
+        let inactive_tab_border_color = gpui::transparent_black();
+        let active_tab_border_color = border_color;
         let drag_border_color = theme.drag_border;
         let active_index = self.active_index;
         let mut left_padding = self.left_padding.unwrap_or(px(8.0));
@@ -4090,19 +4255,10 @@ impl TabContainer {
         let tab_bar_height = layout.tab_bar;
         let tab_item_height = layout.tab_item;
 
-        // On macOS reserve the title-bar area occupied by the traffic-light
-        // controls only when this is the main tab bar spanning the full
-        // window width and the sidebar is collapsed (or Legacy Home-only
-        // tab bar). Embedded tab containers (database tabs etc.) do not sit
-        // at the window's top-left corner and must never take the inset.
-        // When the navigation sidebar is expanded it owns the left edge
-        // itself and the tab bar starts to its right, so an extra
-        // reservation would double-indent the toggle and Home buttons.
+        // macOS 红绿灯避让由当前窗口最左侧的实际导航持有者决定。
+        // 主 Tab 栏不在窗口左上角时必须关闭 macos_titlebar_inset，不能随资源栏展开状态改变。
         let macos_titlebar_inset = self.macos_titlebar_inset;
-        if titlebar_platform.is_macos
-            && macos_titlebar_inset
-            && navigation_sidebar_expanded != Some(true)
-        {
+        if titlebar_platform.is_macos && macos_titlebar_inset {
             left_padding = layout.macos_title_bar_content_padding;
         }
 
@@ -4168,21 +4324,21 @@ impl TabContainer {
             .self_stretch()
             .bg(bg_color)
             .items_center()
-            .border_b_1()
-            .border_color(border_color)
             .child(left_window_drag_region)
             .when(self.reserve_navigation_sidebar_toggle || navigation_sidebar_expanded.is_some(), |this| {
                 let expanded = navigation_sidebar_expanded.unwrap_or_default();
                 this.child(
                     div()
                         .id("navigation-sidebar-toggle-boundary")
+                        .debug_selector(|| "navigation-sidebar-toggle".to_owned())
                         // Keep the button's measured width when Home hides the control.
                         .when(navigation_sidebar_expanded.is_none(), |this| this.invisible())
                         .flex_shrink_0()
                         .h_full()
                         .flex()
                         .items_center()
-                        .px_1()
+                        .pl_3()
+                        .pr_2()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             Button::new("navigation-sidebar-toggle")
@@ -4258,8 +4414,8 @@ impl TabContainer {
                             .items_center()
                             .gap_2()
                             .h(tab_item_height)
-                            .px_3()
-                            .when(pinned_index + 1 < pinned_tab_count, |el| el.mr_1())
+                            .px_2p5()
+                            .when(pinned_index + 1 < pinned_tab_count, |el| el.mr(px(5.0)))
                             .when_some(top_padding, |el, padding| el.mt(padding))
                             .rounded(px(6.0))
                             .border_1()
@@ -4282,6 +4438,11 @@ impl TabContainer {
                                 });
                             })
                             .child(render_tab_display_number(display_number, text_color))
+                            .text_color(if is_pinned_active {
+                                text_color
+                            } else {
+                                inactive_text_color
+                            })
                             .when_some(pinned_icon, |el, icon| {
                                 el.child(div().flex_shrink_0().flex().items_center().child(icon))
                             })
@@ -4315,7 +4476,7 @@ impl TabContainer {
                     .overflow_x_scroll()
                     .when_some(self.top_padding, |div, padding| div.pt(padding))
                     .pr_2()
-                    .gap_1()
+                    .gap(px(5.0))
                     .track_scroll(&self.tab_bar_scroll_handle)
                     .drag_over::<DragTab>(move |el, drag, _, _| {
                         if drag.is_external() {
@@ -4389,8 +4550,8 @@ impl TabContainer {
                             .h(tab_item_height)
                             .min_w(tab_min_width)
                             .max_w(tab_max_width)
-                            .px_3()
-                            .rounded(px(6.0))
+                            .px_2p5()
+                            .rounded(px(5.0))
                             .border_1()
                             .border_color(inactive_tab_border_color)
                             .when(is_active, |el| {
@@ -4400,6 +4561,11 @@ impl TabContainer {
                             .when(!is_active, |el| {
                                 el.hover(move |style| style.bg(hover_tab_color))
                                     .bg(inactive_tab_color)
+                            })
+                            .text_color(if is_active {
+                                text_color
+                            } else {
+                                inactive_text_color
                             })
                             .when(show_title_tooltip, |el| {
                                 el.tooltip(move |window, cx| {
@@ -5233,7 +5399,7 @@ impl Render for TabContainer {
             })
             .when(self.show_tab_content, |this| {
                 this.child(
-                    v_flex()
+                    div()
                         .absolute()
                         .top(if show_tab_bar {
                             tab_bar_height
@@ -5245,7 +5411,6 @@ impl Render for TabContainer {
                         .left_0()
                         .min_w_0()
                         .min_h_0()
-                        .items_stretch()
                         .overflow_hidden()
                         .child(self.render_tab_content(window, cx)),
                 )
@@ -5443,6 +5608,54 @@ mod tests {
         tab_container: Entity<TabContainer>,
     }
 
+    struct SplitTabWindow {
+        tab_container: Entity<TabContainer>,
+        show_resource: bool,
+    }
+
+    impl Render for SplitTabWindow {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let (tab_bar, tab_content) = self.tab_container.update(cx, |tabs, cx| {
+                (
+                    tabs.render_tab_bar(window, cx).into_any_element(),
+                    tabs.render_tab_content(window, cx).into_any_element(),
+                )
+            });
+            v_flex()
+                .size_full()
+                .child(
+                    div()
+                        .id("split-tab-bar-slot")
+                        .debug_selector(|| "split-tab-bar-slot".to_owned())
+                        .h(one_ui::theme_geometry().layout.tab_bar)
+                        .w_full()
+                        .flex_shrink_0()
+                        .child(tab_bar),
+                )
+                .child(
+                    h_flex()
+                        .id("split-tab-body-slot")
+                        .debug_selector(|| "split-tab-body-slot".to_owned())
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .when(self.show_resource, |this| {
+                            this.child(div().w(px(260.)).h_full().flex_shrink_0())
+                        })
+                        .child(
+                            div()
+                                .id("split-tab-content-slot")
+                                .debug_selector(|| "split-tab-content-slot".to_owned())
+                                .flex_1()
+                                .min_w_0()
+                                .min_h_0()
+                                .h_full()
+                                .child(tab_content),
+                        ),
+                )
+        }
+    }
+
     impl Render for TestWindow {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div()
@@ -5599,13 +5812,11 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_navigation_sidebar_reserves_macos_titlebar_controls() {
+    fn macos_titlebar_controls_do_not_depend_on_resource_expansion() {
         let source = include_str!("tab_container.rs");
         let implementation = source.split("mod tests").next().unwrap();
-        // Only a collapsed (or toggle-less Legacy) tab bar spans the full
-        // window width and must clear the traffic-light strip; an expanded
-        // sidebar owns the left edge and must not double-indent the buttons.
-        assert!(implementation.contains("navigation_sidebar_expanded != Some(true)"));
+        assert!(implementation.contains("pub fn set_macos_titlebar_inset("));
+        assert!(!implementation.contains("navigation_sidebar_expanded != Some(true)"));
         // The Home button leads the tab bar, so the reservation must clear
         // the full traffic-light strip instead of the compact padding.
         assert!(implementation.contains("left_padding = layout.macos_title_bar_content_padding"));
@@ -6251,6 +6462,135 @@ mod tests {
     }
 
     #[gpui::test]
+    fn split_tab_bar_and_content_preserve_a_real_sized_content_host(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+        });
+        let window = cx.update(|cx| {
+            let window_bounds = Bounds::centered(None, size(px(1000.0), px(600.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let tab = cx.new(|cx| TestTab::new("terminal", cx));
+                    let tabs = cx.new(|cx| TabContainer::new(window, cx));
+                    tabs.update(cx, |tabs, cx| {
+                        tabs.add_and_activate_tab_with_focus(
+                            TabItem::new("terminal", "test", tab),
+                            window,
+                            cx,
+                        );
+                    });
+                    let root = cx.new(|_| SplitTabWindow {
+                        tab_container: tabs,
+                        show_resource: true,
+                    });
+                    cx.new(|cx| Root::new(root, window, cx))
+                },
+            )
+            .expect("split tab test window opens")
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+
+        let slot = cx
+            .debug_bounds("split-tab-content-slot")
+            .expect("split content slot");
+        let host = cx
+            .debug_bounds("tab-content")
+            .expect("real Tab content host");
+        let terminal = cx
+            .debug_bounds("test-tab-root")
+            .expect("terminal-like content");
+        assert!(slot.size.width > px(700.), "slot={slot:?}");
+        assert!(slot.size.height > px(500.), "slot={slot:?}");
+        assert_eq!(host.size, slot.size, "host={host:?} slot={slot:?}");
+        assert_eq!(
+            terminal.size, slot.size,
+            "terminal={terminal:?} slot={slot:?}"
+        );
+        assert_eq!(
+            cx.debug_bounds("tab-bar").map(|it| it.size.height),
+            Some(one_ui::theme_geometry().layout.tab_bar),
+            "拆分模式只渲染一份 36px Tab 栏"
+        );
+        assert_eq!(
+            cx.debug_bounds("split-tab-bar-slot")
+                .expect("explicit external Tab bar")
+                .size
+                .height,
+            one_ui::theme_geometry().layout.tab_bar
+        );
+    }
+
+    #[gpui::test]
+    fn home_sidebar_visibility_does_not_move_or_resize_the_tab_bar(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+        });
+        let (window, root) = cx.update(|cx| {
+            let window_bounds = Bounds::centered(None, size(px(1000.), px(600.)), cx);
+            let mut root = None;
+            let window = cx
+                .open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                        ..Default::default()
+                    },
+                    |window, cx| {
+                        let tab = cx.new(|cx| TestTab::new("home", cx));
+                        let tabs = cx.new(|cx| TabContainer::new(window, cx));
+                        tabs.update(cx, |tabs, cx| {
+                            tabs.add_and_activate_tab_with_focus(
+                                TabItem::new("home", "test", tab),
+                                window,
+                                cx,
+                            );
+                        });
+                        let root_entity = cx.new(|_| SplitTabWindow {
+                            tab_container: tabs,
+                            show_resource: true,
+                        });
+                        root = Some(root_entity.clone());
+                        cx.new(|cx| Root::new(root_entity, window, cx))
+                    },
+                )
+                .expect("safe home sidebar fixture opens");
+            (window, root.expect("root entity"))
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let before = cx.debug_bounds("split-tab-bar-slot").expect("home tab bar");
+        assert_eq!(
+            cx.debug_bounds("tab-bar").map(|it| it.origin),
+            Some(before.origin)
+        );
+        cx.update(|window, cx| {
+            root.update(cx, |root, _| root.show_resource = false);
+            window.refresh();
+        });
+        cx.run_until_parked();
+        let after = cx
+            .debug_bounds("split-tab-bar-slot")
+            .expect("workspace tab bar");
+        assert_eq!(after.origin, before.origin, "Tab 栏不能随侧栏显隐移动");
+        assert_eq!(after.size, before.size, "Tab 栏始终贯通窗口");
+        assert!(
+            cx.debug_bounds("split-tab-body-slot")
+                .expect("body")
+                .size
+                .width
+                > after.size.width - px(1.)
+        );
+    }
+
+    #[gpui::test]
     fn hiding_tab_content_keeps_the_active_tab_out_of_layout(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
@@ -6868,7 +7208,11 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(
             Some("first"),
-            cx.update(|_, cx| container.read(cx).renaming_tab_id.as_deref().map(str::to_string))
+            cx.update(|_, cx| container
+                .read(cx)
+                .renaming_tab_id
+                .as_deref()
+                .map(str::to_string))
                 .as_deref()
         );
 

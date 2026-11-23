@@ -9,7 +9,9 @@ pub use blend::ColorMix;
 
 mod geometry;
 pub mod theme_geometry;
-pub use theme_geometry::{LayoutSizeTokens, ThemeGeometry, theme_geometry};
+pub use theme_geometry::{
+    InterfaceDensity, LayoutSizeTokens, ThemeGeometry, set_interface_density, theme_geometry,
+};
 pub mod icon_button;
 mod icon_size;
 pub mod large_text_editor;

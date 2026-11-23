@@ -63,14 +63,8 @@ impl TerminalExtensionPanelHost for NavopTerminalExtensionPanels {
         let host = cx.try_global::<universal_plugins::NshHost>()?.clone();
         // 面板跟随终端配色，而不是应用主题：侧栏和面板看起来是一体的。
         let theme = universal_plugins::nsh_terminal_theme(colors, cx);
-        let panel = host.open_panel_with_theme(
-            extension_id,
-            panel_id,
-            None,
-            None,
-            Some(theme),
-            cx,
-        )?;
+        let panel =
+            host.open_panel_with_theme(extension_id, panel_id, None, None, Some(theme), cx)?;
         Some(panel.into())
     }
 }

@@ -1,6 +1,25 @@
 use super::*;
 use one_ui::IconSize;
 
+fn navigation_section_heading(title: String, count: usize, cx: &Context<HomePage>) -> AnyElement {
+    h_flex()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(count.to_string()),
+        )
+        .into_any_element()
+}
+
 /// 非卡片布局下最近区固定容量（历史行为：最多 4 条）。
 const RECENT_ROW_FALLBACK: usize = 4;
 
@@ -10,7 +29,15 @@ impl HomePage {
         layout: HomeConnectionLayout,
         cx: &mut Context<Self>,
     ) {
-        self.connection_layout = layout.into();
+        let view = match layout {
+            HomeConnectionLayout::Card => ConnectionManagementView::Card,
+            HomeConnectionLayout::List => ConnectionManagementView::List,
+            HomeConnectionLayout::Tree => ConnectionManagementView::Tree,
+            HomeConnectionLayout::Navigation => ConnectionManagementView::Card,
+        };
+        self.connection_layout = view.into();
+
+        self.navigation_connection_manager_open = false;
         self.sync_sidebar_home_embedded(cx);
         #[cfg(feature = "shell")]
         if self.connection_layout == ConnectionLayout::List {
@@ -22,13 +49,13 @@ impl HomePage {
     /// 让常驻侧栏知道是否作为主页 Tree 布局嵌入渲染。
     pub(crate) fn sync_sidebar_home_embedded(&self, cx: &mut Context<Self>) {
         if let Some(sidebar) = &self.connection_sidebar {
-            if self.connection_layout == ConnectionLayout::Navigation {
-                sidebar.update(cx, |sidebar, cx| sidebar.set_home_navigation_layout(cx));
-            } else {
-                sidebar.update(cx, |sidebar, cx| {
-                    sidebar.set_home_embedded(self.connection_layout == ConnectionLayout::Tree, cx)
-                });
-            }
+            sidebar.update(cx, |sidebar, cx| {
+                sidebar.set_home_embedded(
+                    AppSettings::global(cx).app_layout == AppLayout::HomeNavigation
+                        && self.connection_layout == ConnectionLayout::Tree,
+                    cx,
+                )
+            });
         }
     }
 
@@ -38,7 +65,9 @@ impl HomePage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let query = self.search_query.read(cx).to_lowercase();
-        if self.connection_layout == ConnectionLayout::Tree {
+        if self.connection_layout == ConnectionLayout::Tree
+            && !HomePage::uses_global_navigation_layout(cx)
+        {
             if let Some(sidebar) = self.connection_sidebar.clone() {
                 // 作为子视图渲染侧栏实体：树在 Render 阶段自己 read(HomePage)，
                 // 不在本页租约内重入读自身（修复布局切换瞬间 panic）。
@@ -60,7 +89,7 @@ impl HomePage {
                     .into_any_element();
             }
         }
-        if self.connection_layout == ConnectionLayout::Navigation {
+        if HomePage::uses_global_navigation_layout(cx) {
             return self.render_navigation_home_content(window, cx);
         }
         self.render_workspace_view(
@@ -77,8 +106,11 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if self.navigation_connection_manager_open {
+            return self.render_navigation_connection_manager(window, cx);
+        }
         let query = self.search_query.read(cx).trim().to_lowercase();
-        let recent = recent::recent_connections(&self.connections, &self.selected_filter, "", 6);
+        let sessions = self.visible_navigation_sessions(&query, cx);
         let matching = self
             .home_groups(&query, cx)
             .into_iter()
@@ -86,24 +118,15 @@ impl HomePage {
             .collect::<Vec<_>>();
         let right_width = window.bounds().size.width - GLOBAL_NAV_TREE_WIDTH;
         let (_, card_width) = grid::card_grid_metrics(right_width, window.rem_size());
-        let mut body = v_flex()
-            .w_full()
-            .min_w_0()
-            .gap_5()
-            .child(self.render_navigation_heading(
-                query.is_empty(),
-                if query.is_empty() {
-                    recent.len()
-                } else {
-                    matching.len()
-                },
-                window,
-                cx,
-            ));
+        let mut body = v_flex().w_full().min_w_0().gap_5();
         if !query.is_empty() {
-            if matching.is_empty() {
-                body = body.child(self.render_empty_home(cx));
-            } else {
+            let no_results = sessions.is_empty() && matching.is_empty();
+            body = body
+                .child(self.render_navigation_search_heading(sessions.len() + matching.len(), cx));
+            if !sessions.is_empty() {
+                body = body.child(self.render_active_session_list(sessions, cx));
+            }
+            if !matching.is_empty() {
                 body = body.child(self.render_connections_grid(
                     matching,
                     self.selected_connection_id,
@@ -113,69 +136,294 @@ impl HomePage {
                     cx,
                 ));
             }
-        } else if !AppSettings::global(cx).home_show_recent_connections {
-            // 设置关闭「最近连接」分组后,导航布局与卡片布局保持一致:不渲染该分组。
-            if matching.is_empty() {
-                body = body.child(self.render_empty_home(cx));
+            if no_results {
+                body = body.child(self.render_navigation_empty_search(cx));
             }
-        } else if recent.is_empty() {
-            body = body.child(self.render_empty_home(cx));
         } else {
-            body = body.child(self.render_recent_group(
-                recent,
-                self.selected_connection_id,
-                ConnectionLayout::Card,
-                card_width,
-                cx,
-            ));
-        }
-        if query.is_empty() {
-            body = body.child(self.render_application_workbench(window, cx));
-            body = body.child(self.render_navigation_status_panel(window, cx));
+            body = body.child(self.render_navigation_home_heading(cx));
+            if !sessions.is_empty() {
+                body = body.child(self.render_active_session_list(sessions, cx));
+            }
+            if AppSettings::global(cx).home_show_recent_connections {
+                body = body.child(self.render_compact_recent_connections(cx));
+            }
         }
         div()
             .id("home-navigation-content")
+            .debug_selector(|| "home-navigation-content".to_owned())
             .size_full()
             .min_w_0()
+            .min_h_0()
             .overflow_y_scroll()
             .p_5()
             .child(body)
             .into_any_element()
     }
 
-    fn render_navigation_heading(
+    fn visible_navigation_sessions(
         &self,
-        is_recent: bool,
-        count: usize,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+        query: &str,
+        cx: &App,
+    ) -> Vec<(SharedString, SharedString, Option<Icon>)> {
+        self.tab_container
+            .read(cx)
+            .tabs()
+            .iter()
+            .filter(|tab| tab.content().content_key(cx) != "Home")
+            .filter(|tab| {
+                query.is_empty() || tab.title(cx).to_string().to_lowercase().contains(query)
+            })
+            .take(6)
+            .map(|tab| (tab.id(), tab.title(cx), tab.content().icon(cx)))
+            .collect()
+    }
+
+    fn render_navigation_home_heading(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .w_full()
             .min_w_0()
             .items_center()
-            .gap_2()
+            .justify_between()
+            .gap_3()
             .child(
-                div()
-                    .flex_shrink_0()
-                    .text_lg()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(if is_recent {
-                        t!("Home.recent_connections").to_string()
-                    } else {
-                        t!("Home.search_results").to_string()
-                    }),
+                v_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xl()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t!("Home.continue_working").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("Home.continue_working_hint").to_string()),
+                    ),
             )
             .child(
                 div()
-                    .flex_shrink_0()
+                    .debug_selector(|| "home-manage-all-connections".to_owned())
+                    .child(
+                        Button::new("home-manage-all-connections")
+                            .outline()
+                            .icon(Icon::new(IconName::Settings).with_size(IconSize::Small))
+                            .label(t!("Home.manage_all_connections"))
+                            .on_click(cx.listener(|home, _, _, cx| {
+                                home.navigation_connection_manager_open = true;
+                                cx.notify();
+                                if let Some(app) = cx
+                                    .try_global::<crate::navop_app::GlobalNavopApp>()
+                                    .map(|global| global.app.clone())
+                                {
+                                    app.update(cx, |_, cx| cx.notify());
+                                }
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_navigation_search_heading(&self, count: usize, cx: &Context<Self>) -> AnyElement {
+        h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(t!("Home.search_results").to_string()),
+            )
+            .child(
+                div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
                     .child(count.to_string()),
             )
-            // 全局导航布局同样把类型筛选平铺在标题行：工具栏的筛选入口已随
-            // 筛选条统一收口，右侧内容不再依赖工具栏下拉。
-            .child(self.render_connection_type_filter_bar(window, cx))
+            .into_any_element()
+    }
+
+    fn render_active_session_list(
+        &self,
+        sessions: Vec<(SharedString, SharedString, Option<Icon>)>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let session_count = sessions.len();
+        let tabs = self.tab_container.clone();
+        let mut rows = v_flex().w_full().gap_1();
+        for (id, title, icon) in sessions {
+            let tabs = tabs.clone();
+            rows = rows.child(
+                h_flex()
+                    .id(SharedString::from(format!("home-active-session-{id}")))
+                    .w_full()
+                    .min_w_0()
+                    .gap_3()
+                    .p_3()
+                    .rounded_md()
+                    .cursor_default()
+                    .hover(|style| style.bg(cx.theme().list_hover))
+                    .on_click(move |_, window, cx| {
+                        tabs.update(cx, |tabs, cx| tabs.activate_tab_by_id(&id, window, cx));
+                    })
+                    .child(
+                        icon.unwrap_or_else(|| Icon::new(IconName::PanelLeft))
+                            .with_size(IconSize::Small),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_sm()
+                            .child(title),
+                    )
+                    .child(Icon::new(IconName::ArrowRight).with_size(IconSize::Small)),
+            );
+        }
+        v_flex()
+            .id("home-active-sessions")
+            .w_full()
+            .gap_2()
+            .child(navigation_section_heading(
+                t!("Home.active_sessions").to_string(),
+                session_count,
+                cx,
+            ))
+            .child(rows)
+            .into_any_element()
+    }
+
+    fn render_compact_recent_connections(&self, cx: &mut Context<Self>) -> AnyElement {
+        let recent = recent::recent_connections(&self.connections, &self.selected_filter, "", 4);
+        let mut rows = v_flex().w_full().gap_1();
+        for conn in &recent {
+            rows = rows.child(self.render_connection_list_item(
+                conn.clone(),
+                self.selected_connection_id,
+                0,
+                true,
+                cx,
+            ));
+        }
+        if recent.is_empty() {
+            rows = rows.child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("Home.no_recent_connections").to_string()),
+            );
+        }
+        v_flex()
+            .id("home-compact-recent-connections")
+            .w_full()
+            .gap_2()
+            .child(navigation_section_heading(
+                t!("Home.recent_connections").to_string(),
+                recent.len(),
+                cx,
+            ))
+            .child(rows)
+            .into_any_element()
+    }
+
+    fn render_navigation_empty_search(&self, cx: &Context<Self>) -> AnyElement {
+        v_flex()
+            .w_full()
+            .items_center()
+            .gap_2()
+            .py_8()
+            .child(Icon::new(IconName::Search).with_size(IconSize::Medium))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("Home.global_search_empty").to_string()),
+            )
+            .into_any_element()
+    }
+
+    fn render_navigation_connection_manager(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let query = self.search_query.read(cx).trim().to_lowercase();
+        let groups = self.home_groups(&query, cx);
+        let count: usize = groups
+            .iter()
+            .map(|(_, _, connections)| connections.len())
+            .sum();
+        let right_width = window.bounds().size.width - GLOBAL_NAV_TREE_WIDTH;
+        let (_, card_width) = grid::card_grid_metrics(right_width, window.rem_size());
+        let mut body = v_flex().w_full().min_w_0().gap_5().child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .debug_selector(|| "home-navigation-manager-back".to_owned())
+                        .child(
+                            IconButton::new(
+                                "home-navigation-manager-back",
+                                Icon::new(IconName::ArrowLeft).with_size(IconSize::Small),
+                            )
+                            .ghost()
+                            .tooltip(t!("Home.back_to_home"))
+                            .on_click(cx.listener(|home, _, _, cx| {
+                                home.navigation_connection_manager_open = false;
+                                cx.notify();
+                                if let Some(app) = cx
+                                    .try_global::<crate::navop_app::GlobalNavopApp>()
+                                    .map(|global| global.app.clone())
+                                {
+                                    app.update(cx, |_, cx| cx.notify());
+                                }
+                            })),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(t!("Home.manage_all_connections").to_string()),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("Home.connection_count", count = count).to_string()),
+                )
+                .child(self.render_connection_type_filter_bar(window, cx)),
+        );
+        if count == 0 {
+            body = body.child(self.render_empty_home(cx));
+        } else {
+            for (id, title, connections) in groups {
+                body = body.child(self.render_home_group(
+                    id,
+                    title,
+                    connections,
+                    self.selected_connection_id,
+                    self.connection_layout,
+                    card_width,
+                    cx,
+                ));
+            }
+        }
+        div()
+            .id("home-navigation-connection-manager")
+            .debug_selector(|| "home-navigation-connection-manager".to_owned())
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_y_scroll()
+            .p_5()
+            .child(body)
             .into_any_element()
     }
 
@@ -576,7 +824,7 @@ impl HomePage {
             .flex()
             .w_full()
             .min_w_0()
-            .gap_2p5()
+            .gap_3()
             .when(layout != ConnectionLayout::Card, |grid| grid.flex_col());
         if layout == ConnectionLayout::Card {
             grid = grid.flex_wrap();

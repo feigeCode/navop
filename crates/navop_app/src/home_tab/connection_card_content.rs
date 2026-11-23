@@ -19,9 +19,7 @@ impl HomePage {
             .child(
                 div()
                     .size(gpui::rems(2.375))
-                    .rounded(px(9.0))
-                    .border_1()
-                    .border_color(cx.theme().border)
+                    .rounded(px(8.0))
                     .bg(cx.theme().muted)
                     .flex()
                     .items_center()

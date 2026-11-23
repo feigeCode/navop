@@ -133,7 +133,9 @@ const HISTORY_PROMPT_DROPDOWN_INPUT_CLEARANCE: f32 = 8.0;
 /// 几乎不可读（issue #73）。两个诉求无法用一个常数同时满足，因此改为用户可配
 /// （默认 0.96，透出 4%），本函数只负责把传入值夹到合法区间。
 pub(super) fn history_prompt_dropdown_background(background: Hsla, opacity: f32) -> Hsla {
-    background.opacity(AppSettings::normalize_terminal_suggestion_popup_opacity(opacity))
+    background.opacity(AppSettings::normalize_terminal_suggestion_popup_opacity(
+        opacity,
+    ))
 }
 
 pub(super) fn history_prompt_active_background(foreground: Hsla) -> Hsla {

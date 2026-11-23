@@ -236,21 +236,21 @@ pub struct LayoutSizeTokens {
 impl Default for LayoutSizeTokens {
     fn default() -> Self {
         Self {
-            title_bar: px(34.),
+            title_bar: px(38.),
             title_bar_content_padding: px(12.),
-            macos_title_bar_content_padding: px(80.),
+            macos_title_bar_content_padding: px(88.),
             macos_compact_title_bar_content_padding: px(36.),
             macos_rail_title_bar_height: px(40.),
             window_control_width: px(34.),
-            tab_bar: px(40.),
-            tab_item: px(32.),
-            command_bar: px(48.),
-            panel_header: px(36.),
+            tab_bar: px(38.),
+            tab_item: px(28.),
+            command_bar: px(44.),
+            panel_header: px(44.),
             embedded_panel_header: px(40.),
             dock_panel_header: px(30.),
             list_header: px(28.),
             collapsed_bottom_dock_header: px(29.),
-            status_bar: px(28.),
+            status_bar: px(24.),
             global_rail: px(52.),
             compact_rail: px(44.),
             global_rail_item: px(40.),
@@ -285,7 +285,7 @@ pub struct TreeListGeometry {
 impl Default for TreeListGeometry {
     fn default() -> Self {
         Self {
-            row_height: px(28.),
+            row_height: px(34.),
             indent: px(16.),
             base_padding: px(8.),
             disclosure_size: px(16.),
@@ -478,7 +478,7 @@ impl Default for ResizeGeometry {
     fn default() -> Self {
         Self {
             visible_line: px(1.),
-            edge_padding: px(4.),
+            edge_padding: px(6.),
             collapsed_threshold: px(44.),
         }
     }
@@ -558,18 +558,18 @@ mod tests {
     fn shell_layout_defaults_are_internally_consistent() {
         let layout = LayoutSizeTokens::default();
 
-        assert_eq!(layout.title_bar, px(34.));
+        assert_eq!(layout.title_bar, px(38.));
         assert_eq!(layout.title_bar_content_padding, px(12.));
-        assert_eq!(layout.macos_title_bar_content_padding, px(80.));
+        assert_eq!(layout.macos_title_bar_content_padding, px(88.));
         assert_eq!(layout.macos_compact_title_bar_content_padding, px(36.));
         assert_eq!(layout.macos_rail_title_bar_height, px(40.));
         assert_eq!(layout.window_control_width, px(34.));
-        assert_eq!(layout.tab_bar, px(40.));
-        assert_eq!(layout.tab_item, px(32.));
-        assert_eq!(layout.command_bar, px(48.));
-        assert_eq!(layout.panel_header, px(36.));
+        assert_eq!(layout.tab_bar, px(38.));
+        assert_eq!(layout.tab_item, px(28.));
+        assert_eq!(layout.command_bar, px(44.));
+        assert_eq!(layout.panel_header, px(44.));
         assert_eq!(layout.list_header, px(28.));
-        assert_eq!(layout.status_bar, px(28.));
+        assert_eq!(layout.status_bar, px(24.));
         assert_eq!(layout.global_rail, px(52.));
         assert_eq!(layout.compact_rail, px(44.));
         assert_eq!(layout.global_rail_item, px(40.));
@@ -584,7 +584,7 @@ mod tests {
     fn tree_geometry_has_stable_density_and_disclosure_slots() {
         let tree = TreeListGeometry::default();
 
-        assert_eq!(tree.row_height, px(28.));
+        assert_eq!(tree.row_height, px(34.));
         assert_eq!(tree.indent, px(16.));
         assert_eq!(tree.base_padding, px(8.));
         assert_eq!(tree.disclosure_size, px(16.));
@@ -595,8 +595,8 @@ mod tests {
         let resize = ResizeGeometry::default();
 
         assert_eq!(resize.visible_line, px(1.));
-        assert_eq!(resize.edge_padding, px(4.));
-        assert_eq!(resize.hit_area(), px(9.));
+        assert_eq!(resize.edge_padding, px(6.));
+        assert_eq!(resize.hit_area(), px(13.));
         assert_eq!(resize.collapsed_threshold, px(44.));
     }
 
@@ -620,5 +620,83 @@ mod tests {
 /// `gpui-component`. They are not customized per theme, so the defaults are
 /// the single source of truth.
 pub fn theme_geometry() -> ThemeGeometry {
-    ThemeGeometry::default()
+    let mut geometry = ThemeGeometry::default();
+    let density = interface_density();
+    let delta = match density {
+        InterfaceDensity::Compact => -4.0,
+        InterfaceDensity::Normal => 0.0,
+        InterfaceDensity::Comfortable => 6.0,
+    };
+    geometry.tree.row_height += px(delta);
+    // 外壳高度由 Tab 归属和窗口装饰决定，密度切换不能让 Tab 再次跳动。
+    geometry.layout.panel_header += px(delta);
+    geometry.layout.embedded_panel_header += px(delta);
+    geometry.layout.command_bar += px(delta);
+    geometry
+}
+
+/// 密度只改变共享几何，不缩小核心字号。
+/// Tab 栏、Tab 项、标题栏和状态栏保持固定外壳高度。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InterfaceDensity {
+    Compact,
+    #[default]
+    Normal,
+    Comfortable,
+}
+
+static INTERFACE_DENSITY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1);
+
+pub fn set_interface_density(density: InterfaceDensity) {
+    let value = match density {
+        InterfaceDensity::Compact => 0,
+        InterfaceDensity::Normal => 1,
+        InterfaceDensity::Comfortable => 2,
+    };
+    INTERFACE_DENSITY.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn interface_density() -> InterfaceDensity {
+    match INTERFACE_DENSITY.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => InterfaceDensity::Compact,
+        2 => InterfaceDensity::Comfortable,
+        _ => InterfaceDensity::Normal,
+    }
+}
+
+#[cfg(test)]
+mod density_tests {
+    use super::{InterfaceDensity, set_interface_density, theme_geometry};
+    use gpui::px;
+    use std::sync::Mutex;
+
+    static DENSITY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn density_does_not_move_the_application_tab_shell() {
+        let _guard = DENSITY_TEST_LOCK.lock().unwrap();
+        let baseline = {
+            set_interface_density(InterfaceDensity::Normal);
+            theme_geometry()
+        };
+        set_interface_density(InterfaceDensity::Comfortable);
+        let comfortable = theme_geometry();
+        set_interface_density(InterfaceDensity::Compact);
+        let compact = theme_geometry();
+        set_interface_density(InterfaceDensity::Normal);
+
+        for geometry in [&comfortable, &compact] {
+            assert_eq!(geometry.layout.tab_bar, baseline.layout.tab_bar);
+            assert_eq!(geometry.layout.tab_item, baseline.layout.tab_item);
+            assert_eq!(geometry.layout.status_bar, baseline.layout.status_bar);
+            assert_eq!(geometry.layout.title_bar, baseline.layout.title_bar);
+        }
+        assert_eq!(comfortable.layout.tab_bar, px(38.));
+        assert_eq!(comfortable.layout.status_bar, px(24.));
+        assert_eq!(
+            comfortable.tree.row_height,
+            baseline.tree.row_height + px(6.)
+        );
+        assert_eq!(compact.tree.row_height, baseline.tree.row_height - px(4.));
+    }
 }

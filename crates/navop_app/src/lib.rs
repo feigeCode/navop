@@ -16,6 +16,7 @@ mod auth;
 
 mod ai_chat_acp;
 mod app_init;
+mod chrome_palette;
 mod connection_deeplink;
 mod connection_sort;
 mod connection_type_menu;
@@ -52,6 +53,7 @@ mod personal_sync_runtime_tests;
 mod personal_sync_status;
 mod product;
 mod public_mcp_runtime;
+mod resource_mount;
 mod screenshot_safe;
 mod setting_tab;
 mod settings;

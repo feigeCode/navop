@@ -301,15 +301,20 @@ fn windows_native_controls_occlude_the_tab_drag_region() {
 }
 
 #[test]
-fn tab_items_keep_visible_blocks_and_a_distinct_active_outline() {
+fn tab_items_keep_visible_blocks_and_a_neutral_active_outline() {
     let source = include_str!("tab_container.rs").replace("\r\n", "\n");
     let tab_bar_start = source
         .find("pub fn render_tab_bar")
         .expect("tab bar renderer");
     let tab_bar = &source[tab_bar_start..];
 
-    assert!(tab_bar.contains("let inactive_tab_border_color = border_color.opacity(0.65);"));
-    assert!(tab_bar.contains("let active_tab_border_color = theme.primary.opacity(0.85);"));
+    assert!(tab_bar.contains("let inactive_tab_border_color = gpui::transparent_black();"));
+    assert!(tab_bar.contains("let active_tab_border_color = border_color;"));
+    assert!(
+        tab_bar.contains(
+            "let active_tab_color = self.active_tab_bg_color.unwrap_or(theme.background);"
+        )
+    );
     assert!(tab_bar.matches(".border_1()").count() >= 2);
     assert!(
         tab_bar

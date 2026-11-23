@@ -20,7 +20,7 @@ use gpui_component::Root;
 use crate::resize_handle::{HandlePlacement, ResizePanel, band_selector, resize_handle};
 
 /// 与 `geometry::resize()` 对齐：分隔线两侧各留的抓取区宽度。
-const EDGE_PADDING: f32 = 4.;
+const EDGE_PADDING: f32 = 6.;
 /// 面板尺寸：边界坐标一眼能看出来。
 const PANEL_WIDTH: f32 = 400.;
 const PANEL_HEIGHT: f32 = 300.;
@@ -65,36 +65,85 @@ impl HandleCase {
 struct ResizeHandleTestHost {
     case: HandleCase,
     dragged: Rc<Cell<bool>>,
+    last_offset: Option<Rc<Cell<Pixels>>>,
+    inline: bool,
+    width: Pixels,
+    continuous_resize: bool,
+    pointer_origin: Option<Rc<Cell<Option<Point<Pixels>>>>>,
 }
 
 impl ResizeHandleTestHost {
-    fn handle(&self) -> impl IntoElement {
+    fn handle(&self, width: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
         let dragged = self.dragged.clone();
         let handle =
             resize_handle::<ResizePanel, ResizePanel>("resize-test-handle", self.case.axis());
         let handle = match self.case.placement() {
-            Some(placement) => handle.placement(placement),
-            None => handle,
+            Some(placement) if !self.inline => handle.placement(placement),
+            _ if self.inline => handle.inline(),
+            _ => handle,
         };
 
-        handle.on_drag(ResizePanel, move |_, _, _, cx| {
-            dragged.set(true);
-            cx.new(|_| ResizePanel)
-        })
+        let last_offset = self.last_offset.clone();
+        if self.continuous_resize {
+            let pointer_origin = self
+                .pointer_origin
+                .clone()
+                .unwrap_or_else(|| Rc::new(Cell::new(None)));
+            let start_width = Rc::new(Cell::new(width));
+            let host = cx.entity();
+            handle.on_resize(move |position, _, cx| {
+                if let Some(position) = position {
+                    let start = pointer_origin.get().unwrap_or(position);
+                    if start == position {
+                        start_width.set(host.read(cx).width);
+                    }
+                    pointer_origin.set(Some(start));
+                    let delta = position.x - start.x;
+                    let next_width = start_width.get() + delta;
+                    if let Some(last_offset) = &last_offset {
+                        last_offset.set(delta);
+                    }
+                    host.update(cx, |host, cx| {
+                        host.width = next_width;
+                        host.dragged.set(true);
+                        cx.notify();
+                    });
+                } else {
+                    pointer_origin.set(None);
+                }
+            })
+        } else {
+            handle.on_drag(ResizePanel, move |_, cursor_offset, _, cx| {
+                dragged.set(true);
+                if let Some(last_offset) = last_offset.clone() {
+                    last_offset.set(cursor_offset.x);
+                }
+                cx.new(|_| ResizePanel)
+            })
+        }
     }
 }
 
 impl Render for ResizeHandleTestHost {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div().w_full().h_full().p(px(INSET)).child(
-            div()
-                .id(PANEL_SELECTOR)
-                .debug_selector(|| PANEL_SELECTOR.to_owned())
-                .relative()
-                .w(px(PANEL_WIDTH))
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let panel = div()
+            .id(PANEL_SELECTOR)
+            .debug_selector(|| PANEL_SELECTOR.to_owned())
+            .relative()
+            .w(self.width)
+            .h(px(PANEL_HEIGHT));
+        div().w_full().h_full().p(px(INSET)).child(if self.inline {
+            gpui_component::h_flex()
+                .items_stretch()
                 .h(px(PANEL_HEIGHT))
-                .child(self.handle()),
-        )
+                .w_full()
+                .child(panel)
+                .child(self.handle(self.width, cx))
+                .child(div().flex_1().min_w_0().h_full())
+                .into_any_element()
+        } else {
+            panel.child(self.handle(self.width, cx)).into_any_element()
+        })
     }
 }
 
@@ -117,6 +166,11 @@ fn open_handle_host(
                     let entity = cx.new(|_| ResizeHandleTestHost {
                         case,
                         dragged: Rc::new(Cell::new(false)),
+                        last_offset: None,
+                        inline: false,
+                        width: px(PANEL_WIDTH),
+                        continuous_resize: false,
+                        pointer_origin: None,
                     });
                     host = Some(entity.clone());
                     cx.new(|cx| Root::new(entity, window, cx))
@@ -127,6 +181,12 @@ fn open_handle_host(
     });
 
     let mut cx = VisualTestContext::from_window(window.into(), cx);
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let last_offset = Rc::new(Cell::new(px(0.)));
+    cx.update(|_, cx| {
+        host.update(cx, |host, _| host.last_offset = Some(last_offset.clone()));
+    });
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
     (cx, host)
@@ -222,6 +282,67 @@ fn drag_starts_at(
     started
 }
 
+#[gpui::test]
+fn the_drag_callback_reports_the_offset_from_the_handle_origin(cx: &mut TestAppContext) {
+    let case = HandleCase::PanelRightEdge;
+    let (mut cx, host) = open_handle_host(cx, case);
+    let panel = panel_bounds(&mut cx);
+    let start = probe(panel, case, px(0.));
+    assert!(drag_starts_at(&mut cx, &host, start));
+    let band = cx
+        .debug_bounds(band_selector(case.axis(), case.placement()))
+        .expect("拖动手柄");
+    let initial_offset = start.x - band.origin.x;
+    let last_offset = cx.read(|cx| {
+        host.read(cx)
+            .last_offset
+            .as_ref()
+            .expect("拖动偏移记录器")
+            .get()
+    });
+    assert_eq!(
+        panel.size.width + last_offset - initial_offset,
+        px(PANEL_WIDTH + DRAG_DISTANCE),
+        "从面板边界拖动 40px 后，宽度应恰好增加 40px"
+    );
+}
+
+#[gpui::test]
+fn the_inline_handle_has_a_stable_drag_origin(cx: &mut TestAppContext) {
+    let case = HandleCase::PanelRightEdge;
+    let (mut cx, host) = open_handle_host(cx, case);
+    cx.update(|_, cx| {
+        host.update(cx, |host, _| host.inline = true);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let panel = panel_bounds(&mut cx);
+    let band = cx
+        .debug_bounds(band_selector(case.axis(), None))
+        .expect("正常文档流拖动手柄");
+    assert_eq!(band.left(), panel.right(), "inline 手柄必须落在面板右侧");
+    assert_eq!(band.size.width, px(13.));
+    assert_eq!(band.size.height, panel.size.height);
+    cx.update(|_, cx| {
+        host.update(cx, |host, _| host.width = px(PANEL_WIDTH));
+    });
+    let start = band.center();
+    assert!(drag_starts_at(&mut cx, &host, start));
+    let initial_offset = start.x - band.origin.x;
+    let last_offset = cx.read(|cx| {
+        host.read(cx)
+            .last_offset
+            .as_ref()
+            .expect("拖动偏移记录器")
+            .get()
+    });
+    assert_eq!(
+        panel.size.width + last_offset - initial_offset,
+        px(PANEL_WIDTH + DRAG_DISTANCE),
+        "从手柄左边界拖动 40px，宽度应恰好增加 40px"
+    );
+}
+
 /// issue #333：面板右缘的分隔条，边界两侧都要抓得住。
 #[gpui::test]
 fn the_right_edge_band_straddles_the_boundary(cx: &mut TestAppContext) {
@@ -277,4 +398,96 @@ fn the_top_edge_band_straddles_the_boundary(cx: &mut TestAppContext) {
         drag_starts_at(&mut cx, &host, probe(panel, case, px(-PROBE))),
         "面板内侧（边界下边 {PROBE}px）也该抓得住分隔条"
     );
+}
+
+#[gpui::test]
+fn resize_moves_continuously_with_the_pointer(cx: &mut TestAppContext) {
+    let (mut cx, host) = open_handle_host(cx, HandleCase::PanelRightEdge);
+    cx.update(|_, cx| {
+        host.update(cx, |host, _| {
+            host.inline = true;
+            host.continuous_resize = true;
+            host.pointer_origin = Some(Rc::new(Cell::new(None)));
+        });
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let band = cx
+        .debug_bounds(band_selector(Axis::Horizontal, None))
+        .expect("inline handle");
+    let start = band.center();
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        point(start.x + px(5.), start.y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+    for (delta, width) in [(15., 420.), (35., 455.), (65., 520.)] {
+        cx.simulate_mouse_move(
+            point(start.x + px(delta), start.y),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.run_until_parked();
+        let actual = panel_bounds(&mut cx).size.width;
+        let state = cx.read(|cx| {
+            let host = host.read(cx);
+            (
+                host.width,
+                host.dragged.get(),
+                host.last_offset.as_ref().map(|cell| cell.get()),
+                host.pointer_origin.as_ref().map(|cell| cell.get()),
+            )
+        });
+        println!("continuous resize delta={delta:?}: actual={actual:?}, state={state:?}");
+        assert_eq!(actual, px(width));
+    }
+    cx.simulate_mouse_up(
+        point(start.x + px(60.), start.y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn continuous_resize_ignores_left_button_drags_that_start_outside_the_handle(
+    cx: &mut TestAppContext,
+) {
+    let (mut cx, host) = open_handle_host(cx, HandleCase::PanelRightEdge);
+    cx.update(|_, cx| {
+        host.update(cx, |host, _| {
+            host.inline = true;
+            host.continuous_resize = true;
+        });
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let initial_width = panel_bounds(&mut cx).size.width;
+    let outside = point(px(20.), px(20.));
+    cx.simulate_mouse_down(outside, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::default());
+    for delta in [5., 25., 65.] {
+        cx.simulate_mouse_move(
+            point(outside.x + px(delta), outside.y),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.run_until_parked();
+    }
+    let (width, dragged) = cx.read(|cx| {
+        let host = host.read(cx);
+        (host.width, host.dragged.get())
+    });
+    assert!(!dragged, "从手柄外开始的左键拖动不能触发资源栏 resize");
+    assert_eq!(width, initial_width);
+    assert_eq!(panel_bounds(&mut cx).size.width, initial_width);
+    cx.simulate_mouse_up(
+        point(outside.x + px(65.), outside.y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
 }

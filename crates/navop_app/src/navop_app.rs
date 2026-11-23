@@ -4,10 +4,15 @@ use crate::home_tab::{
 use crate::persistent_connection_sidebar::{
     PersistentConnectionSidebar, PersistentConnectionSidebarEvent,
 };
+use crate::resource_mount::{
+    MountPreferences, MountVisibility, ResourceDeclaration, ResourceKind,
+    plan_mount_with_navigation_width,
+};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext, Context, Entity, ExternalPaths, InteractiveElement, IntoElement, KeyBinding,
-    Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
+    Keystroke, ParentElement, Render, StatefulInteractiveElement as _, Styled, Task, Window,
+    actions, div,
 };
 use gpui_component::{
     WindowExt,
@@ -19,7 +24,7 @@ use gpui_component::{
     render_dialog_layer, render_notification_layer, render_sheet_layer,
 };
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
-use one_core::settings::CloseButtonBehavior;
+use one_core::settings::{AppLayout, CloseButtonBehavior};
 use raw_window_handle::HasWindowHandle;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use raw_window_handle::RawWindowHandle;
@@ -61,6 +66,7 @@ actions!(
 #[derive(Clone)]
 pub struct GlobalHomePage {
     pub home_page: Entity<HomePage>,
+    pub home_tab_id: String,
 }
 
 impl gpui::Global for GlobalHomePage {}
@@ -1524,6 +1530,10 @@ pub struct NavopApp {
     close_choice_prompt_open: bool,
     main_window_size_save_task: Option<Task<()>>,
     _appearance_subscription: gpui::Subscription,
+    _settings_subscription: gpui::Subscription,
+    resource_overlay_dismissed: bool,
+    resource_resize_drag: Option<crate::resource_mount::ResourceResizeDrag>,
+    resource_width_persist_task: Option<Task<()>>,
 }
 
 /// 关闭弹窗里「记住我的选择」勾选框的状态。
@@ -1547,6 +1557,146 @@ impl Render for CloseChoiceRememberState {
 }
 
 impl NavopApp {
+    /// 仅读取活动标签元数据，避免外壳借用 HomePage 时再次读同一实体。
+    fn active_resource_metadata(
+        &self,
+        cx: &App,
+    ) -> (Option<&'static str>, Option<ResourceKind>, bool) {
+        let Some(content) = self.tab_container.read(cx).active_content_snapshot() else {
+            return (None, None, false);
+        };
+        let key = content.content_key(cx);
+        if matches!(
+            key,
+            "Home" | "Notes" | "AiWorkbench" | "Settings" | "Terminal"
+        ) {
+            return (Some(key), None, false);
+        }
+        let kind = match key {
+            "Database" => ResourceKind::DbObjects,
+            "Redis" => ResourceKind::RedisKeys,
+            "MongoDB" => ResourceKind::MongoCollections,
+            _ => ResourceKind::None,
+        };
+        (Some(key), Some(kind), key == "Database")
+    }
+
+    fn active_resource(&self, cx: &App) -> (ResourceKind, bool, bool) {
+        let Some(content) = self.tab_container.read(cx).active_content_snapshot() else {
+            return (ResourceKind::None, false, false);
+        };
+        match content.content_key(cx) {
+            "Home" => {
+                let managing = content
+                    .view()
+                    .downcast::<HomePage>()
+                    .ok()
+                    .is_some_and(|home| home.read(cx).navigation_connection_manager_open);
+                if managing {
+                    // 中央全集管理展开时收起左侧连接树，避免相同功能重复。
+                    (ResourceKind::None, false, false)
+                } else {
+                    (ResourceKind::Connections, false, false)
+                }
+            }
+            "Notes" => (ResourceKind::Notes, false, false),
+            "AiWorkbench" => (ResourceKind::AiSessions, false, false),
+            "Settings" => (ResourceKind::SettingsCategories, false, false),
+            "Database" => (ResourceKind::DbObjects, false, false),
+            "Redis" => (ResourceKind::RedisKeys, false, false),
+            "MongoDB" => (ResourceKind::MongoCollections, false, false),
+            #[cfg(feature = "shell")]
+            "Terminal" => {
+                let ssh = content
+                    .view()
+                    .downcast::<terminal_view::TerminalWorkspace>()
+                    .ok()
+                    .is_some_and(|terminal| {
+                        terminal.read(cx).connection_kind(cx)
+                            == terminal_view::TerminalConnectionKind::Ssh
+                    });
+                (ResourceKind::Connections, ssh, !ssh)
+            }
+            _ => (ResourceKind::None, false, false),
+        }
+    }
+
+    fn render_global_navigation(
+        &self,
+        active_key: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let home = cx.try_global::<GlobalHomePage>()?.home_page.clone();
+        Some(home.update(cx, |home, cx| {
+            home.render_sidebar_for_active(active_key, window, cx)
+                .into_any_element()
+        }))
+    }
+
+    fn render_application_resource(
+        &mut self,
+        kind: ResourceKind,
+        width: gpui::Pixels,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let _ = window;
+        match kind {
+            ResourceKind::Connections => Some(
+                self.connection_sidebar
+                    .update(cx, |tree, cx| tree.render_application_resource(width, cx)),
+            ),
+            ResourceKind::Notes => {
+                let notes = self
+                    .tab_container
+                    .read(cx)
+                    .active_content_snapshot()?
+                    .view()
+                    .downcast::<notes::NotesView>()
+                    .ok()?;
+                Some(notes.update(cx, |notes, cx| notes.render_external_sidebar(width, cx)))
+            }
+            ResourceKind::AiSessions => {
+                let ai = self
+                    .tab_container
+                    .read(cx)
+                    .active_content_snapshot()?
+                    .view()
+                    .downcast::<ai_chat_view::WorkbenchShell>()
+                    .ok()?;
+                ai.update(cx, |ai, cx| ai.render_external_session_nav(width, cx))
+            }
+            ResourceKind::SettingsCategories => {
+                let settings = self
+                    .tab_container
+                    .read(cx)
+                    .active_content_snapshot()?
+                    .view()
+                    .downcast::<crate::setting_tab::SettingsPanel>()
+                    .ok()?;
+                Some(settings.update(cx, |settings, cx| {
+                    settings.render_external_categories(width, cx)
+                }))
+            }
+            ResourceKind::DbObjects | ResourceKind::RedisKeys | ResourceKind::MongoCollections => {
+                let view = self.tab_container.read(cx).application_resource_view(cx)?;
+                Some(
+                    div()
+                        .w(width)
+                        .h_full()
+                        .min_w_0()
+                        .border_r_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().sidebar)
+                        .child(view)
+                        .into_any_element(),
+                )
+            }
+            _ => None,
+        }
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let app_entity = cx.entity();
         cx.set_global(GlobalNavopApp {
@@ -1631,6 +1781,7 @@ impl NavopApp {
         let home_page = cx.new(|cx| HomePage::new(tab_container_clone, window, cx));
         cx.set_global(GlobalHomePage {
             home_page: home_page.clone(),
+            home_tab_id: layout.home_tab_id.to_owned(),
         });
         let home_for_startup_prompt = home_page.clone();
         window.defer(cx, move |window, cx| {
@@ -1681,6 +1832,7 @@ impl NavopApp {
                     cx.defer(move |cx| {
                         app.update(cx, |app, cx| {
                             app.sync_connection_sidebar_theme(cx);
+                            app.resource_overlay_dismissed = false;
                             // 切页影响主页判定（常驻侧栏显隐），需要重渲染。
                             cx.notify();
                         });
@@ -1729,7 +1881,29 @@ impl NavopApp {
                 themes::apply_appearance(&settings, cx);
             }
         });
+        one_ui::set_interface_density(match AppSettings::global(cx).interface_density {
+            one_core::settings::AppearanceDensity::Compact => one_ui::InterfaceDensity::Compact,
+            one_core::settings::AppearanceDensity::Normal => one_ui::InterfaceDensity::Normal,
+            one_core::settings::AppearanceDensity::Comfortable => {
+                one_ui::InterfaceDensity::Comfortable
+            }
+        });
+        tab_container.update(cx, |tabs, cx| tabs.set_layout_mode(cx));
 
+        // 外观/密度/布局改变只重新排列同一批实体，不重建工作区。
+        let settings_subscription = cx.observe_global::<AppSettings>(|this, cx| {
+            this.resource_overlay_dismissed = false;
+            one_ui::set_interface_density(match AppSettings::global(cx).interface_density {
+                one_core::settings::AppearanceDensity::Compact => one_ui::InterfaceDensity::Compact,
+                one_core::settings::AppearanceDensity::Normal => one_ui::InterfaceDensity::Normal,
+                one_core::settings::AppearanceDensity::Comfortable => {
+                    one_ui::InterfaceDensity::Comfortable
+                }
+            });
+            this.tab_container
+                .update(cx, |tabs, cx| tabs.set_layout_mode(cx));
+            cx.notify();
+        });
         Self {
             tab_container,
             connection_sidebar,
@@ -1737,6 +1911,10 @@ impl NavopApp {
             close_choice_prompt_open: false,
             main_window_size_save_task: None,
             _appearance_subscription: appearance_subscription,
+            _settings_subscription: settings_subscription,
+            resource_overlay_dismissed: false,
+            resource_resize_drag: None,
+            resource_width_persist_task: None,
         }
     }
 
@@ -1750,10 +1928,33 @@ impl NavopApp {
         self.persist_connection_sidebar_expanded(expanded, cx);
     }
 
-    fn persist_connection_sidebar_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
-        AppSettings::update_and_save(cx, |settings| {
-            settings.connection_sidebar_expanded = expanded;
+    pub(crate) fn toggle_application_resource(&mut self, cx: &mut Context<Self>) {
+        let expanded = !self.connection_sidebar.read(cx).is_expanded();
+        if expanded {
+            self.resource_overlay_dismissed = false;
+        }
+        let external = AppSettings::global(cx).app_layout == AppLayout::GlobalNavigation;
+        self.tab_container.update(cx, |tabs, cx| {
+            tabs.prepare_external_primary_sidebar(external && expanded, cx)
         });
+        self.set_connection_sidebar_expanded(expanded, cx);
+    }
+
+    fn persist_connection_sidebar_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
+        let external = AppSettings::global(cx).app_layout == AppLayout::GlobalNavigation;
+        self.tab_container.update(cx, |tabs, cx| {
+            tabs.prepare_external_primary_sidebar(external && expanded, cx);
+            tabs.set_external_primary_sidebar(external && expanded, cx);
+        });
+        if AppSettings::try_update_and_save(cx, |settings| {
+            settings.connection_sidebar_expanded = expanded;
+        })
+        .is_err()
+        {
+            self.connection_sidebar
+                .update(cx, |sidebar, cx| sidebar.set_tree_expanded(!expanded, cx));
+            return;
+        }
         self.tab_container.update(cx, |tabs, cx| {
             tabs.set_navigation_sidebar_expanded(expanded, cx)
         });
@@ -1761,6 +1962,48 @@ impl NavopApp {
     }
 
     #[cfg(feature = "shell")]
+    fn resize_application_resource(
+        &mut self,
+        kind: ResourceKind,
+        width: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) {
+        let width = crate::resource_mount::sanitize_resource_width(kind, f32::from(width));
+        if kind == ResourceKind::Connections {
+            self.connection_sidebar.update(cx, |tree, _| {
+                tree.set_application_resource_width(gpui::px(width))
+            });
+        }
+        self.persist_application_resource_width(kind, width, cx);
+        cx.notify();
+    }
+
+    /// 连续拖动只更新内存，停止后再原子保存；保存失败不改变持久化文件。
+    #[cfg(feature = "shell")]
+    fn persist_application_resource_width(
+        &mut self,
+        kind: ResourceKind,
+        width: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let task = cx.spawn(async move |_, cx| {
+            smol::Timer::after(std::time::Duration::from_millis(180)).await;
+            cx.update(|cx| {
+                if AppSettings::global(cx).app_layout != AppLayout::GlobalNavigation {
+                    return;
+                }
+                let key =
+                    crate::resource_mount::stable_width_key(AppLayout::GlobalNavigation, kind);
+                if let Err(error) = AppSettings::try_update_and_save(cx, |settings| {
+                    settings.resource_widths.insert(key.clone(), width);
+                }) {
+                    tracing::warn!(resource = %key, %error, "资源栏宽度保存失败，仅保留本次会话中的调整");
+                }
+            });
+        });
+        self.resource_width_persist_task = Some(task);
+    }
+
     fn sync_connection_sidebar_theme(&mut self, cx: &mut Context<Self>) {
         let terminal_active = {
             let tabs = self.tab_container.read(cx);
@@ -2006,6 +2249,10 @@ impl NavopApp {
 }
 
 #[cfg(test)]
+#[path = "visual_layout_tests.rs"]
+mod visual_layout_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
         LOG_FILE_MAX_BYTES, LOG_FILE_NAME, RotatingLogWriter, close_active_window_default_shortcut,
@@ -2248,17 +2495,16 @@ mod tests {
     fn tree_auto_hide_selects_floating_overlay_otherwise_docked_panel() {
         let source = include_str!("navop_app.rs");
         let render = source.rsplit("impl Render for NavopApp").next().unwrap();
-        assert!(render.contains("render_floating_tree"));
-        assert!(render.contains("render_docked_connection_tree"));
-        assert!(render.contains("is_auto_hide_tree()"));
-        assert!(
-            render.contains("sidebar_expanded && auto_hide_tree"),
-            "浮层连接树仅应在自动隐藏开启时渲染，避免遮挡终端"
-        );
-        assert!(
-            render.contains("sidebar_expanded && (!auto_hide_tree || home_has_navigation_sidebar)"),
-            "非自动隐藏或全局导航布局时应渲染并排的分割面板"
-        );
+        assert!(render.contains("MountVisibility::Overlay"));
+        assert!(render.contains("resource-overlay-backdrop"));
+        assert!(render.contains("MountVisibility::Visible"));
+        assert!(render.contains("plan_mount_with_navigation_width("));
+        assert!(render.contains("resource_overlay_dismissed"));
+        assert!(render.contains("let overlay_left = px(navigation_width)"));
+        assert!(render.contains(".left(overlay_left)"));
+        assert!(render.contains("set_external_sidebar(external"));
+        assert!(render.contains("set_external_session_nav(external"));
+        assert!(render.contains("settings.set_external_categories(false)"));
     }
 
     #[test]
@@ -2981,58 +3227,261 @@ impl Render for NavopApp {
         let dialog_layer = render_dialog_layer(window, cx);
         let notification_layer = render_notification_layer(window, cx);
         let main_content = self.tab_container.clone();
-        // 全局导航布局仍需要 TabContainer 的收起/展开按钮；其他主页布局不重复显示。
-        // home 是 pinned tab，active_tab() 只查普通 tabs，必须用 pinned 通道判断。
-        let home_active = self
-            .tab_container
-            .read(cx)
-            .is_pinned_tab_active_by_id("home");
-        let auto_hide_tree = self.connection_sidebar.read(cx).is_auto_hide_tree();
-        let home_has_navigation_sidebar = home_active
+        let layout = AppSettings::global(cx).app_layout;
+        let (active_key, resource_kind, _) = self.active_resource_metadata(cx);
+        let chrome_palette = crate::chrome_palette::chrome_palette(cx);
+        // A 是跨页图标导航；B 的应用菜单只在主页显示。
+        // 离开主页后不再保留左侧菜单，也不占用工作区宽度。
+        let global_navigation = (layout == AppLayout::GlobalNavigation
+            || active_key == Some("Home"))
+        .then(|| self.render_global_navigation(active_key, window, cx))
+        .flatten();
+        // 两种布局共用外壳，只有 A 需要额外的系统红绿灯专属区域。
+        let global_navigation = global_navigation.map(|navigation| {
+            let navigation_selector = if layout == AppLayout::GlobalNavigation {
+                "application-navigation"
+            } else {
+                "application-navigation-shell"
+            };
+            gpui_component::v_flex()
+                .debug_selector(move || navigation_selector.to_owned())
+                .bg(if layout == AppLayout::GlobalNavigation {
+                    chrome_palette.rail
+                } else {
+                    chrome_palette.menu
+                })
+                .when(layout == AppLayout::GlobalNavigation, |rail| {
+                    rail.w(px(52.)).h_full()
+                })
+                .when(layout == AppLayout::HomeNavigation, |menu| menu.h_full())
+                .flex_shrink_0()
+                .when(layout == AppLayout::GlobalNavigation, |rail| {
+                    rail.child(
+                        div()
+                            .id("macos-navigation-traffic-light-inset")
+                            .debug_selector(|| "macos-navigation-traffic-light-inset".to_owned())
+                            .w_full()
+                            .h(one_ui::theme_geometry().layout.title_bar)
+                            .flex_shrink_0()
+                            .window_control_area(gpui::WindowControlArea::Drag)
+                            .bg(chrome_palette.rail),
+                    )
+                })
+                .when(layout == AppLayout::HomeNavigation, |navigation| {
+                    navigation.child(
+                        div()
+                            .id("home-navigation-traffic-light-inset")
+                            .debug_selector(|| "home-navigation-traffic-light-inset".to_owned())
+                            .w_full()
+                            .h(one_ui::theme_geometry().layout.title_bar)
+                            .flex_shrink_0()
+                            .bg(chrome_palette.menu)
+                            .window_control_area(gpui::WindowControlArea::Drag),
+                    )
+                })
+                .child(navigation)
+                .into_any_element()
+        });
+        let (resource, is_ssh_workspace, is_local) = resource_kind
+            .map(|resource| (resource, false, false))
+            .unwrap_or_else(|| self.active_resource(cx));
+        let declaration = ResourceDeclaration {
+            resource,
+            is_ssh_workspace,
+            is_local,
+        };
+        let navigation_width = if global_navigation.is_none() {
+            0.
+        } else if layout == AppLayout::HomeNavigation
             && cx
                 .try_global::<GlobalHomePage>()
-                .is_some_and(|global| global.home_page.read(cx).uses_global_navigation_layout());
-        let sidebar_expanded = (!home_active || home_has_navigation_sidebar)
-            && self.connection_sidebar.read(cx).is_expanded();
+                .is_some_and(|home| home.home_page.read(cx).home_sidebar_collapsed())
+        {
+            58.
+        } else if layout == AppLayout::HomeNavigation {
+            184.
+        } else {
+            52.
+        };
+        let settings = AppSettings::global(cx);
+        let plan = plan_mount_with_navigation_width(
+            layout,
+            &declaration,
+            f32::from(window.viewport_size().width),
+            navigation_width,
+            &MountPreferences {
+                desired_visible: self.connection_sidebar.read(cx).is_expanded(),
+                width: settings
+                    .resource_widths
+                    .get(crate::resource_mount::stable_width_key(layout, resource).as_str())
+                    .copied(),
+            },
+        );
+        let resource_visible = plan.visibility == MountVisibility::Visible
+            || (plan.visibility == MountVisibility::Overlay && !self.resource_overlay_dismissed);
+        // 应用菜单与 Tab 底层分区，活动 Tab 才与 Content 使用相同内容表面。
         self.tab_container.update(cx, |tabs, cx| {
-            tabs.set_navigation_sidebar_toggle(
-                if home_has_navigation_sidebar {
-                    Some(self.connection_sidebar.read(cx).is_expanded())
-                } else {
-                    (!home_active).then(|| self.connection_sidebar.read(cx).is_expanded())
-                },
+            tabs.set_tab_bar_bg_color(chrome_palette.tab_bar, cx);
+            tabs.set_active_tab_bg_color(chrome_palette.content, cx);
+        });
+        let mut resource_element = plan.width.and_then(|width| {
+            let rendered = resource_visible
+                .then(|| self.render_application_resource(resource, px(width), window, cx))
+                .flatten()?;
+            if plan.width.is_some() {
+                let app = cx.entity();
+                let resize = one_ui::resize_handle::resize_handle::<
+                    one_ui::resize_handle::ResizePanel,
+                    Self,
+                >(
+                    crate::resource_mount::stable_width_key(layout, resource),
+                    gpui::Axis::Horizontal,
+                )
+                .inline()
+                .idle_line_color(gpui::transparent_black())
+                .on_resize(move |position, _, cx| {
+                    let next_width = app.update(cx, |app, _| {
+                        crate::resource_mount::update_resource_resize_drag(
+                            &mut app.resource_resize_drag,
+                            position,
+                            gpui::px(width),
+                        )
+                    });
+                    if let Some(next_width) = next_width {
+                        app.update(cx, |app, cx| {
+                            app.resize_application_resource(resource, next_width, cx);
+                        });
+                    }
+                });
+                Some(
+                    gpui_component::h_flex()
+                        .items_stretch()
+                        .flex_shrink_0()
+                        .h_full()
+                        .child(rendered)
+                        .child(resize)
+                        .into_any_element(),
+                )
+            } else {
+                Some(rendered)
+            }
+        });
+        // 按钮是否可用只看资源和宿主，不看当前是否展开；折叠后仍能再次展开。
+        let has_resource = matches!(
+            plan.visibility,
+            MountVisibility::Visible | MountVisibility::Collapsed | MountVisibility::Overlay
+        );
+        // 先同步宿主模式，再构造 Tab 内容；否则外壳已画树时，业务内树会多活一帧。
+        let external = layout == AppLayout::GlobalNavigation;
+        self.tab_container.update(cx, |tabs, cx| {
+            tabs.set_resource_sidebar_toggle_visible(has_resource, cx);
+            tabs.set_navigation_sidebar_toggle(has_resource.then_some(resource_visible), cx);
+        });
+        // 同一 TabContainer 只保留一份；外壳分别调用其 Tab 栏与内容 renderer。
+        // 不把整个容器放进上下两个位置，避免重复 Tab 栏和重复内容。
+        main_content.update(cx, |tabs, cx| tabs.set_tab_content_visible(true, cx));
+        let tab_content = main_content.update(cx, |tabs, cx| {
+            tabs.render_tab_content(window, cx).into_any_element()
+        });
+        let tab_bar = div()
+            .id("application-tab-bar")
+            .debug_selector(|| "application-tab-bar".to_owned())
+            .flex_shrink_0()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(one_ui::theme_geometry().layout.tab_bar)
+            .w_full()
+            .child(main_content.update(cx, |tabs, cx| {
+                tabs.render_tab_bar(window, cx).into_any_element()
+            }))
+            .into_any_element();
+        let tab_content_host = div()
+            .relative()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .child(tab_content)
+            .into_any_element();
+        if let Some(content) = self.tab_container.read(cx).active_content_snapshot() {
+            if let Ok(notes) = content.view().downcast::<notes::NotesView>() {
+                notes.update(cx, |notes, cx| {
+                    // A 的目录宿主不随折叠改变；收起后由顶部按钮重新展开。
+                    notes.set_external_sidebar(external);
+                    notes.set_external_sidebar_toggle_handler(
+                        cx.try_global::<GlobalNavopApp>().map(|global| {
+                            let app = global.app.clone();
+                            std::rc::Rc::new(move |_: &gpui::Window, cx: &mut gpui::App| {
+                                app.update(cx, |app, cx| app.toggle_application_resource(cx));
+                            })
+                                as std::rc::Rc<dyn Fn(&gpui::Window, &mut gpui::App)>
+                        }),
+                    );
+                });
+            }
+            if let Ok(settings) = content
+                .view()
+                .downcast::<crate::setting_tab::SettingsPanel>()
+            {
+                // 设置页始终保留其原有分类栏，不借到应用外壳。
+                settings.update(cx, |settings, _| {
+                    settings.set_external_categories(false);
+                });
+            }
+            if let Ok(ai) = content.view().downcast::<ai_chat_view::WorkbenchShell>() {
+                ai.update(cx, |ai, cx| {
+                    ai.set_external_session_nav(external && plan.width.is_some(), cx);
+                    ai.set_external_session_nav_toggle_handler(
+                        cx.try_global::<GlobalNavopApp>().map(|global| {
+                            let app = global.app.clone();
+                            std::rc::Rc::new(move |_: &gpui::Window, cx: &mut gpui::App| {
+                                app.update(cx, |app, cx| app.toggle_application_resource(cx));
+                            })
+                                as std::rc::Rc<dyn Fn(&gpui::Window, &mut gpui::App)>
+                        }),
+                    );
+                });
+            }
+        }
+        #[cfg(target_os = "macos")]
+        self.tab_container.update(cx, |tabs, cx| {
+            // B 的 Tab 栏贯通整个窗口，左上角不再单独预留一层红绿灯区域。
+            tabs.set_macos_titlebar_inset(
+                layout == AppLayout::HomeNavigation || global_navigation.is_none(),
                 cx,
             );
+            tabs.set_left_padding(
+                if global_navigation.is_some() {
+                    gpui::px(12.)
+                } else {
+                    one_ui::theme_geometry()
+                        .layout
+                        .macos_title_bar_content_padding
+                },
+                cx,
+            )
         });
-        // 全局导航布局把连接树固定到 TabContainer 左侧；不受自动隐藏设置影响。
-        let docked_tree = sidebar_expanded && (!auto_hide_tree || home_has_navigation_sidebar);
-        let docked_tree_element = docked_tree.then(|| {
-            self.connection_sidebar.update(cx, |sidebar, cx| {
-                sidebar.render_docked_connection_tree(window, cx)
-            })
-        });
-        let floating_tree = (sidebar_expanded && auto_hide_tree && !home_has_navigation_sidebar)
-            .then(|| {
-                self.connection_sidebar
-                    .update(cx, |sidebar, cx| sidebar.render_floating_tree(window, cx))
-            });
-        // macOS：浮动树覆盖 tab 栏左侧，需要给红绿灯占位；停靠模式并排渲染则不需要。
-        #[cfg(target_os = "macos")]
-        if sidebar_expanded {
-            let tab_bar_left_padding = if auto_hide_tree {
-                one_ui::theme_geometry()
-                    .layout
-                    .macos_title_bar_content_padding
-            } else {
-                px(0.0)
-            };
-            self.tab_container.update(cx, |tabs, cx| {
-                tabs.set_left_padding(tab_bar_left_padding, cx)
-            });
+        let overlay = (plan.visibility == MountVisibility::Overlay)
+            .then(|| resource_element.take())
+            .flatten();
+        let overlay_left = px(navigation_width);
+        let (global_rail, home_menu) = if layout == AppLayout::GlobalNavigation {
+            (global_navigation, None)
+        } else {
+            (None, global_navigation)
+        };
+        let mut embedded_tab_bar = None;
+        let mut full_width_tab_bar = None;
+        if layout == AppLayout::GlobalNavigation {
+            embedded_tab_bar = Some(tab_bar);
+        } else {
+            full_width_tab_bar = Some(tab_bar);
         }
-        div()
+        gpui_component::v_flex()
             .size_full()
             .relative()
+            .items_stretch()
             .drag_over::<ExternalPaths>(|element, _, _, cx| {
                 element.bg(cx.theme().primary.opacity(0.08))
             })
@@ -3046,49 +3495,78 @@ impl Render for NavopApp {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleConnectionSidebar, _, cx| {
-                let expanded = !this.connection_sidebar.read(cx).is_expanded();
-                this.set_connection_sidebar_expanded(expanded, cx);
+                this.toggle_application_resource(cx);
             }))
             .bg(cx.theme().background)
-            .child({
-                gpui_component::h_flex()
-                    .size_full()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .when_some(docked_tree_element, |layout, tree| layout.child(tree))
+            .when_some(global_rail, |layout, navigation| layout.child(navigation))
+            .child(
+                gpui_component::v_flex()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .bottom_0()
+                    .left(if layout == AppLayout::GlobalNavigation {
+                        px(52.)
+                    } else {
+                        px(0.)
+                    })
+                    .when(layout == AppLayout::HomeNavigation, |workspace| {
+                        // 顶部 Tab 已在纵向根布局中占位，下方侧栏与 Content 从其底部开始。
+                        workspace.top(one_ui::theme_geometry().layout.tab_bar)
+                    })
+                    .when_some(embedded_tab_bar, |host, tab_bar| {
+                        host.child(
+                            div()
+                                .flex_shrink_0()
+                                .h(one_ui::theme_geometry().layout.tab_bar)
+                                .w_full()
+                                .child(tab_bar),
+                        )
+                    })
                     .child(
-                        div()
+                        gpui_component::h_flex()
                             .flex_1()
                             .min_w_0()
-                            .h_full()
-                            .when(sidebar_expanded && auto_hide_tree, |this| {
-                                this.on_mouse_down(
-                                    gpui::MouseButton::Left,
-                                    cx.listener(
-                                        |this, event: &gpui::MouseDownEvent, _window, cx| {
-                                            if !this.connection_sidebar.read(cx).is_expanded() {
-                                                return;
-                                            }
-                                            let layout = one_ui::theme_geometry().layout;
-                                            // The navigation rail is gone; everything below
-                                            // the tab bar on the left now belongs to the
-                                            // tree overlay itself, so any content click
-                                            // below the tab bar dismisses the auto-hide tree.
-                                            let in_terminal = event.position.y > layout.tab_bar;
-                                            if in_terminal {
-                                                this.set_connection_sidebar_expanded(false, cx);
-                                            }
-                                        },
-                                    ),
-                                )
+                            .min_h_0()
+                            .when_some(home_menu, |host, menu| host.child(menu))
+                            .when(plan.visibility == MountVisibility::Visible, |layout| {
+                                layout.when_some(resource_element.take(), |layout, resource| {
+                                    layout.child(resource)
+                                })
                             })
-                            .child(main_content),
-                    )
-            })
-            .when(
-                sidebar_expanded && auto_hide_tree && !home_has_navigation_sidebar,
-                |this| this.when_some(floating_tree, |this, tree| this.child(tree)),
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .h_full()
+                                    .child(tab_content_host),
+                            ),
+                    ),
             )
+            .children(full_width_tab_bar)
+            .when_some(overlay, |this, resource| {
+                this.child(
+                    div()
+                        .id("resource-overlay-backdrop")
+                        .absolute()
+                        .inset_0()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.resource_overlay_dismissed = true;
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .absolute()
+                                .top(one_ui::theme_geometry().layout.tab_bar)
+                                .bottom_0()
+                                .left(overlay_left)
+                                .id("resource-overlay-content")
+                                .on_click(|_, _, cx| cx.stop_propagation())
+                                .child(resource),
+                        ),
+                )
+            })
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)

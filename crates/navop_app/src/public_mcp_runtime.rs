@@ -206,9 +206,9 @@ fn register_extension_tools(
         return Ok(());
     };
     let connections = connection_repository(cx).map(|repo| {
-        std::sync::Arc::new(universal_plugins::extension_tools::RepositoryConnectionSource::new(
-            repo,
-        ))
+        std::sync::Arc::new(
+            universal_plugins::extension_tools::RepositoryConnectionSource::new(repo),
+        )
             as std::sync::Arc<
                 dyn universal_plugins::extension_tools::ConnectionSource + Send + Sync,
             >

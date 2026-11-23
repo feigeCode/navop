@@ -2,8 +2,6 @@ use super::*;
 use crate::sidebar::tool_dock::right_sidebar_width;
 use one_core::dock::ToolDockLayout;
 
-
-
 impl TerminalView {
     pub(super) fn send_tab(&mut self, _: &SendTab, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.accepts_live_terminal_input(cx) {
@@ -125,14 +123,7 @@ impl TerminalView {
             return div().into_any_element();
         };
         let colors = self.sidebar.read(cx).colors();
-        render_extension_tool_panel_frame(
-            self.sidebar.clone(),
-            id,
-            placement,
-            view,
-            colors,
-            cx,
-        )
+        render_extension_tool_panel_frame(self.sidebar.clone(), id, placement, view, colors, cx)
     }
 
     pub(super) fn resize_sidebar(

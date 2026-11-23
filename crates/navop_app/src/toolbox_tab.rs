@@ -199,23 +199,25 @@ impl ToolboxTab {
     }
 
     /// 扩展工具卡片的图标：声明了且文件存在就用扩展自己的图标（原色），
-/// 否则退回内置占位图标。
-fn extension_tool_icon(
-    icon_path: Option<&std::path::Path>,
-    accent: gpui::Hsla,
-) -> gpui_component::Icon {
-    match icon_path {
-        Some(path) if path.is_file() => gpui_component::Icon::default()
-            .path(one_core::storage::connection_icon::local_icon_asset_path(path))
-            .color()
-            .with_size(one_ui::IconSize::Large),
-        _ => gpui_component::Icon::new(IconName::TableDesignTool)
-            .with_size(one_ui::IconSize::Large)
-            .text_color(accent),
+    /// 否则退回内置占位图标。
+    fn extension_tool_icon(
+        icon_path: Option<&std::path::Path>,
+        accent: gpui::Hsla,
+    ) -> gpui_component::Icon {
+        match icon_path {
+            Some(path) if path.is_file() => gpui_component::Icon::default()
+                .path(one_core::storage::connection_icon::local_icon_asset_path(
+                    path,
+                ))
+                .color()
+                .with_size(one_ui::IconSize::Large),
+            _ => gpui_component::Icon::new(IconName::TableDesignTool)
+                .with_size(one_ui::IconSize::Large)
+                .text_color(accent),
+        }
     }
-}
 
-/// 扩展工具卡片（没有连接的 shell app）。
+    /// 扩展工具卡片（没有连接的 shell app）。
     fn render_extension_tool_card(
         &self,
         tool: &ExtensionTool,

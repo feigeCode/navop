@@ -27,12 +27,13 @@ use font_kit::{file_type::FileType, font::Font};
 use gpui::http_client::{AsyncBody, Method, Request};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, Global, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement,
-    PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window, div,
+    AnyElement, App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, FontWeight, Global, InteractiveElement, IntoElement, KeyDownEvent, Keystroke,
+    ParentElement, PathPromptOptions, Pixels, Render, SharedString, Styled, WeakEntity, Window,
+    div, px,
 };
 use gpui_component::{
-    ActiveTheme, AxisExt, Disableable, Icon, IndexPath, Sizable, Size, WindowExt,
+    ActiveTheme, AxisExt, Disableable, Icon, IndexPath, Selectable as _, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     group_box::GroupBoxVariant,
@@ -573,6 +574,73 @@ enum InitialPage {
     LlmProviders,
 }
 
+/// 外部分类使用稳定 ID，不能用会随产品领域配置变化的数组下标作为身份。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsCategoryId {
+    General,
+    Database,
+    Terminal,
+    Ssh,
+    Sftp,
+    Ai,
+    Agent,
+    Mcp,
+    Sync,
+    Account,
+    Shortcuts,
+    About,
+}
+
+impl SettingsCategoryId {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::Database => "database",
+            Self::Terminal => "terminal",
+            Self::Ssh => "ssh",
+            Self::Sftp => "sftp",
+            Self::Ai => "ai",
+            Self::Agent => "agent",
+            Self::Mcp => "mcp",
+            Self::Sync => "sync",
+            Self::Account => "account",
+            Self::Shortcuts => "shortcuts",
+            Self::About => "about",
+        }
+    }
+
+    fn title(self) -> SharedString {
+        match self {
+            Self::General => t!("Settings.General.title"),
+            Self::Database => t!("Settings.Database.title"),
+            Self::Terminal => t!("Settings.terminal.title"),
+            Self::Ssh => t!("Settings.Ssh.title"),
+            Self::Sftp => t!("Settings.Sftp.title"),
+            Self::Ai => t!("Settings.Ai.title"),
+            Self::Agent => t!("Settings.Agent.title"),
+            Self::Mcp => t!("Settings.Mcp.title"),
+            Self::Sync => t!("Settings.Sync.title"),
+            Self::Account => t!("Settings.Account.title"),
+            Self::Shortcuts => t!("Settings.Shortcuts.title"),
+            Self::About => t!("Settings.About.title"),
+        }
+        .into()
+    }
+}
+
+#[derive(Clone)]
+struct SettingsCategory {
+    id: SettingsCategoryId,
+    title: SharedString,
+    page_ix: usize,
+}
+
+/// 分类实体与 SettingsPanel 同寿命，布局切换只移动视图，不重建分类或选中状态。
+struct SettingsCategories {
+    items: Vec<SettingsCategory>,
+    selected: SettingsCategoryId,
+}
+
 pub struct SettingsPanel {
     focus_handle: FocusHandle,
     llm_providers_view: Entity<LlmProvidersView>,
@@ -585,6 +653,11 @@ pub struct SettingsPanel {
     /// 会被卸载，切回来时状态早已重建，页面就跳回顶部。所以这里自己持有它，
     /// 首次渲染时按 `initial_page` 创建。
     settings_state: Option<Entity<SettingsState>>,
+    _app_settings_subscription: Option<gpui::Subscription>,
+    categories: Entity<SettingsCategories>,
+    pages: Vec<SettingPage>,
+    pages_dirty: bool,
+    external_categories: bool,
     size: Size,
     group_variant: GroupBoxVariant,
     initial_page: InitialPage,
@@ -628,18 +701,137 @@ impl SettingsPanel {
         // 让「检查中」和「上次检查结果」能驱动设置页重绘。
         let update_check_state = update::update_check_state(cx);
         let _update_check_subscription = cx.observe(&update_check_state, |_, _, cx| cx.notify());
-        Self {
+        let selected = match initial_page {
+            InitialPage::First => SettingsCategoryId::General,
+            InitialPage::Sync => SettingsCategoryId::Sync,
+            InitialPage::LlmProviders => SettingsCategoryId::Ai,
+        };
+        let categories = cx.new(|_| SettingsCategories {
+            items: Vec::new(),
+            selected,
+        });
+        let mut panel = Self {
             focus_handle: cx.focus_handle(),
             llm_providers_view,
             acp_agents_view,
             update_check_state,
             _update_check_subscription,
             settings_state: None,
+            _app_settings_subscription: None,
+            categories,
+            pages: Vec::new(),
+            pages_dirty: true,
+            external_categories: false,
             size: Size::default(),
             group_variant: GroupBoxVariant::Outline,
             initial_page,
             font_options_cache: None,
+        };
+        if cx.has_global::<AppSettings>() {
+            panel.observe_app_settings(cx);
+            panel.rebuild_pages(cx);
         }
+        panel
+    }
+
+    fn observe_app_settings(&mut self, cx: &mut Context<Self>) {
+        if self._app_settings_subscription.is_none() && cx.has_global::<AppSettings>() {
+            self._app_settings_subscription = Some(cx.observe_global::<AppSettings>(|this, cx| {
+                this.pages_dirty = true;
+                cx.notify();
+            }));
+        }
+    }
+
+    fn ensure_pages(&mut self, cx: &mut Context<Self>) {
+        if !cx.has_global::<AppSettings>() {
+            init_settings(cx);
+        }
+        self.observe_app_settings(cx);
+        if self.pages_dirty {
+            self.rebuild_pages(cx);
+        }
+    }
+
+    fn rebuild_pages(&mut self, cx: &mut Context<Self>) {
+        let (pages, categories, _, _) = self.setting_pages(cx);
+        self.categories
+            .update(cx, |state, _| state.items = categories);
+        self.pages = pages;
+        self.pages_dirty = false;
+    }
+
+    fn page_ix_for(&self, id: SettingsCategoryId, cx: &App) -> usize {
+        self.categories
+            .read(cx)
+            .items
+            .iter()
+            .find(|category| category.id == id)
+            .map_or(0, |category| category.page_ix)
+    }
+
+    fn selected_page_ix(&self, cx: &App) -> usize {
+        self.page_ix_for(self.categories.read(cx).selected, cx)
+    }
+
+    fn select_page(&mut self, id: SettingsCategoryId, cx: &mut Context<Self>) {
+        self.categories.update(cx, |categories, _| {
+            if categories.items.iter().any(|category| category.id == id) {
+                categories.selected = id;
+            }
+        });
+        cx.notify();
+    }
+
+    /// 由外部宿主绘制分类时，隐藏组件内部侧栏；SettingsPanel 本身保持不变。
+    pub fn set_external_categories(&mut self, external: bool) {
+        self.external_categories = external;
+    }
+
+    /// 绘制与原设置页一一对应的可点击分类，所有分类使用稳定语义 ID。
+    pub fn render_external_categories(
+        &mut self,
+        width: Pixels,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.ensure_pages(cx);
+        let panel = cx.entity().downgrade();
+        let (selected, items) = {
+            let categories = self.categories.read(cx);
+            (categories.selected, categories.items.clone())
+        };
+        v_flex()
+            .id("settings-external-categories")
+            .w(width)
+            .h_full()
+            .flex_shrink_0()
+            .gap_1()
+            .p_2()
+            .border_r_1()
+            .border_color(cx.theme().sidebar_border)
+            .bg(cx.theme().sidebar)
+            .children(items.into_iter().map(|category| {
+                let panel = panel.clone();
+                let title = category.title.clone();
+                Button::new(SharedString::from(format!(
+                    "settings-category-{}",
+                    category.id.as_str()
+                )))
+                .ghost()
+                .w_full()
+                .h_7()
+                .px_2()
+                .justify_start()
+                .label(title)
+                .selected(selected == category.id)
+                .toggled(selected == category.id)
+                .on_click(move |_, _, cx| {
+                    if let Some(panel) = panel.upgrade() {
+                        panel.update(cx, |panel, cx| panel.select_page(category.id, cx));
+                    }
+                })
+            }))
+            .into_any_element()
     }
 
     /// 取字体下拉选项，返回 `(应用字体, 等宽字体)`。
@@ -673,19 +865,18 @@ impl SettingsPanel {
         (app_options, monospace_options)
     }
 
-    /// 组装设置页，返回 `(页面列表, 「同步」页下标, 「AI」页下标)`。
+    /// 组装设置页，返回 `(页面列表, 分类列表, 「同步」页下标, 「AI」页下标)`。
     ///
-    /// 顺序（十一类）：通用 → 数据库、终端（领域注册表）→ SSH、SFTP、AI、Agent、
-    /// MCP、同步、快捷键、关于。原来的 SQL 格式化并入数据库页、ACP 并入 Agent 页、
-    /// LLM 提供商并入 AI 页、账户并入同步页，不再单独占入口。
+    /// 顺序：通用 → 数据库、终端（领域注册表）→ SSH、SFTP、AI、Agent、
+    /// MCP、同步、账户、快捷键、关于。SQL 格式化并入数据库页、ACP 并入 Agent 页、
+    /// LLM 提供商并入 AI 页。
     ///
     /// 领域页数量随参与编译的领域变化，SSH/SFTP 还要看产品是否带 shell 领域，
     /// 因此同步页与 AI 页的绝对下标都在拼接完之后现算。
     fn setting_pages(
         &mut self,
-        _window: &mut Window,
         cx: &mut App,
-    ) -> (Vec<SettingPage>, usize, usize) {
+    ) -> (Vec<SettingPage>, Vec<SettingsCategory>, usize, usize) {
         let llm_view = self.llm_providers_view.clone();
         let acp_view = self.acp_agents_view.clone();
         let default_settings = AppSettings::default();
@@ -1214,36 +1405,33 @@ impl SettingsPanel {
 
         // 账户页：登录状态、许可与主密钥管理，独立成一页。
         rest.push(
-            SettingPage::new(t!("Settings.Account.title"))
-                .groups([
-                    SettingGroup::new()
-                        .title(t!("Settings.Account.title"))
-                        .item(
-                            SettingItem::render(move |_options, window, cx| {
-                                render_account_section(window, cx)
-                            })
-                            .keywords([
-                                t!("Settings.Account.title").to_string(),
-                                t!("Settings.Account.username").to_string(),
-                                t!("Settings.Account.email").to_string(),
-                                t!("Settings.Account.not_logged_in").to_string(),
-                                t!("Auth.logout").to_string(),
-                                t!("License.import_offline").to_string(),
-                            ]),
-                        ),
-                    SettingGroup::new()
-                        .title(t!("Settings.Account.master_key_section"))
-                        .item(
-                            SettingItem::render(move |_options, _window, cx| {
-                                master_key_section(cx)
-                            })
+            SettingPage::new(t!("Settings.Account.title")).groups([
+                SettingGroup::new()
+                    .title(t!("Settings.Account.title"))
+                    .item(
+                        SettingItem::render(move |_options, window, cx| {
+                            render_account_section(window, cx)
+                        })
+                        .keywords([
+                            t!("Settings.Account.title").to_string(),
+                            t!("Settings.Account.username").to_string(),
+                            t!("Settings.Account.email").to_string(),
+                            t!("Settings.Account.not_logged_in").to_string(),
+                            t!("Auth.logout").to_string(),
+                            t!("License.import_offline").to_string(),
+                        ]),
+                    ),
+                SettingGroup::new()
+                    .title(t!("Settings.Account.master_key_section"))
+                    .item(
+                        SettingItem::render(move |_options, _window, cx| master_key_section(cx))
                             .keywords([
                                 t!("Settings.Account.master_key_section").to_string(),
                                 t!("Encryption.change_repo_password").to_string(),
                                 t!("Encryption.reset_master_key").to_string(),
                             ]),
-                        ),
-                ]),
+                    ),
+            ]),
         );
 
         rest.push(
@@ -1278,7 +1466,40 @@ impl SettingsPanel {
         );
 
         pages.extend(rest);
-        (pages, sync_page_ix, llm_providers_page_ix)
+
+        // 分类与上面的页面拼接顺序保持一致。领域页由固定的 data/shell provider
+        // 提供，顺序分别为 10/20；这里不能暴露动态 Vec 下标作为控件身份。
+        let mut category_ids = vec![SettingsCategoryId::General];
+        let domains = app_kit::registry().domains();
+        if domains.contains(&domain_api::DomainId::DATABASE) {
+            category_ids.push(SettingsCategoryId::Database);
+        }
+        if domains.contains(&domain_api::DomainId::SHELL) {
+            category_ids.push(SettingsCategoryId::Terminal);
+        }
+        if crate::product::supports_shell_domain() {
+            category_ids.extend([SettingsCategoryId::Ssh, SettingsCategoryId::Sftp]);
+        }
+        category_ids.extend([
+            SettingsCategoryId::Ai,
+            SettingsCategoryId::Agent,
+            SettingsCategoryId::Mcp,
+            SettingsCategoryId::Sync,
+            SettingsCategoryId::Account,
+            SettingsCategoryId::Shortcuts,
+            SettingsCategoryId::About,
+        ]);
+        debug_assert_eq!(pages.len(), category_ids.len());
+        let categories = category_ids
+            .into_iter()
+            .enumerate()
+            .map(|(page_ix, id)| SettingsCategory {
+                id,
+                title: id.title(),
+                page_ix,
+            })
+            .collect();
+        (pages, categories, sync_page_ix, llm_providers_page_ix)
     }
 }
 
@@ -2045,15 +2266,18 @@ impl TabContent for SettingsPanel {
 
 impl Render for SettingsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !cx.has_global::<AppSettings>() {
-            init_settings(cx);
-        }
+        self.ensure_pages(cx);
 
-        let (pages, sync_page_ix, llm_providers_page_ix) = self.setting_pages(window, cx);
         let initial_page = self.initial_page;
-        let (settings_id, page_ix) = match initial_page {
-            InitialPage::Sync => ("main-app-settings-sync", sync_page_ix),
-            InitialPage::LlmProviders => ("main-app-settings-llm-providers", llm_providers_page_ix),
+        let (settings_id, mut initial_page_ix) = match initial_page {
+            InitialPage::Sync => (
+                "main-app-settings-sync",
+                self.page_ix_for(SettingsCategoryId::Sync, cx),
+            ),
+            InitialPage::LlmProviders => (
+                "main-app-settings-llm-providers",
+                self.page_ix_for(SettingsCategoryId::Ai, cx),
+            ),
             InitialPage::First => ("main-app-settings", 0),
         };
         // 由设置页自己持有状态，切走主标签再回来时选中页和滚动位置都还在。
@@ -2065,7 +2289,7 @@ impl Render for SettingsPanel {
                         window,
                         cx,
                         SelectIndex {
-                            page_ix,
+                            page_ix: initial_page_ix,
                             ..Default::default()
                         },
                     )
@@ -2074,13 +2298,18 @@ impl Render for SettingsPanel {
                 state
             }
         };
+        // 正常布局使用组件原分类栏，设置状态由稳定实体跨页签保持。
+        // 外部分类作为兼容路径，只在首次初始化时采用对应分类。
 
         div().track_focus(&self.focus_handle).size_full().child(
             Settings::new(settings_id)
                 .with_size(self.size)
                 .with_group_variant(self.group_variant)
                 .with_state(settings_state)
-                .pages(pages),
+                .pages(self.pages.clone())
+                .when(self.external_categories, |this| {
+                    this.sidebar_size_range(px(0.)..px(0.))
+                }),
         )
     }
 }
@@ -3839,8 +4068,8 @@ mod tests {
     use rust_i18n::t;
 
     use super::{
-        AppSettings, DATABASE_SHORTCUTS, GlobalProxySettings, ProxyType,
-        WINDOW_SHORTCUTS, app_font_options, build_app_http_client, default_master_key_storage,
+        AppSettings, DATABASE_SHORTCUTS, GlobalProxySettings, ProxyType, WINDOW_SHORTCUTS,
+        app_font_options, build_app_http_client, default_master_key_storage,
         is_supported_font_file, master_key_setting_enabled, master_key_storage_from_value,
         master_key_storage_select_options, master_key_storage_value, monospace_font_options,
         parse_font_families, personal_sync_backend_options, personal_sync_status_label,

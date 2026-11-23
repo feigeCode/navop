@@ -26,12 +26,44 @@ use crate::session_sidebar::{
     SessionSummary, WorkspaceGroup, date_bucket_header, filter_sessions, format_timestamp,
     group_sessions_by_date, group_sessions_by_workspace, now_unix,
 };
-use crate::theme::AgentChatTheme;
+use crate::theme::{AgentChatTheme, with_agent_chat_theme};
 use crate::{
     DefaultAgentChatPanel, acp_session_placeholder, acp_session_row, acp_session_section_header,
 };
 
 impl WorkbenchShell {
+    /// 把原会话导航挂到外部宿主；宽度只作用于这次挂载，不改内嵌导航的持久宽度。
+    pub fn render_external_session_nav(
+        &mut self,
+        width: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        if !self.external_session_nav {
+            return None;
+        }
+        let theme = self.snapshot(cx);
+        let nav = self.render_session_nav(&theme, cx)?;
+        Some(with_agent_chat_theme(&theme, || {
+            v_flex()
+                .debug_selector(|| "workbench-external-session-nav".to_string())
+                .w(width)
+                .flex_shrink_0()
+                .h_full()
+                .min_h_0()
+                .border_r_1()
+                .border_color(theme.border)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(nav),
+                )
+                .into_any_element()
+        }))
+    }
+
     /// 会话导航：优先用外部注入的视图，否则读 `session_source` 的会话列表。
     pub(super) fn render_session_nav(
         &self,

@@ -36,6 +36,11 @@ pub struct NotesView {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) standalone_markdown: bool,
     pub(crate) sidebar_collapsed: bool,
+    /// 目录是否由应用外壳挂载；切换宿主不会重建笔记视图或文档状态。
+    pub external_sidebar: bool,
+    /// 外部目录的折叠请求交给应用外壳处理，避免同一条目录出现两个折叠状态。
+    pub(crate) on_external_sidebar_toggle:
+        Option<std::rc::Rc<dyn Fn(&gpui::Window, &mut gpui::App)>>,
     pub(crate) editor_theme: Option<MarkdownEditorTheme>,
     /// Cached, collapsible document outline for the active Markdown document.
     pub(crate) outline: crate::markdown_outline::MarkdownOutlineState,
@@ -151,9 +156,23 @@ impl NotesView {
             focus_handle: cx.focus_handle(),
             standalone_markdown,
             sidebar_collapsed: false,
+            external_sidebar: false,
+            on_external_sidebar_toggle: None,
             editor_theme,
             outline: crate::markdown_outline::MarkdownOutlineState::default(),
         }
+    }
+
+    /// 只切换目录宿主，保留当前选中路径、Markdown 会话和折叠状态。
+    pub fn set_external_sidebar(&mut self, external: bool) {
+        self.external_sidebar = external;
+    }
+
+    pub fn set_external_sidebar_toggle_handler(
+        &mut self,
+        handler: Option<std::rc::Rc<dyn Fn(&gpui::Window, &mut gpui::App)>>,
+    ) {
+        self.on_external_sidebar_toggle = handler;
     }
 
     pub fn set_editor_theme(&mut self, theme: MarkdownEditorTheme, cx: &mut Context<Self>) {
@@ -321,6 +340,57 @@ mod external_markdown_tests {
                         .child(self.tabs.clone()),
                 )
         }
+    }
+
+    struct NotesExternalSidebarTestWindow {
+        notes: Entity<NotesView>,
+    }
+
+    impl Render for NotesExternalSidebarTestWindow {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.notes.update(cx, |notes, cx| {
+                div()
+                    .size_full()
+                    .child(notes.render_external_sidebar(px(260.), cx))
+            })
+        }
+    }
+
+    #[gpui::test]
+    fn external_notes_sidebar_has_no_second_collapse_handle(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("sidebar-toggle.md");
+        std::fs::write(&path, "# Notes").unwrap();
+        let window = cx.update(|cx| {
+            let window_bounds = Bounds::centered(None, size(px(1000.0), px(600.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let notes = cx.new(|cx| NotesView::new_for_markdown_file(path, window, cx));
+                    notes.update(cx, |notes, _| {
+                        notes.external_sidebar = true;
+                        notes.standalone_markdown = false;
+                    });
+                    let test = cx.new(|_| NotesExternalSidebarTestWindow { notes });
+                    cx.new(|cx| Root::new(test, window, cx))
+                },
+            )
+            .expect("test window opens")
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("notes-sidebar-toggle-boundary").is_none(),
+            "笔记目录不再画第二个折叠把手，统一由顶部按钮控制"
+        );
     }
 
     #[gpui::test]

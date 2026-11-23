@@ -165,6 +165,8 @@ github-updates = ["app_kit/github-updates"]
 # `cargo build --release -p navop_app --target x86_64-apple-darwin --features macos-touchbar-window-hide`
 macos-touchbar-window-hide = ["one-core/macos-touchbar-window-hide"]
 screenshot-safe = []
+# 完整 NavopApp 视觉测试会恢复业务密钥；仅允许在专门的隔离运行环境显式打开。
+full-shell-layout-tests = []
 # M2 spike：挂一个 nsh AppView tab（nsh 扩展宿主方向验证），默认不开。
 # 能力面按需开：`nsh-host` 只是宿主本身（tab / 面板 / AI 组件）；
 # 数据库与终端两个平面各自一个 feature，避免 navop-shell 被带进 db_view、

@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 
 const NOTES_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(248.0);
 const NOTES_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(28.0);
+const NOTES_EXTERNAL_SIDEBAR_MIN_WIDTH: gpui::Pixels = px(220.0);
+const NOTES_EXTERNAL_SIDEBAR_MAX_WIDTH: gpui::Pixels = px(360.0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidebarContextTarget {
@@ -67,7 +69,7 @@ fn sidebar_menu_actions(target: SidebarContextTarget) -> Vec<SidebarMenuAction> 
 
 impl NotesView {
     fn render_ready(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        if self.standalone_markdown {
+        if self.standalone_markdown || self.external_sidebar || self.sidebar_collapsed {
             return self.render_editor(cx);
         }
         v_flex()
@@ -91,6 +93,36 @@ impl NotesView {
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let collapsed = self.sidebar_collapsed;
+        let width = if collapsed {
+            NOTES_SIDEBAR_COLLAPSED_WIDTH
+        } else {
+            NOTES_SIDEBAR_EXPANDED_WIDTH
+        };
+        self.render_sidebar_with_width(width, collapsed, cx)
+    }
+
+    /// 在同一 NotesView 上为应用外壳渲染目录，避免复制文档与选中状态。
+    pub fn render_external_sidebar(
+        &mut self,
+        width: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        self.render_sidebar_with_width(
+            width.clamp(
+                NOTES_EXTERNAL_SIDEBAR_MIN_WIDTH,
+                NOTES_EXTERNAL_SIDEBAR_MAX_WIDTH,
+            ),
+            false,
+            cx,
+        )
+    }
+
+    fn render_sidebar_with_width(
+        &self,
+        width: gpui::Pixels,
+        collapsed: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let view = cx.entity();
         let rows = self
             .rows
@@ -100,11 +132,8 @@ impl NotesView {
         let rows_are_empty = rows.is_empty();
         v_flex()
             .relative()
-            .w(if collapsed {
-                NOTES_SIDEBAR_COLLAPSED_WIDTH
-            } else {
-                NOTES_SIDEBAR_EXPANDED_WIDTH
-            })
+            .bg(cx.theme().sidebar)
+            .w(width)
             .flex_shrink_0()
             .h_full()
             .min_h_0()
@@ -193,52 +222,6 @@ impl NotesView {
                         ),
                 )
             })
-            .child(
-                div()
-                    .absolute()
-                    .right_0()
-                    .top_0()
-                    .bottom_0()
-                    .w(px(24.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .occlude()
-                    .cursor_pointer()
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(|view, _, window, cx| {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                            view.sidebar_collapsed = !view.sidebar_collapsed;
-                            cx.notify();
-                        }),
-                    )
-                    .child(
-                        div()
-                            .id("notes-sidebar-toggle")
-                            .w(px(18.0))
-                            .h(px(52.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(9.0))
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .bg(cx.theme().background)
-                            .shadow_sm()
-                            .hover(|this| this.bg(cx.theme().muted))
-                            .child(
-                                Icon::new(if collapsed {
-                                    IconName::ChevronRight
-                                } else {
-                                    IconName::ChevronLeft
-                                })
-                                .with_size(Size::Small)
-                                .text_color(cx.theme().muted_foreground),
-                            ),
-                    ),
-            )
             .into_any_element()
     }
 
@@ -350,13 +333,13 @@ impl NotesView {
                 "notes-row-{}",
                 row.relative_path.display()
             )))
-            .h(px(28.0))
+            .h(one_ui::theme_geometry().tree.row_height)
             .w_full()
             .relative()
             .pl(indent)
             .pr_2()
             .gap_1()
-            .cursor_pointer()
+            .cursor_default()
             .text_sm()
             .text_color(cx.theme().sidebar_foreground)
             .when(selected, |this| {
@@ -610,6 +593,67 @@ mod tests {
                 "NotesView root must keep {constraint} so intrinsic note content cannot squeeze window chrome"
             );
         }
+    }
+
+    #[test]
+    fn external_sidebar_owner_api_only_switches_the_host() {
+        let source = include_str!("notes_view.rs");
+
+        assert!(
+            source.contains("pub external_sidebar: bool"),
+            "the shell must be able to inspect the sidebar owner"
+        );
+        assert!(
+            source.contains("external_sidebar: false,"),
+            "NotesView must keep its original internal sidebar by default"
+        );
+
+        let setter_start = source
+            .find("pub fn set_external_sidebar(&mut self, external: bool)")
+            .expect("external sidebar setter");
+        let setter_end = source[setter_start..]
+            .find("\n    }")
+            .map(|offset| setter_start + offset)
+            .expect("external sidebar setter end");
+        let setter = &source[setter_start..setter_end];
+        assert!(setter.contains("self.external_sidebar = external;"));
+        for forbidden in [
+            "markdown_sessions",
+            "selected_sidebar_path",
+            "sidebar_collapsed",
+            "Self::base",
+        ] {
+            assert!(
+                !setter.contains(forbidden),
+                "switching sidebar hosts must not reset or rebuild `{forbidden}`"
+            );
+        }
+    }
+
+    #[test]
+    fn external_sidebar_guard_prevents_duplicate_trees_and_supports_collapse() {
+        let source = include_str!("notes_render.rs");
+        let ready_start = source.find("fn render_ready").expect("ready renderer");
+        let ready_end = source[ready_start..]
+            .find("fn render_sidebar")
+            .map(|offset| ready_start + offset)
+            .expect("sidebar renderer");
+        let ready = &source[ready_start..ready_end];
+        assert!(
+            ready.contains("self.standalone_markdown || self.external_sidebar"),
+            "an externally owned sidebar must leave only the editor in NotesView"
+        );
+        assert!(source.contains("pub fn render_external_sidebar("));
+        assert!(source.contains("width: gpui::Pixels"));
+        assert!(source.contains("cx: &mut Context<Self>"));
+        assert!(source.contains("width.clamp("));
+        assert!(source.contains("px(220.0)"));
+        assert!(source.contains("px(360.0)"));
+        let implementation = source.split("#[cfg(test)]").next().unwrap();
+        assert!(!implementation.contains("notes-sidebar-toggle-boundary"));
+        assert!(!implementation.contains("notes-sidebar-toggle"));
+        assert!(!implementation.contains("view.external_sidebar = false;"));
+        assert!(!implementation.contains("view.sidebar_collapsed = true;"));
     }
 
     #[test]

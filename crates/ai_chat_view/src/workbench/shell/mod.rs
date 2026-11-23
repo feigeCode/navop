@@ -96,6 +96,10 @@ pub struct WorkbenchShell {
     >,
     pub(super) nav: Option<AnyView>,
     pub(super) session_source: Option<Entity<DefaultAgentChatPanel>>,
+    /// 会话导航是否交由外壳之外的唯一宿主挂载。
+    pub(super) external_session_nav: bool,
+    pub(super) external_session_nav_toggle:
+        Option<std::rc::Rc<dyn Fn(&gpui::Window, &mut gpui::App)>>,
     /// 会话搜索框；仅内建会话列表（`session_source`）存在时创建。
     pub(super) search_input: Option<Entity<InputState>>,
     /// 搜索串（已同步自 `search_input`）。
@@ -156,12 +160,19 @@ impl WorkbenchShell {
                         nav_collapsed: std::sync::Arc::new(move |cx| {
                             shell_nav_state
                                 .upgrade()
-                                .map(|shell| shell.read(cx).state().nav_collapsed())
+                                .map(|shell| {
+                                    let shell = shell.read(cx);
+                                    if shell.external_session_nav {
+                                        false
+                                    } else {
+                                        shell.state().nav_collapsed()
+                                    }
+                                })
                                 .unwrap_or(true)
                         }),
-                        toggle_nav: std::sync::Arc::new(move |_, cx| {
+                        toggle_nav: std::sync::Arc::new(move |window, cx| {
                             if let Some(shell) = shell_nav_action.upgrade() {
-                                shell.update(cx, |shell, cx| shell.toggle_session_nav(cx));
+                                shell.update(cx, |shell, cx| shell.toggle_session_nav(window, cx));
                             }
                         }),
                         right_open: std::sync::Arc::new(move |cx| {
@@ -221,6 +232,8 @@ impl WorkbenchShell {
             lazy_panels,
             nav: session_nav,
             session_source,
+            external_session_nav: false,
+            external_session_nav_toggle: None,
             search_input,
             search_query,
             theme,
@@ -464,6 +477,22 @@ impl WorkbenchShell {
         self.nav.is_some()
     }
 
+    /// 将会话导航借给外部宿主；切换宿主时保留导航及其全部会话状态。
+    pub fn set_external_session_nav(&mut self, external: bool, cx: &mut Context<Self>) {
+        if self.external_session_nav == external {
+            return;
+        }
+        self.external_session_nav = external;
+        cx.notify();
+    }
+
+    pub fn set_external_session_nav_toggle_handler(
+        &mut self,
+        handler: Option<std::rc::Rc<dyn Fn(&gpui::Window, &mut gpui::App)>>,
+    ) {
+        self.external_session_nav_toggle = handler;
+    }
+
     pub fn set_panel(&mut self, kind: WorkbenchPanelKind, view: AnyView, cx: &mut Context<Self>) {
         let tab = WorkbenchTab::new(kind);
         // 宿主显式给了实例，懒工厂就没用了。
@@ -592,7 +621,13 @@ impl WorkbenchShell {
         self.commit(changed, cx);
     }
 
-    pub fn toggle_session_nav(&mut self, cx: &mut Context<Self>) {
+    pub fn toggle_session_nav(&mut self, window: &gpui::Window, cx: &mut Context<Self>) {
+        if self.external_session_nav {
+            if let Some(handler) = &self.external_session_nav_toggle {
+                handler(window, cx);
+            }
+            return;
+        }
         let changed = self.state.toggle_nav();
         self.commit(changed, cx);
     }
