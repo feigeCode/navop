@@ -692,6 +692,12 @@ fn host_metrics_are_wired_only_to_the_list_view() {
         "进度条必须为辅助技术提供带标签与数值的完整描述"
     );
     assert!(
+        host_metrics.contains("HOST_METRIC_BAR_WIDTH_REMS")
+            && host_metrics.contains("HOST_NETWORK_TRACK_WIDTH_REMS")
+            && !host_metrics.contains("v_flex()"),
+        "资源条必须单行紧凑：比例条与上下行网速都并排展示，不再纵向堆叠撑高连接行"
+    );
+    assert!(
         host_metrics.contains("render_host_network_track")
             && host_metrics.contains("network_rx_bytes_per_sec")
             && host_metrics.contains("network_tx_bytes_per_sec"),

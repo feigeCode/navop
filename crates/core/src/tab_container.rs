@@ -189,6 +189,12 @@ fn status_badge(id: String, icon: IconName, tooltip_text: String) -> AnyElement 
         .into_any_element()
 }
 
+/// 只有存在标题时才渲染标题 tooltip：无标题标签（如固定首页标签，标题为空串）
+/// 悬停时不应弹出空白提示；重命名期间由输入框接管，同样不显示。
+fn tab_shows_title_tooltip(is_renaming: bool, title: &str) -> bool {
+    !is_renaming && !title.trim().is_empty()
+}
+
 /// 标签栏放不下时，非活动标签按 flex 收缩到 `TAB_MIN_WIDTH`（类似 SecureCRT）；
 /// 活动标签与正在重命名的标签始终保持完整宽度。
 fn tab_keeps_full_width(is_active: bool, is_renaming: bool) -> bool {
@@ -4237,6 +4243,7 @@ impl TabContainer {
                     .enumerate()
                     .map(|(pinned_index, pinned)| {
                         let pinned_title = pinned.title(cx);
+                        let show_title_tooltip = tab_shows_title_tooltip(false, &pinned_title);
                         let tooltip_title = pinned_title.clone();
                         let pinned_icon = pinned.content().icon(cx);
                         let pinned_connection_status = pinned.content().connection_status(cx);
@@ -4273,8 +4280,10 @@ impl TabContainer {
                                     .bg(inactive_tab_color)
                             })
                             .cursor_pointer()
-                            .tooltip(move |window, cx| {
-                                Tooltip::new(tooltip_title.clone()).build(window, cx)
+                            .when(show_title_tooltip, |el| {
+                                el.tooltip(move |window, cx| {
+                                    Tooltip::new(tooltip_title.clone()).build(window, cx)
+                                })
                             })
                             .on_click(move |_, window, cx| {
                                 view_for_pinned.update(cx, |this, cx| {
@@ -4369,7 +4378,8 @@ impl TabContainer {
                             .and_then(|_| self.rename_input.clone());
                         let (tab_min_width, tab_max_width) =
                             tab_width_bounds(tab_max_width, rename_input_for_tab.is_some());
-                        let show_title_tooltip = rename_input_for_tab.is_none() && !title.is_empty();
+                        let show_title_tooltip =
+                            tab_shows_title_tooltip(rename_input_for_tab.is_some(), &title);
                         let tooltip_title = title.clone();
                         let keep_full_width = tab_keeps_full_width(
                             is_active,
@@ -5665,6 +5675,30 @@ mod tests {
         let source = include_str!("tab_container.rs");
         let tooltip_builder = ["Tool", "tip::new(tool", "tip_title.clone())"].concat();
         assert!(source.matches(&tooltip_builder).count() >= 2);
+    }
+
+    #[test]
+    fn tabs_without_titles_skip_title_tooltips() {
+        // 固定首页标签的标题是空串（只显示编号与图标），悬停时不能弹出空白 tooltip。
+        assert!(!tab_shows_title_tooltip(false, ""));
+        assert!(!tab_shows_title_tooltip(false, "   "));
+        assert!(tab_shows_title_tooltip(false, "主页"));
+        // 重命名期间由输入框接管，也不显示标题 tooltip。
+        assert!(!tab_shows_title_tooltip(true, "主页"));
+
+        let source = include_str!("tab_container.rs");
+        let implementation = source.split("mod tests").next().unwrap();
+        // 固定标签与普通标签两条渲染路径都必须按“有标题”判断是否挂 tooltip。
+        assert!(implementation.contains("tab_shows_title_tooltip(false, &pinned_title)"));
+        assert!(
+            implementation
+                .contains("tab_shows_title_tooltip(rename_input_for_tab.is_some(), &title)")
+        );
+        assert_eq!(
+            implementation.matches("tab_shows_title_tooltip(").count(),
+            3,
+            "one definition + two render call sites"
+        );
     }
 
     #[test]
