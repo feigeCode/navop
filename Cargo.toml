@@ -89,13 +89,13 @@ edition = "2024"
 # (`gpui_component`, `gpui_base`, `gpui_shell`, ...).
 # navop 强制 gpui-fast：所有 gpui-kit 系 crate 统一带 features = ["gpui-fast"]，
 # 经 feature 统一把整套 UI 栈切到 GPUI Fast 后端（外部 crate 名 gpui-fast-*）。
-gpui-component = { git = "https://github.com/feigeCode/gpui-kit", rev = "36266413cd4f73e6b1d43e03f94e927b61b2bb9e", features = ["gpui-fast"] }
-gpui-component-assets = { package = "gpui-kit-assets", git = "https://github.com/feigeCode/gpui-kit", rev = "36266413cd4f73e6b1d43e03f94e927b61b2bb9e", features = ["gpui-fast"] }
-gpui-base = { git = "https://github.com/feigeCode/gpui-kit", rev = "36266413cd4f73e6b1d43e03f94e927b61b2bb9e", features = ["gpui-fast"] }
+gpui-component = { git = "https://github.com/feigeCode/gpui-kit", rev = "6280be264e85150ca0ea98899e9c8aa10ab65a8e", features = ["gpui-fast"] }
+gpui-component-assets = { package = "gpui-kit-assets", git = "https://github.com/feigeCode/gpui-kit", rev = "6280be264e85150ca0ea98899e9c8aa10ab65a8e", features = ["gpui-fast"] }
+gpui-base = { git = "https://github.com/feigeCode/gpui-kit", rev = "6280be264e85150ca0ea98899e9c8aa10ab65a8e", features = ["gpui-fast"] }
 # gpui-webview（原 gpui-wry）强制 GPUI Fast；#3398 后它依赖
 # gpui-pre-util =0.3.8 的版本要求与下面的 fork 快照天然一致（同一 snapshot 0.3.126）。
-gpui-webview = { git = "https://github.com/feigeCode/gpui-kit", rev = "36266413cd4f73e6b1d43e03f94e927b61b2bb9e" }
-gpui-kit = { git = "https://github.com/feigeCode/gpui-kit", rev = "36266413cd4f73e6b1d43e03f94e927b61b2bb9e", features = ["gpui-fast"] }
+gpui-webview = { git = "https://github.com/feigeCode/gpui-kit", rev = "6280be264e85150ca0ea98899e9c8aa10ab65a8e" }
+gpui-kit = { git = "https://github.com/feigeCode/gpui-kit", rev = "6280be264e85150ca0ea98899e9c8aa10ab65a8e", features = ["gpui-fast"] }
 
 # nsh GPUI 后端（AppView）：扩展 UI 平面迁往 nsh 宿主形态（方案见
 # docs/extension-resource-plugins/nsh-migration-plan.md）。钉到 fork 的

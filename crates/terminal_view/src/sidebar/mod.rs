@@ -591,11 +591,11 @@ impl TerminalToolDockState {
     fn close_open_tools_at_placement(
         &mut self,
         placement: SidebarPlacement,
-        except: SidebarPanel,
+        except: Option<SidebarPanel>,
     ) -> bool {
         let mut changed = false;
         for (panel, state) in self.states.iter_mut() {
-            if *panel != except && state.open && state.placement == placement {
+            if Some(*panel) != except && state.open && state.placement == placement {
                 state.open = false;
                 changed = true;
             }
@@ -607,7 +607,7 @@ impl TerminalToolDockState {
         let Some(placement) = self.states.get(&panel).map(|state| state.placement) else {
             return false;
         };
-        let changed = self.close_open_tools_at_placement(placement, panel);
+        let changed = self.close_open_tools_at_placement(placement, Some(panel));
         let Some(state) = self.states.get_mut(&panel) else {
             return changed;
         };
@@ -653,7 +653,7 @@ impl TerminalToolDockState {
             return false;
         };
         let changed = if is_open {
-            self.close_open_tools_at_placement(placement, panel)
+            self.close_open_tools_at_placement(placement, Some(panel))
         } else {
             false
         };
@@ -722,6 +722,47 @@ impl TerminalToolDockState {
         }
         moved
     }
+}
+
+/// 让扩展面板占用 `placement` 这一边：关闭同边其它扩展面板，并让同边内建面板让位。
+///
+/// 侧边栏遵循「每一边只展示一个面板」（内建与扩展共用一个停靠边），
+/// 因此扩展面板打开/移动到这个边时必须先做互斥，否则同一停靠边会有多个
+/// `open` 条目而渲染层只取一个，按钮高亮与实际展示内容脱节，
+/// 用户点击其它扩展时会表现为「无法切换」。
+fn take_placement_for_extension(
+    dock: &mut TerminalToolDockState,
+    entries: &mut [ExtensionPanelEntry],
+    placement: SidebarPlacement,
+    except: Option<&str>,
+) -> bool {
+    let extensions =
+        extension_panel_state::close_open_panels_at_placement(entries, placement, except);
+    let builtin = dock.close_open_tools_at_placement(placement, None);
+    extensions || builtin
+}
+
+/// 激活扩展面板并让它独占所属停靠边；返回状态是否发生变化。
+fn activate_extension_panel(
+    dock: &mut TerminalToolDockState,
+    entries: &mut [ExtensionPanelEntry],
+    id: &str,
+) -> bool {
+    let Some(placement) = entries
+        .iter()
+        .find(|entry| entry.id.as_ref() == id)
+        .map(|entry| entry.placement)
+    else {
+        return false;
+    };
+    let mut changed = take_placement_for_extension(dock, entries, placement, Some(id));
+    if let Some(entry) = entries.iter_mut().find(|entry| entry.id.as_ref() == id) {
+        if !entry.open {
+            entry.open = true;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// 终端侧边栏事件
@@ -1535,15 +1576,7 @@ impl TerminalSidebar {
         if !self.ensure_extension_panel_view(id, cx) {
             return;
         }
-        let Some(entry) = self
-            .extension_panels
-            .iter_mut()
-            .find(|p| p.id.as_ref() == id)
-        else {
-            return;
-        };
-        if !entry.open {
-            entry.open = true;
+        if activate_extension_panel(&mut self.tool_dock, &mut self.extension_panels, id) {
             cx.emit(TerminalSidebarEvent::PanelChanged(None));
             cx.notify();
         }
@@ -1580,16 +1613,31 @@ impl TerminalSidebar {
         placement: SidebarPlacement,
         cx: &mut Context<Self>,
     ) {
-        if let Some(entry) = self
+        let Some(index) = self
             .extension_panels
-            .iter_mut()
-            .find(|p| p.id.as_ref() == id)
-        {
-            if entry.placement != placement {
-                entry.placement = placement;
-                cx.emit(TerminalSidebarEvent::PanelChanged(None));
-                cx.notify();
-            }
+            .iter()
+            .position(|p| p.id.as_ref() == id)
+        else {
+            return;
+        };
+        if self.extension_panels[index].placement == placement {
+            return;
+        }
+        let moved_open = self.extension_panels[index].open;
+        let freed = if moved_open {
+            take_placement_for_extension(
+                &mut self.tool_dock,
+                &mut self.extension_panels,
+                placement,
+                Some(id),
+            )
+        } else {
+            false
+        };
+        self.extension_panels[index].placement = placement;
+        if moved_open || freed {
+            cx.emit(TerminalSidebarEvent::PanelChanged(None));
+            cx.notify();
         }
     }
 
@@ -1875,6 +1923,13 @@ impl TerminalSidebar {
     ) {
         if self.tool_dock.move_tool(panel, placement) {
             self.update_panel_frame_placement(panel, placement, cx);
+            if self.tool_dock.is_tool_open(panel) {
+                extension_panel_state::close_open_panels_at_placement(
+                    &mut self.extension_panels,
+                    placement,
+                    None,
+                );
+            }
             cx.emit(TerminalSidebarEvent::PanelChanged(Some(panel)));
             cx.notify();
         }
@@ -1882,14 +1937,21 @@ impl TerminalSidebar {
 
     fn open_tool_internal(&mut self, panel: SidebarPanel, cx: &mut Context<Self>) -> bool {
         self.prepare_panel_open(panel, cx);
-        self.update_panel_frame_placement(panel, self.panel_placement(panel), cx);
-        let changed = self.tool_dock.open_tool(panel);
-        if changed && panel == SidebarPanel::AiChat {
+        let placement = self.panel_placement(panel);
+        self.update_panel_frame_placement(panel, placement, cx);
+        let panel_changed = self.tool_dock.open_tool(panel);
+        // 内建面板优先占用停靠边：同边的扩展面板需要让位，保持「每边一个面板」。
+        let extension_closed = extension_panel_state::close_open_panels_at_placement(
+            &mut self.extension_panels,
+            placement,
+            None,
+        );
+        if panel_changed && panel == SidebarPanel::AiChat {
             self.ai_chat_panel.update(cx, |panel, cx| {
                 panel.on_sidebar_shown(cx);
             });
         }
-        changed
+        panel_changed || extension_closed
     }
 
     fn update_panel_frame_placement(
@@ -2574,11 +2636,14 @@ impl Render for TerminalSidebar {
 #[cfg(test)]
 mod tests {
     use super::{
-        SidebarPanel, TerminalToolDockState, agent_theme_from_terminal_theme,
-        build_live_terminal_ai_context, build_terminal_ai_context, extension_panel_placement_key,
+        SidebarPanel, TerminalToolDockState, activate_extension_panel,
+        agent_theme_from_terminal_theme, build_live_terminal_ai_context, build_terminal_ai_context,
+        extension_panel_placement_key, take_placement_for_extension,
         terminal_ai_system_instruction, terminal_sidebar_available_panels,
         workspace_theme_from_terminal_colors,
     };
+    use crate::sidebar::extension_panel_state::ExtensionPanelEntry;
+    use crate::sidebar::extension_panels::ExtensionPanelSpec;
     use crate::theme::{TerminalColors, TerminalTheme};
     use agent_runtime::{ResourceCapability, ResourceKind, ResourceRef};
     use gpui::rgb;
@@ -2910,6 +2975,17 @@ mod tests {
         );
     }
 
+    fn extension_entry(id: &str, placement: SidebarPlacement) -> ExtensionPanelEntry {
+        let mut entry = ExtensionPanelEntry::from_spec(ExtensionPanelSpec {
+            id: id.to_string(),
+            title: gpui::SharedString::new(id),
+            icon_path: None,
+            order: 0,
+        });
+        entry.placement = placement;
+        entry
+    }
+
     #[test]
     fn tool_dock_can_keep_multiple_tools_open_at_different_edges() {
         let mut dock = TerminalToolDockState::new([SidebarPanel::Settings, SidebarPanel::AiChat]);
@@ -2927,6 +3003,74 @@ mod tests {
             ],
         );
         assert!(dock.toolbar_visible());
+    }
+
+    #[test]
+    fn opening_extension_frees_its_placement_from_builtin_and_sibling_extension() {
+        let mut dock = TerminalToolDockState::new([SidebarPanel::AiChat]);
+        dock.open_tool(SidebarPanel::AiChat);
+
+        let mut entries = vec![
+            extension_entry("ext.a:p", SidebarPlacement::Right),
+            extension_entry("ext.b:q", SidebarPlacement::Right),
+        ];
+        entries[0].open = true;
+
+        assert!(activate_extension_panel(&mut dock, &mut entries, "ext.b:q"));
+
+        assert!(
+            !dock.is_tool_open(SidebarPanel::AiChat),
+            "同边的内建面板应让位"
+        );
+        assert!(!entries[0].open, "同边的其它扩展面板应关闭");
+        assert!(entries[1].open, "被激活的扩展面板应打开");
+        assert_eq!(
+            dock.open_panels().len(),
+            0,
+            "扩展面板打开时同边的内建面板不再计入打开列表"
+        );
+    }
+
+    #[test]
+    fn extension_panels_on_different_placements_stay_open() {
+        let mut dock = TerminalToolDockState::new([]);
+        let mut entries = vec![
+            extension_entry("ext.a:p", SidebarPlacement::Right),
+            extension_entry("ext.b:q", SidebarPlacement::Bottom),
+            extension_entry("ext.c:r", SidebarPlacement::Left),
+        ];
+
+        for id in ["ext.a:p", "ext.b:q", "ext.c:r"] {
+            assert!(activate_extension_panel(&mut dock, &mut entries, id));
+        }
+
+        assert!(dock.open_panels().is_empty());
+        assert!(entries.iter().all(|entry| entry.open));
+    }
+
+    #[test]
+    fn moving_open_extension_to_occupied_placement_closes_incumbents() {
+        let mut dock = TerminalToolDockState::new([SidebarPanel::AiChat, SidebarPanel::Settings]);
+        dock.open_tool(SidebarPanel::AiChat);
+        dock.move_tool(SidebarPanel::Settings, SidebarPlacement::Right);
+
+        let mut entries = vec![
+            extension_entry("ext.a:p", SidebarPlacement::Bottom),
+            extension_entry("ext.b:q", SidebarPlacement::Right),
+        ];
+        entries[0].open = true;
+        entries[1].open = true;
+
+        assert!(take_placement_for_extension(
+            &mut dock,
+            &mut entries,
+            SidebarPlacement::Right,
+            Some("ext.a:p"),
+        ));
+
+        assert!(entries[0].open, "被移动的面板保持打开");
+        assert!(!entries[1].open, "目标边原有扩展面板让位");
+        assert_eq!(dock.open_panels().len(), 0, "目标边原有内建面板让位");
     }
 
     #[test]

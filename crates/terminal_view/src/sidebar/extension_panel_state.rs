@@ -47,6 +47,30 @@ pub(crate) fn sync_extension_panels(
         .collect()
 }
 
+/// 关闭与 `placement` 同一边的其它扩展面板，`except` 指定的面板保持不动。
+///
+/// 终端侧边栏（内建与扩展共用）遵循「每一边只展示一个面板」的语义：
+/// 内建面板由 [`TerminalToolDockState`](super::TerminalToolDockState) 记账，
+/// 扩展面板也必须按同样的规则互斥，否则同一停靠边会同时存在多个
+/// `open = true` 的条目，而渲染层每边只取一个，界面上的按钮高亮与
+/// 实际展示内容就会脱节，点击其它扩展看起来「无法切换」。
+///
+/// 返回状态是否发生变化。
+pub(crate) fn close_open_panels_at_placement(
+    entries: &mut [ExtensionPanelEntry],
+    placement: SidebarPlacement,
+    except: Option<&str>,
+) -> bool {
+    let mut changed = false;
+    for entry in entries {
+        if entry.open && entry.placement == placement && except != Some(entry.id.as_ref()) {
+            entry.open = false;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// 一个扩展面板的运行时条目。
 #[derive(Clone)]
 pub(crate) struct ExtensionPanelEntry {
@@ -118,6 +142,39 @@ mod tests {
         assert!(merged[0].open);
         assert_eq!(merged[0].placement, SidebarPlacement::Bottom);
         assert_eq!(merged[0].order, 3);
+    }
+
+    #[test]
+    fn close_open_panels_at_placement_respects_edge_and_except() {
+        let mut entries = vec![
+            entry_with_state("ext.a:p", true, SidebarPlacement::Right),
+            entry_with_state("ext.b:q", true, SidebarPlacement::Right),
+            entry_with_state("ext.c:r", true, SidebarPlacement::Bottom),
+        ];
+
+        assert!(close_open_panels_at_placement(
+            &mut entries,
+            SidebarPlacement::Right,
+            Some("ext.b:q"),
+        ));
+
+        assert!(!entries[0].open, "同边的其它扩展面板应关闭");
+        assert!(entries[1].open, "except 指定的面板保持打开");
+        assert!(entries[2].open, "其它停靠边不受影响");
+    }
+
+    #[test]
+    fn close_open_panels_at_placement_reports_no_change_when_already_exclusive() {
+        let mut entries = vec![
+            entry_with_state("ext.a:p", true, SidebarPlacement::Right),
+            entry_with_state("ext.b:q", false, SidebarPlacement::Right),
+        ];
+
+        assert!(!close_open_panels_at_placement(
+            &mut entries,
+            SidebarPlacement::Right,
+            Some("ext.a:p"),
+        ));
     }
 
     #[test]
