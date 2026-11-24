@@ -82,6 +82,8 @@ pub enum TerminalEvent {
     CommandFinished { exit_code: i32 },
     /// 记录 shell 实际执行过的命令
     CommandRecorded(String),
+    /// 终端程序通过 OSC 9 / OSC 777 发出的桌面通知
+    Notification(crate::osc::TerminalNotification),
 }
 
 enum LocalPtyCommand {
@@ -180,6 +182,7 @@ fn terminal_event_from_osc_event(event: OscEvent) -> TerminalEvent {
         OscEvent::CommandFinished { exit_code } => TerminalEvent::CommandFinished { exit_code },
         OscEvent::WorkingDirChanged(reported) => TerminalEvent::WorkingDirChanged(reported),
         OscEvent::CommandRecorded(command) => TerminalEvent::CommandRecorded(command),
+        OscEvent::Notification(notification) => TerminalEvent::Notification(notification),
     }
 }
 

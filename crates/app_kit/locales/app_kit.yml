@@ -365,3 +365,25 @@ NewConnection:
     en: Connection type provided by an extension
     zh-CN: 由扩展提供的连接类型
     zh-HK: 由擴展提供的連線類型
+
+DesktopNotification:
+  prefix_approval:
+    en: Needs Approval
+    zh-CN: 需要审批
+    zh-HK: 需要審批
+  prefix_completed:
+    en: Completed
+    zh-CN: 已完成
+    zh-HK: 已完成
+  prefix_info:
+    en: Terminal Notice
+    zh-CN: 终端提醒
+    zh-HK: 終端提醒
+  test_title:
+    en: Terminal Notification Test
+    zh-CN: 终端系统通知测试
+    zh-HK: 終端系統通知測試
+  test_body:
+    en: System notifications are working. Terminal alerts (OSC 9 / OSC 777) will appear here.
+    zh-CN: 系统通知工作正常，后续终端通知（OSC 9 / OSC 777）将在此处弹出提醒。
+    zh-HK: 系統通知運作正常，後續終端通知（OSC 9 / OSC 777）將在此處彈出提醒。

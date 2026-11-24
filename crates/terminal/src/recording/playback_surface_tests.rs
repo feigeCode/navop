@@ -168,7 +168,8 @@ fn malicious_terminal_sequences_cannot_escape_the_playback_surface() {
             | TerminalEvent::ClipboardLoad(_)
             | TerminalEvent::WorkingDirChanged(_)
             | TerminalEvent::CommandFinished { .. }
-            | TerminalEvent::CommandRecorded(_) => {
+            | TerminalEvent::CommandRecorded(_)
+            | TerminalEvent::Notification(_) => {
                 panic!("playback-safe parser leaked a non-render event")
             }
         }

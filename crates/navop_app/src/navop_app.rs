@@ -1696,14 +1696,36 @@ impl NavopApp {
                         });
                     });
                 }
+                TabContainerEvent::TabAttention {
+                    tab_id,
+                    tab_title,
+                    tab_is_active,
+                    window_is_active,
+                    attention,
+                } => {
+                    let options =
+                        app_kit::integration::desktop_notification::DesktopNotificationOptions::from_settings(
+                            AppSettings::global(cx),
+                        );
+                    app_kit::integration::desktop_notification::notify_tab_attention(
+                        options,
+                        tab_id,
+                        tab_title.as_ref(),
+                        *tab_is_active,
+                        *window_is_active,
+                        attention,
+                    );
+                }
             }
         })
         .detach();
         // 标签集合/激活态变化 → 重建托盘「会话」菜单。菜单展开与否不可观测，只能推送。
         cx.subscribe(
             &tab_container,
-            |_this, _, _event: &TabContainerEvent, cx| {
-                cx.defer(|cx| crate::system_tray::sync_sessions_from(cx));
+            |_this, _, event: &TabContainerEvent, cx| {
+                if !matches!(event, TabContainerEvent::TabAttention { .. }) {
+                    cx.defer(|cx| crate::system_tray::sync_sessions_from(cx));
+                }
             },
         )
         .detach();

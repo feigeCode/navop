@@ -41,7 +41,7 @@ pub use local_shell::{
     local_config_from_custom_profile, local_config_from_settings,
     local_config_from_settings_with_profile,
 };
-pub use osc::ReportedWorkingDir;
+pub use osc::{ReportedWorkingDir, TerminalNotification};
 pub use performance_metrics::{
     TERMINAL_PERFORMANCE_METRICS_ENV, TerminalActivity, TerminalInputMetricSource,
     TerminalPerformanceMetrics, TerminalPerformanceSnapshot, TerminalPerformanceWindow,

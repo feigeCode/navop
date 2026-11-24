@@ -128,6 +128,8 @@ pub enum TerminalModelEvent {
     TitleChanged(String),
     /// 终端响铃
     Bell,
+    /// 终端程序发出的桌面通知（OSC 9 / OSC 777）
+    Notification(crate::osc::TerminalNotification),
     /// 子进程已退出
     ChildExit(i32),
     /// 成功命令历史已写入数据库
@@ -3928,6 +3930,9 @@ impl Terminal {
             }
             TerminalEvent::Bell => {
                 cx.emit(TerminalModelEvent::Bell);
+            }
+            TerminalEvent::Notification(notification) => {
+                cx.emit(TerminalModelEvent::Notification(notification));
             }
             TerminalEvent::ChildExit(code) => {
                 self.child_exited = Some(code);
