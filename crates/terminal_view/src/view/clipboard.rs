@@ -3,14 +3,42 @@ use super::*;
 
 impl TerminalView {
     pub(super) fn copy(&mut self, _: &Copy, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = self.block_selection_text(cx) {
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
-        } else if let Some(text) = self.selection_text(cx) {
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        // 如果本次 Copy 是由纯 Ctrl+C 快捷键触发（用户将 terminal.copy 自定义为 ctrl-c），
+        // 且终端当前没有选区：放行并透传 \x03 中断信号，兼容 Windows Terminal 习惯。
+        if self.has_copyable_selection(cx) {
+            if let Some(text) = self.block_selection_text(cx) {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            } else if let Some(text) = self.selection_text(cx) {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            // 复制后立刻清掉选中背景：留着高亮会让用户怀疑组合键没生效（issue #199）。
+            self.clear_selection_after_copy(cx);
+            self.focus_terminal(window, cx);
+            return;
+        }
+        if self.should_propagate_empty_copy_as_ctrl_c(cx) {
+            cx.propagate();
+            return;
         }
         // 复制后立刻清掉选中背景：留着高亮会让用户怀疑组合键没生效（issue #199）。
         self.clear_selection_after_copy(cx);
         self.focus_terminal(window, cx);
+    }
+
+    pub(super) fn has_copyable_selection(&self, cx: &App) -> bool {
+        self.block_selection_text(cx).is_some() || self.selection_text(cx).is_some()
+    }
+
+    /// 仅当用户把 `terminal.copy` 绑定包含纯 `ctrl-c`（且非只读/回放终端）时，
+    /// 允许无选区的 Copy action 透传回 `handle_key_event` 发送 `\x03`。
+    fn should_propagate_empty_copy_as_ctrl_c(&self, cx: &App) -> bool {
+        if !self.accepts_live_terminal_input(cx) {
+            return false;
+        }
+        let copy_shortcuts = shortcuts_for(cx, action_id::TERMINAL_COPY, &[TERMINAL_COPY_SHORTCUT]);
+        let ctrl_c =
+            Keystroke::parse_with_os("ctrl-c", one_core::keybindings::current_os()).ok();
+        ctrl_c.is_some_and(|ks| keystroke_matches_shortcuts(&ks, &copy_shortcuts))
     }
 
     /// 复制完成后清空终端选区与块选区。
