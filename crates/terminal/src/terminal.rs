@@ -5081,6 +5081,15 @@ impl Terminal {
 
         self.take_ssh_session_manager(cx);
 
+        // 共享会话服务按 ConnectionKey 缓存 SshSessionManager，而 ConnectionKey
+        // 不包含单次确认过的 confirmed_keys；若不先淘汰旧槽位，重试时会继续命中
+        // 持有旧 HostKeyVerifier 的 manager，导致“更新并保存 / 仅此次信任”完全不生效。
+        if let Some(service) = Self::ssh_session_service(cx) {
+            if let Some(identity) = self.derive_shared_session_identity(&retry_config) {
+                let _ = service.retire(identity.connection_key());
+            }
+        }
+
         if !self.start_ssh_connection_attempt(retry_config, responder, generation, cx) {
             self.connection_state = ConnectionState::Disconnected {
                 error: Some(rejection_message),
