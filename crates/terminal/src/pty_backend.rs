@@ -434,6 +434,9 @@ impl LocalPtyBackend {
         let stopped = Arc::new(AtomicBool::new(false));
         let shutdown_requested = Arc::new(AtomicBool::new(false));
         let child_exit_reported = event_proxy.child_exit_reported_handle();
+        #[cfg(target_os = "windows")]
+        let pty = crate::windows_conpty::spawn(&pty_options, window_size)?;
+        #[cfg(not(target_os = "windows"))]
         let pty = tty::new(&pty_options, window_size, 0)?;
         let pty = OscTrackingPty::new(
             pty,

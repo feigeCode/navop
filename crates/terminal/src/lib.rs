@@ -25,6 +25,8 @@ mod telnet_expect;
 mod telnet_ingress;
 pub mod terminal;
 pub mod types;
+#[cfg(target_os = "windows")]
+mod windows_conpty;
 #[cfg(any(test, target_os = "windows"))]
 mod windows_environment;
 #[cfg(any(test, target_os = "windows"))]

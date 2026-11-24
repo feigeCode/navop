@@ -14200,9 +14200,11 @@ dependencies = [
  "futures",
  "gpui-fast",
  "libc",
+ "miow",
  "modem-transfer",
  "one-core",
  "otp",
+ "piper",
  "plist",
  "polling",
  "process-util",
@@ -14219,6 +14221,7 @@ dependencies = [
  "tracing",
  "uuid",
  "windows 0.61.3",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
