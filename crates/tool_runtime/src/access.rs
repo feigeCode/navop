@@ -107,11 +107,12 @@ pub struct RestrictedConnection {
     pub level: AiAccessLevel,
 }
 
-pub const READ_ONLY_CAPABILITIES: [ResourceCapability; 4] = [
+pub const READ_ONLY_CAPABILITIES: [ResourceCapability; 5] = [
     ResourceCapability::Query,
     ResourceCapability::DatabaseQuery,
     ResourceCapability::List,
     ResourceCapability::ReadFile,
+    ResourceCapability::Tmux,
 ];
 
 /// 按访问级别裁剪资源能力。
@@ -247,6 +248,7 @@ mod tests {
             ResourceCapability::TerminalExec,
             ResourceCapability::TerminalControl,
             ResourceCapability::TerminalInput,
+            ResourceCapability::Tmux,
             ResourceCapability::ManageConnection,
             ResourceCapability::OpenSession,
         ];
@@ -264,6 +266,7 @@ mod tests {
                 ResourceCapability::Query,
                 ResourceCapability::List,
                 ResourceCapability::ReadFile,
+                ResourceCapability::Tmux,
             ]
         );
 

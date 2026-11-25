@@ -4,7 +4,7 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        openssh-server libpam-google-authenticator sudo \
+        openssh-server libpam-google-authenticator sudo tmux \
     && rm -rf /var/lib/apt/lists/*
 
 # 登录用户与 root 用同一个密码，便于用一条连接分别验证 sudo 和 su root。
@@ -35,5 +35,9 @@ RUN printf '%s\n' \
 
 RUN mkdir -p /run/sshd
 
-EXPOSE 2222
-CMD ["/bin/sh", "-c", "ssh-keygen -A && exec /usr/sbin/sshd -D -e -p 2222"]
+COPY docker-ssh-test-entrypoint.sh /usr/local/bin/docker-ssh-test-entrypoint
+COPY sshd_config.password /etc/ssh/sshd_config.password
+RUN chmod 0755 /usr/local/bin/docker-ssh-test-entrypoint
+
+EXPOSE 2222 2223
+CMD ["/usr/local/bin/docker-ssh-test-entrypoint"]

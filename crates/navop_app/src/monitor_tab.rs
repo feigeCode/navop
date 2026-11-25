@@ -3,7 +3,11 @@
 //! Each saved SSH connection owns one long-lived monitor session. The session
 //! samples on the configured interval and updates a single retained card, so
 //! the dashboard does not perform a fresh SSH handshake for every refresh.
+//!
+//! 只有用户按连接开启「资源监控」的主机才会建立后台会话；默认不采集，这份
+//! 选择与首页连接列表共用（`AppSettings::monitored_connection_ids`）。
 
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use chrono::Local;
@@ -23,10 +27,12 @@ use gpui_component::{
     progress::Progress,
     scroll::ScrollableElement as _,
     spinner::Spinner,
+    switch::Switch,
     v_flex,
 };
 use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
+use one_core::settings::AppSettings;
 use one_core::storage::{
     ConnectionRepository, ConnectionType, GlobalStorageState, StoredConnection,
 };
@@ -71,6 +77,8 @@ impl RefreshInterval {
 }
 
 enum MonitorCardState {
+    /// 用户未开启这台主机的资源监控：不建连、不采集。
+    Idle,
     Sampling,
     Ready,
     Failed(String),
@@ -100,7 +108,7 @@ impl MonitorCard {
             address,
             connection,
             snapshot: None,
-            state: MonitorCardState::Sampling,
+            state: MonitorCardState::Idle,
             last_updated: None,
             cpu_history: Vec::new(),
             rx_history: Vec::new(),
@@ -127,6 +135,15 @@ impl MonitorCard {
     fn fail(&mut self, error: String) {
         self.state = MonitorCardState::Failed(error);
     }
+
+    fn reset_to_idle(&mut self) {
+        self.state = MonitorCardState::Idle;
+        self.snapshot = None;
+        self.last_updated = None;
+        self.cpu_history.clear();
+        self.rx_history.clear();
+        self.tx_history.clear();
+    }
 }
 
 pub(crate) struct MonitorTab {
@@ -135,7 +152,7 @@ pub(crate) struct MonitorTab {
     search_query: String,
     cards: Vec<MonitorCard>,
     interval: RefreshInterval,
-    sampling_tasks: Vec<Task<()>>,
+    sampling_tasks: HashMap<i64, Task<()>>,
 }
 
 impl MonitorTab {
@@ -171,7 +188,7 @@ impl MonitorTab {
             search_query: String::new(),
             cards,
             interval: RefreshInterval::FiveSeconds,
-            sampling_tasks: Vec::new(),
+            sampling_tasks: HashMap::new(),
         }
     }
 
@@ -185,92 +202,173 @@ impl MonitorTab {
 
     pub(crate) fn restart_sampling(&mut self, cx: &mut Context<Self>) {
         self.sampling_tasks.clear();
+        let enabled = monitored_connection_ids(cx);
         for card in &mut self.cards {
-            card.state = MonitorCardState::Sampling;
+            card.state = if card_is_monitored(card, &enabled) {
+                MonitorCardState::Sampling
+            } else {
+                MonitorCardState::Idle
+            };
         }
+        let specs = monitored_cards(&self.cards, &enabled)
+            .into_iter()
+            .filter_map(|card| card.connection.id.map(|id| (id, card.connection.clone())))
+            .collect::<Vec<_>>();
+        for (index, (connection_id, connection)) in specs.into_iter().enumerate() {
+            self.start_card_sampling(connection_id, connection, index as u32, cx);
+        }
+        cx.notify();
+    }
 
+    /// 只为单个连接建立/重建长连接会话；开启开关后立即生效。
+    fn start_card_sampling(
+        &mut self,
+        connection_id: i64,
+        connection: StoredConnection,
+        stagger_index: u32,
+        cx: &mut Context<Self>,
+    ) {
         let repository = cx
             .global::<GlobalStorageState>()
             .storage
             .get::<ConnectionRepository>();
-        let specs = self
+        let config = match build_monitor_config(
+            repository.as_ref().map(|repo| repo.as_ref()),
+            &connection,
+        ) {
+            Ok(config) => config,
+            Err(error) => {
+                if let Some(card) = self
+                    .cards
+                    .iter_mut()
+                    .find(|card| card.connection.id == Some(connection_id))
+                {
+                    card.fail(error);
+                }
+                cx.notify();
+                return;
+            }
+        };
+        let interval = self.interval.duration();
+        let task = cx.spawn(async move |this, cx| {
+            if stagger_index > 0 {
+                cx.background_executor()
+                    .timer(MONITOR_STAGGER_DELAY * stagger_index)
+                    .await;
+            }
+
+            let mut session = Some(HostMonitorSession::new(config.0, config.1));
+            loop {
+                let Some(active_session) = session.take() else {
+                    break;
+                };
+                let sample = Tokio::spawn(cx, async move {
+                    let mut active_session = active_session;
+                    let result = active_session.sample().await;
+                    (active_session, result)
+                });
+                let (next_session, result) = match sample.await {
+                    Ok(value) => value,
+                    Err(_) => break,
+                };
+                session = Some(next_session);
+
+                let still_open = this
+                    .update(cx, |this, cx| {
+                        let Some(card) = this
+                            .cards
+                            .iter_mut()
+                            .find(|card| card.connection.id == Some(connection_id))
+                        else {
+                            return false;
+                        };
+                        match result {
+                            Ok(snapshot) => card.apply_snapshot(snapshot),
+                            Err(error) => card.fail(format!("{error:#}")),
+                        }
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !still_open {
+                    break;
+                }
+
+                cx.background_executor().timer(interval).await;
+            }
+            if let Some(session) = session {
+                let _ = Tokio::spawn(cx, async move {
+                    session.disconnect().await;
+                })
+                .await;
+            }
+        });
+        self.sampling_tasks.insert(connection_id, task);
+    }
+
+    /// 卡片开关：写入共享的按连接选择，并立即启停该连接的采集会话。
+    fn set_card_monitoring(&mut self, connection_id: i64, enabled: bool, cx: &mut Context<Self>) {
+        if AppSettings::global(cx).connection_monitoring_enabled(connection_id) == enabled {
+            return;
+        }
+        AppSettings::update_and_save(cx, |settings| {
+            settings.set_connection_monitoring(connection_id, enabled);
+        });
+
+        if !enabled {
+            self.sampling_tasks.remove(&connection_id);
+            if let Some(card) = self
+                .cards
+                .iter_mut()
+                .find(|card| card.connection.id == Some(connection_id))
+            {
+                card.reset_to_idle();
+            }
+            cx.notify();
+            return;
+        }
+
+        let Some(connection) = self
             .cards
             .iter()
-            .filter_map(|card| card.connection.id.map(|id| (id, card.connection.clone())))
-            .collect::<Vec<_>>();
-
-        for (index, (connection_id, connection)) in specs.into_iter().enumerate() {
-            let config =
-                build_monitor_config(repository.as_ref().map(|repo| repo.as_ref()), &connection);
-            let config = match config {
-                Ok(config) => config,
-                Err(error) => {
-                    if let Some(card) = self
-                        .cards
-                        .iter_mut()
-                        .find(|card| card.connection.id == Some(connection_id))
-                    {
-                        card.fail(error);
-                    }
-                    continue;
-                }
-            };
-            let interval = self.interval.duration();
-            let task = cx.spawn(async move |this, cx| {
-                if index > 0 {
-                    cx.background_executor()
-                        .timer(MONITOR_STAGGER_DELAY * index as u32)
-                        .await;
-                }
-
-                let mut session = Some(HostMonitorSession::new(config.0, config.1));
-                loop {
-                    let Some(active_session) = session.take() else {
-                        break;
-                    };
-                    let sample = Tokio::spawn(cx, async move {
-                        let mut active_session = active_session;
-                        let result = active_session.sample().await;
-                        (active_session, result)
-                    });
-                    let (next_session, result) = match sample.await {
-                        Ok(value) => value,
-                        Err(_) => break,
-                    };
-                    session = Some(next_session);
-
-                    let still_open = this
-                        .update(cx, |this, cx| {
-                            let Some(card) = this
-                                .cards
-                                .iter_mut()
-                                .find(|card| card.connection.id == Some(connection_id))
-                            else {
-                                return false;
-                            };
-                            match result {
-                                Ok(snapshot) => card.apply_snapshot(snapshot),
-                                Err(error) => card.fail(format!("{error:#}")),
-                            }
-                            cx.notify();
-                            true
-                        })
-                        .unwrap_or(false);
-                    if !still_open {
-                        break;
-                    }
-
-                    cx.background_executor().timer(interval).await;
-                }
-                if let Some(session) = session {
-                    let _ = Tokio::spawn(cx, async move {
-                        session.disconnect().await;
-                    })
-                    .await;
-                }
-            });
-            self.sampling_tasks.push(task);
+            .find(|card| card.connection.id == Some(connection_id))
+            .map(|card| card.connection.clone())
+        else {
+            return;
+        };
+        if let Some(card) = self
+            .cards
+            .iter_mut()
+            .find(|card| card.connection.id == Some(connection_id))
+        {
+            card.state = MonitorCardState::Sampling;
         }
+        self.start_card_sampling(connection_id, connection, 0, cx);
+        cx.notify();
+    }
+
+    /// 单卡刷新：只重连这一台主机，不影响其它已开启的监控。
+    fn restart_card_sampling(&mut self, connection_id: i64, cx: &mut Context<Self>) {
+        if !AppSettings::global(cx).connection_monitoring_enabled(connection_id) {
+            return;
+        }
+        self.sampling_tasks.remove(&connection_id);
+        let Some(connection) = self
+            .cards
+            .iter()
+            .find(|card| card.connection.id == Some(connection_id))
+            .map(|card| card.connection.clone())
+        else {
+            return;
+        };
+        if let Some(card) = self
+            .cards
+            .iter_mut()
+            .find(|card| card.connection.id == Some(connection_id))
+        {
+            card.state = MonitorCardState::Sampling;
+        }
+        self.start_card_sampling(connection_id, connection, 0, cx);
         cx.notify();
     }
 
@@ -292,10 +390,11 @@ impl MonitorTab {
             .collect()
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_header(&self, enabled: &BTreeSet<i64>, cx: &mut Context<Self>) -> AnyElement {
         let interval = self.interval;
         let interval_menu_view = cx.entity();
-        let refresh_enabled = !self.cards.is_empty();
+        let monitored_count = monitored_cards(&self.cards, enabled).len();
+        let refresh_enabled = monitored_count > 0;
         h_flex()
             .w_full()
             .min_w_0()
@@ -325,6 +424,20 @@ impl MonitorTab {
                     ),
             )
             .child(Input::new(&self.search_input).small().w(px(240.0)))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        t!(
+                            "Monitor.enabled_summary",
+                            enabled = monitored_count.to_string(),
+                            total = self.cards.len().to_string()
+                        )
+                        .to_string(),
+                    ),
+            )
             .child(
                 DropdownButton::new("monitor-interval")
                     .button(
@@ -374,125 +487,162 @@ impl MonitorTab {
                             .with_size(IconSize::Small),
                     )
                     .label(t!("Monitor.refresh").to_string())
+                    .tooltip(t!("Monitor.refresh_all").to_string())
                     .on_click(cx.listener(|this, _, _, cx| this.restart_sampling(cx))),
             )
             .into_any_element()
     }
 
-    fn render_card(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn render_card(
+        &self,
+        index: usize,
+        enabled: &BTreeSet<i64>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let card = &self.cards[index];
         let card_id = card.connection.id.unwrap_or(index as i64);
+        let monitored = card_is_monitored(card, enabled);
         let snapshot = card.snapshot.as_ref();
         let accent = cx.theme().chart_1;
         let accent_soft = accent.opacity(0.12);
         let status = self.render_status(card, cx);
 
-        let card_body = v_flex()
-            .w_full()
-            .gap_4()
-            .rounded_lg()
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
-            .p_5()
-            .child(
-                h_flex()
-                    .w_full()
-                    .min_w_0()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .size(px(42.0))
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_lg()
-                            .bg(accent_soft)
-                            .child(
-                                Icon::new(IconName::Server)
-                                    .mono()
-                                    .with_size(IconSize::Medium)
-                                    .text_color(accent),
-                            ),
-                    )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_0p5()
-                            .child(
-                                h_flex()
-                                    .min_w_0()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .overflow_hidden()
-                                            .text_ellipsis()
-                                            .whitespace_nowrap()
-                                            .text_base()
-                                            .font_semibold()
-                                            .child(card.title.clone()),
-                                    )
-                                    .child(status),
-                            )
-                            .child(
+        let card_body =
+            v_flex()
+                .w_full()
+                .gap_4()
+                .rounded_lg()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().background)
+                .p_5()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .size(px(42.0))
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_lg()
+                                .bg(accent_soft)
+                                .child(
+                                    Icon::new(IconName::Server)
+                                        .mono()
+                                        .with_size(IconSize::Medium)
+                                        .text_color(accent),
+                                ),
+                        )
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_0p5()
+                                .child(
+                                    h_flex()
+                                        .min_w_0()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .whitespace_nowrap()
+                                                .text_base()
+                                                .font_semibold()
+                                                .child(card.title.clone()),
+                                        )
+                                        .child(status),
+                                )
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(card.address.clone()),
+                                )
+                                .when_some(
+                                    snapshot.and_then(|snapshot| snapshot.os_name.clone()),
+                                    |this, os_name| {
+                                        this.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(os_name),
+                                        )
+                                    },
+                                ),
+                        )
+                        .when_some(card.last_updated.clone(), |this, updated| {
+                            this.child(
                                 div()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .whitespace_nowrap()
+                                    .flex_shrink_0()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(card.address.clone()),
+                                    .child(t!("Monitor.updated_at", time = updated).to_string()),
                             )
-                            .when_some(
-                                snapshot.and_then(|snapshot| snapshot.os_name.clone()),
-                                |this, os_name| {
-                                    this.child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(os_name),
-                                    )
-                                },
-                            ),
-                    )
-                    .when_some(card.last_updated.clone(), |this, updated| {
-                        this.child(
-                            div()
+                        })
+                        .child(
+                            h_flex()
                                 .flex_shrink_0()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(t!("Monitor.updated_at", time = updated).to_string()),
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(t!("Monitor.card_toggle").to_string()),
+                                )
+                                .child(
+                                    Switch::new(SharedString::from(format!(
+                                        "monitor-card-toggle-{card_id}"
+                                    )))
+                                    .small()
+                                    .checked(monitored)
+                                    .tooltip(t!("Monitor.card_toggle_tooltip").to_string())
+                                    .on_click(cx.listener(move |this, checked, _, cx| {
+                                        this.set_card_monitoring(card_id, *checked, cx);
+                                    })),
+                                ),
                         )
-                    })
-                    .child(
-                        IconButton::new(
-                            SharedString::from(format!("monitor-card-refresh-{card_id}")),
-                            IconName::Refresh.mono(),
-                        )
-                        .role(IconButtonRole::Compact)
-                        .tooltip(t!("Monitor.refresh_host"))
-                        .on_click(cx.listener(|this, _, _, cx| this.restart_sampling(cx))),
-                    ),
-            )
-            .when_some(card_error(card), |this, error| {
-                this.child(
-                    div()
-                        .w_full()
-                        .rounded_md()
-                        .bg(cx.theme().danger.opacity(0.08))
-                        .px_3()
-                        .py_2()
-                        .text_xs()
-                        .text_color(cx.theme().danger)
-                        .child(error),
+                        .when(monitored, |this| {
+                            this.child(
+                                IconButton::new(
+                                    SharedString::from(format!("monitor-card-refresh-{card_id}")),
+                                    IconName::Refresh.mono(),
+                                )
+                                .role(IconButtonRole::Compact)
+                                .tooltip(t!("Monitor.refresh_host"))
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.restart_card_sampling(card_id, cx);
+                                    },
+                                )),
+                            )
+                        }),
                 )
-            })
-            .child(self.render_metrics(card, cx));
+                .when_some(card_error(card), |this, error| {
+                    this.child(
+                        div()
+                            .w_full()
+                            .rounded_md()
+                            .bg(cx.theme().danger.opacity(0.08))
+                            .px_3()
+                            .py_2()
+                            .text_xs()
+                            .text_color(cx.theme().danger)
+                            .child(error),
+                    )
+                })
+                .child(self.render_metrics(card, cx));
 
         div()
             .id(SharedString::from(format!("monitor-card-{card_id}")))
@@ -511,6 +661,10 @@ impl MonitorTab {
                 } else {
                     t!("Monitor.collecting").to_string()
                 },
+            ),
+            MonitorCardState::Idle => (
+                cx.theme().muted_foreground,
+                t!("Monitor.not_monitoring").to_string(),
             ),
             MonitorCardState::Ready => (cx.theme().success, t!("Monitor.ready").to_string()),
             MonitorCardState::Failed(_) => {
@@ -531,6 +685,9 @@ impl MonitorTab {
     }
 
     fn render_metrics(&self, card: &MonitorCard, cx: &mut Context<Self>) -> AnyElement {
+        if matches!(card.state, MonitorCardState::Idle) {
+            return self.render_idle_state(card, cx);
+        }
         let Some(snapshot) = card.snapshot.as_ref() else {
             if let MonitorCardState::Failed(_) = &card.state {
                 return h_flex()
@@ -576,6 +733,49 @@ impl MonitorTab {
                     .child(self.render_network_metric(card, snapshot, cx)),
             )
             .child(self.render_disk_section(card, snapshot, cx))
+            .into_any_element()
+    }
+
+    fn render_idle_state(&self, card: &MonitorCard, cx: &mut Context<Self>) -> AnyElement {
+        let card_id = card.connection.id.unwrap_or_default();
+        h_flex()
+            .w_full()
+            .min_h(px(120.0))
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .child(
+                Icon::new(IconName::Monitor)
+                    .mono()
+                    .with_size(IconSize::Medium)
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_semibold()
+                            .child(t!("Monitor.idle_title").to_string()),
+                    )
+                    .child(
+                        div()
+                            .max_w(px(420.0))
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("Monitor.idle_description").to_string()),
+                    ),
+            )
+            .child(
+                Button::new(SharedString::from(format!("monitor-card-start-{card_id}")))
+                    .outline()
+                    .small()
+                    .label(t!("Monitor.start_monitoring").to_string())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_card_monitoring(card_id, true, cx);
+                    })),
+            )
             .into_any_element()
     }
 
@@ -942,10 +1142,11 @@ impl TabContent for MonitorTab {
 
 impl Render for MonitorTab {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let enabled = monitored_connection_ids(cx);
         let indices = self.filtered_card_indices();
         let cards = indices
             .into_iter()
-            .map(|index| self.render_card(index, cx))
+            .map(|index| self.render_card(index, &enabled, cx))
             .collect::<Vec<_>>();
 
         v_flex()
@@ -955,7 +1156,7 @@ impl Render for MonitorTab {
             .min_w_0()
             .min_h_0()
             .bg(cx.theme().background)
-            .child(self.render_header(cx))
+            .child(self.render_header(&enabled, cx))
             .child(
                 div().flex_1().min_h_0().min_w_0().overflow_hidden().child(
                     v_flex()
@@ -980,6 +1181,21 @@ impl Render for MonitorTab {
                 ),
             )
     }
+}
+
+fn monitored_connection_ids(cx: &App) -> BTreeSet<i64> {
+    AppSettings::global(cx).monitored_connection_ids.clone()
+}
+
+fn card_is_monitored(card: &MonitorCard, enabled: &BTreeSet<i64>) -> bool {
+    card.connection.id.is_some_and(|id| enabled.contains(&id))
+}
+
+fn monitored_cards<'a>(cards: &'a [MonitorCard], enabled: &BTreeSet<i64>) -> Vec<&'a MonitorCard> {
+    cards
+        .iter()
+        .filter(|card| card_is_monitored(card, enabled))
+        .collect()
 }
 
 fn build_monitor_config(
@@ -1212,6 +1428,7 @@ fn format_uptime(seconds: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use one_core::storage::SshParams;
 
     #[test]
     fn history_keeps_only_the_latest_window() {
@@ -1223,6 +1440,38 @@ mod tests {
         assert_eq!(values.len(), MONITOR_HISTORY_LIMIT);
         assert_eq!(values[0], 4.0);
         assert_eq!(values[values.len() - 1], 33.0);
+    }
+
+    #[test]
+    fn monitored_cards_only_includes_enabled() {
+        let cards = vec![
+            monitor_card_for_test(1),
+            monitor_card_for_test(2),
+            monitor_card_for_test(3),
+        ];
+        let enabled = [2, 3]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+
+        let ids = monitored_cards(&cards, &enabled)
+            .iter()
+            .map(|card| card.connection.id.expect("card id"))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![2, 3]);
+        assert!(monitored_cards(&cards, &std::collections::BTreeSet::new()).is_empty());
+    }
+
+    fn monitor_card_for_test(id: i64) -> MonitorCard {
+        let params: SshParams = serde_json::from_value(serde_json::json!({
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "auth_method": "None",
+        }))
+        .expect("ssh params");
+        let mut connection = StoredConnection::new_ssh(format!("host-{id}"), params, None);
+        connection.id = Some(id);
+        MonitorCard::new(connection)
     }
 
     #[test]

@@ -1,11 +1,12 @@
 //! 首页连接卡片的远端资源占用（#279）。
 //!
 //! 用一次性的后台 SSH 会话采集 CPU、内存、磁盘与网络占用，不打开终端页签；
-//! 结果按连接缓存，过期后再采集。任何失败都只记 debug 日志，不影响首页交互。
+//! 结果按连接缓存，过期后再采集。只对在监控页开启「资源监控」的连接生效，
+//! 默认不采集；任何失败都只记 debug 日志，不影响首页交互。
 //!
 //! 资源条只在列表布局显示，并压成与地址同一行的紧凑形式：行高不因显示资源而变高。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder as _;
@@ -84,8 +85,10 @@ impl HomePage {
         }
 
         // 每个任务完成后都会再次调用本方法，把超出并发上限的连接继续排空。
+        let enabled = AppSettings::global(cx).monitored_connection_ids.clone();
         while self.host_metrics.in_flight.len() < HOST_METRICS_MAX_IN_FLIGHT {
-            let Some((connection_id, connection)) = self.next_host_metrics_candidate() else {
+            let Some((connection_id, connection)) = self.next_host_metrics_candidate(&enabled)
+            else {
                 break;
             };
             self.host_metrics
@@ -125,6 +128,7 @@ impl HomePage {
             };
 
             self.host_metrics.in_flight.insert(connection_id);
+            let monitored = enabled.clone();
             // SSH 建连依赖 Tokio 运行时（crates/ssh/src/ssh.rs 里的 tokio::time::timeout 等），
             // 必须走应用 Tokio runtime；cx.background_spawn 跑在 GPUI 自己的线程池上，
             // 没有 reactor，一旦开始建连就会 panic：there is no reactor running。
@@ -136,7 +140,9 @@ impl HomePage {
                 _ = this.update(cx, |this, cx| {
                     this.host_metrics.in_flight.remove(&connection_id);
                     match usage {
-                        Ok(usage) if host_metrics_enabled(cx) => {
+                        Ok(usage)
+                            if host_metrics_enabled(cx) && monitored.contains(&connection_id) =>
+                        {
                             this.host_metrics.entries.insert(
                                 connection_id,
                                 HostMetricsEntry {
@@ -159,40 +165,14 @@ impl HomePage {
         }
     }
 
-    fn next_host_metrics_candidate(&self) -> Option<(i64, one_core::storage::StoredConnection)> {
+    fn next_host_metrics_candidate(
+        &self,
+        enabled: &BTreeSet<i64>,
+    ) -> Option<(i64, one_core::storage::StoredConnection)> {
         self.connections
             .iter()
             .filter(|connection| connection.connection_type == ConnectionType::SshSftp)
-            .find_map(|connection| {
-                let connection_id = connection.id?;
-                if self.host_metrics.in_flight.contains(&connection_id) {
-                    return None;
-                }
-                if self
-                    .host_metrics
-                    .entries
-                    .get(&connection_id)
-                    .is_some_and(|entry| entry.sampled_at.elapsed() < HOST_METRICS_TTL)
-                {
-                    return None;
-                }
-                if self
-                    .host_metrics
-                    .last_attempt
-                    .get(&connection_id)
-                    .is_some_and(|attempted_at| attempted_at.elapsed() < HOST_METRICS_TTL)
-                {
-                    return None;
-                }
-                if let Ok(params) = connection.to_ssh_params()
-                    && (params.prompts_for_username()
-                        || (params.prompts_for_password()
-                            && params.auth_method.contains_password()))
-                {
-                    return None;
-                }
-                Some((connection_id, connection.clone()))
-            })
+            .find_map(|connection| host_metrics_candidate(connection, &self.host_metrics, enabled))
     }
 
     /// 列表使用的资源标签（没有缓存快照或设置关闭时返回 None）。
@@ -220,8 +200,12 @@ impl HomePage {
     }
 
     pub(crate) fn shows_host_metrics_strip(&self, connection: &StoredConnection, cx: &App) -> bool {
+        let Some(connection_id) = connection.id else {
+            return false;
+        };
         self.connection_layout == ConnectionLayout::List
             && host_metrics_enabled(cx)
+            && AppSettings::global(cx).connection_monitoring_enabled(connection_id)
             && connection.connection_type == ConnectionType::SshSftp
     }
 
@@ -249,6 +233,42 @@ impl HomePage {
 
 fn host_metrics_enabled(cx: &App) -> bool {
     AppSettings::global(cx).home_show_host_metrics
+}
+
+/// 只对用户开启了资源监控、且已过缓存/退避窗口的 SSH 连接排队。
+fn host_metrics_candidate(
+    connection: &StoredConnection,
+    cache: &HostMetricsCache,
+    enabled: &BTreeSet<i64>,
+) -> Option<(i64, StoredConnection)> {
+    let connection_id = connection.id?;
+    if !enabled.contains(&connection_id) {
+        return None;
+    }
+    if cache.in_flight.contains(&connection_id) {
+        return None;
+    }
+    if cache
+        .entries
+        .get(&connection_id)
+        .is_some_and(|entry| entry.sampled_at.elapsed() < HOST_METRICS_TTL)
+    {
+        return None;
+    }
+    if cache
+        .last_attempt
+        .get(&connection_id)
+        .is_some_and(|attempted_at| attempted_at.elapsed() < HOST_METRICS_TTL)
+    {
+        return None;
+    }
+    if let Ok(params) = connection.to_ssh_params()
+        && (params.prompts_for_username()
+            || (params.prompts_for_password() && params.auth_method.contains_password()))
+    {
+        return None;
+    }
+    Some((connection_id, connection.clone()))
 }
 
 fn render_host_metrics_detail(
@@ -592,6 +612,35 @@ mod tests {
         assert_eq!(format_network_rate(830.0), "830 B/s");
         assert_eq!(format_network_rate(2.9 * 1024.0), "2.9 KB/s");
         assert_eq!(format_network_rate(3.25 * 1024.0 * 1024.0), "3.2 MB/s");
+    }
+
+    #[test]
+    fn host_metrics_candidate_requires_per_connection_monitoring() {
+        let connection = ssh_connection_for_test(42);
+        let cache = HostMetricsCache::default();
+        let enabled = [42].into_iter().collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            host_metrics_candidate(&connection, &cache, &enabled).map(|(id, _)| id),
+            Some(42)
+        );
+        assert!(
+            host_metrics_candidate(&connection, &cache, &std::collections::BTreeSet::new())
+                .is_none()
+        );
+    }
+
+    fn ssh_connection_for_test(id: i64) -> StoredConnection {
+        let params: one_core::storage::SshParams = serde_json::from_value(serde_json::json!({
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "auth_method": "None",
+        }))
+        .expect("ssh params");
+        let mut connection = StoredConnection::new_ssh(format!("host-{id}"), params, None);
+        connection.id = Some(id);
+        connection
     }
 
     #[test]

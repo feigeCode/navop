@@ -6,7 +6,7 @@
 //! 跳过这些条目：坏条目不该毁掉整个目录浏览。
 
 use super::*;
-use russh_sftp::protocol::{File, Handle, Name, Status, Version};
+use russh_sftp::protocol::{File, Handle, Name, SftpHandle, Status, Version};
 use std::collections::HashMap;
 
 struct FakeListingServer {
@@ -44,13 +44,18 @@ impl russh_sftp::server::Handler for FakeListingServer {
         path: String,
     ) -> impl Future<Output = std::result::Result<Handle, Self::Error>> + Send {
         self.listed = false;
-        async move { Ok(Handle { id, handle: path }) }
+        async move {
+            Ok(Handle {
+                id,
+                handle: path.into(),
+            })
+        }
     }
 
     fn readdir(
         &mut self,
         id: u32,
-        _handle: String,
+        _handle: SftpHandle,
     ) -> impl Future<Output = std::result::Result<Name, Self::Error>> + Send {
         let result = if self.listed {
             Err(StatusCode::Eof)
@@ -69,7 +74,7 @@ impl russh_sftp::server::Handler for FakeListingServer {
     fn close(
         &mut self,
         id: u32,
-        _handle: String,
+        _handle: SftpHandle,
     ) -> impl Future<Output = std::result::Result<Status, Self::Error>> + Send {
         async move {
             Ok(Status {

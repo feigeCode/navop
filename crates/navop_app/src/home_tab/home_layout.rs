@@ -23,6 +23,12 @@ impl TabContent for HomePage {
     fn width_size(&self, _cx: &App) -> Option<Size> {
         Some(Size::Small)
     }
+
+    fn on_activate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        // 从监控页切回首页时，刚开启的资源监控应立即反映到连接列表，而不用等 60 秒轮询。
+        #[cfg(feature = "shell")]
+        self.refresh_host_metrics(cx);
+    }
 }
 
 impl HomePage {

@@ -7,7 +7,7 @@ use super::*;
 impl TerminalView {
     pub(super) fn handle_terminal_event(
         &mut self,
-        _terminal: &Entity<Terminal>,
+        terminal: &Entity<Terminal>,
         event: &TerminalModelEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -127,6 +127,22 @@ impl TerminalView {
                     sidebar.set_file_manager_initial_dir(reported.clone(), cx);
                     sidebar.sync_file_manager_path(reported, cx);
                 });
+            }
+            TerminalModelEvent::TmuxChanged(_) => {
+                let tmux_state = terminal.read(cx).tmux_session().cloned();
+                self.sidebar.update(cx, |sidebar, cx| {
+                    sidebar.sync_tmux_panes_state(tmux_state, cx);
+                });
+                if let Some(reported) = terminal.read(cx).tmux_reported_working_dir() {
+                    let path = reported.path.clone();
+                    self.sidebar.update(cx, |sidebar, cx| {
+                        sidebar.sync_workspace_explorer_path(path, cx);
+                        sidebar.set_file_manager_initial_dir(reported.clone(), cx);
+                        sidebar.sync_file_manager_path(reported, cx);
+                    });
+                }
+                cx.emit(TabContentEvent::StateChanged);
+                cx.notify();
             }
             TerminalModelEvent::LockStateChanged => {
                 cx.emit(TabContentEvent::StateChanged);

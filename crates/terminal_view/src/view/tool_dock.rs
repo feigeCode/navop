@@ -27,6 +27,23 @@ impl TerminalView {
         self.write_to_pty(b"\x1b[Z".to_vec(), cx);
     }
 
+    /// 将 tmux 默认 prefix 作为原始 C0 字节写入 PTY。
+    ///
+    /// app 级 `ctrl-b` 用于切换连接侧栏，但终端获得焦点时应优先把该
+    /// 按键交给终端程序，否则 tmux 默认键位（分屏、窗口切换）不可用。
+    pub(super) fn send_ctrl_b(
+        &mut self,
+        _: &SendCtrlB,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
+        self.dismiss_history_prompt();
+        self.write_to_pty(b"\x02".to_vec(), cx);
+    }
+
     pub(super) fn render_sidebar_resize_handle(
         &mut self,
         target: ResizingPanel,

@@ -318,6 +318,18 @@ impl TerminalView {
                     overrides.sync_path_with_terminal = Some(enabled);
                 });
             }
+            TerminalSidebarEvent::TmuxIntegrationChanged(enabled) => {
+                let enabled = *enabled;
+                let _ = update_settings(cx, move |settings| {
+                    settings.tmux_integration = enabled;
+                });
+            }
+            TerminalSidebarEvent::TmuxSocketChanged(socket) => {
+                let socket = socket.clone();
+                let _ = update_settings(cx, move |settings| {
+                    settings.tmux_socket = socket;
+                });
+            }
             TerminalSidebarEvent::CustomHighlightsChanged(rules) => {
                 let rules = rules.clone();
                 let _ = update_settings(cx, move |settings| {
@@ -345,6 +357,20 @@ impl TerminalView {
                         sidebar.sync_file_manager_path(reported, cx);
                     });
                 }
+            }
+            TerminalSidebarEvent::TmuxSelectWindow(window_id) => {
+                self.select_tmux_target(window_id.clone(), None, window, cx);
+            }
+            TerminalSidebarEvent::TmuxSelectPane {
+                window_id,
+                pane_id,
+            } => {
+                self.select_tmux_target(
+                    window_id.clone(),
+                    Some(pane_id.clone()),
+                    window,
+                    cx,
+                );
             }
         }
     }

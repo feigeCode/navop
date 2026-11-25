@@ -1,4 +1,6 @@
 use super::*;
+use gpui_component::Placement;
+use terminal::tmux::{TmuxControllerHandle, TmuxSplitPlacement};
 
 #[derive(Clone, Debug)]
 pub(crate) enum TerminalPaneEvent {
@@ -78,6 +80,103 @@ impl TerminalView {
             self.duplicate_source.as_ref(),
             self.terminal.read(cx).live_connection_kind(),
         )
+    }
+
+    pub(crate) fn workspace_split_supported(&self, cx: &App) -> bool {
+        self.tmux_split_context(cx).is_some() || self.duplicate_supported(cx)
+    }
+
+    pub(crate) fn split_tmux_window(
+        &self,
+        placement: Placement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((controller, pane_id)) = self.tmux_split_context(cx) else {
+            return false;
+        };
+        let placement = tmux_split_placement(placement);
+        let window_handle = window.window_handle();
+        let task = Tokio::spawn_result(cx, async move {
+            controller
+                .split_window(&pane_id, placement)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))
+        });
+        cx.spawn(async move |_this, cx| {
+            if let Err(error) = task.await {
+                let _ = cx.update_window(window_handle, |_, window, cx| {
+                    window.push_notification(
+                        Notification::error(
+                            t!(
+                                "TerminalWorkspace.tmux_split_failed",
+                                error = format!("{error:#}")
+                            )
+                            .to_string(),
+                        )
+                        .autohide(true),
+                        cx,
+                    );
+                });
+            }
+        })
+        .detach();
+        true
+    }
+
+    pub(crate) fn select_tmux_target(
+        &self,
+        window_id: String,
+        pane_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(controller) = self
+            .terminal
+            .read(cx)
+            .tmux_controller()
+            .cloned()
+        else {
+            return false;
+        };
+        self.focus_terminal(window, cx);
+        let window_handle = window.window_handle();
+        let task = Tokio::spawn_result(cx, async move {
+            match pane_id {
+                Some(pane_id) => controller.select_pane(&window_id, &pane_id).await,
+                None => controller.select_window(&window_id).await,
+            }
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+        });
+        cx.spawn(async move |_this, cx| {
+            if let Err(error) = task.await {
+                let _ = cx.update_window(window_handle, |_, window, cx| {
+                    window.push_notification(
+                        Notification::error(
+                            t!(
+                                "TerminalWorkspace.tmux_select_failed",
+                                error = format!("{error:#}")
+                            )
+                            .to_string(),
+                        )
+                        .autohide(true),
+                        cx,
+                    );
+                });
+            }
+        })
+        .detach();
+        true
+    }
+
+    fn tmux_split_context(&self, cx: &App) -> Option<(TmuxControllerHandle, String)> {
+        let terminal = self.terminal.read(cx);
+        let session = terminal
+            .tmux_session()
+            .filter(|session| session.attached)?;
+        let pane_id = session.active_pane()?.id.clone();
+        let controller = terminal.tmux_controller()?.clone();
+        Some((controller, pane_id))
     }
 
     pub(crate) fn new_from_duplicate_source(
@@ -215,6 +314,40 @@ impl TerminalView {
             terminal.live_connection_kind().is_some(),
             terminal.connection_state(),
         )
+    }
+}
+
+fn tmux_split_placement(placement: Placement) -> TmuxSplitPlacement {
+    match placement {
+        Placement::Left => TmuxSplitPlacement::Left,
+        Placement::Right => TmuxSplitPlacement::Right,
+        Placement::Top => TmuxSplitPlacement::Top,
+        Placement::Bottom => TmuxSplitPlacement::Bottom,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Placement, TmuxSplitPlacement, tmux_split_placement};
+
+    #[test]
+    fn workspace_split_placements_map_to_tmux_directions() {
+        assert_eq!(
+            tmux_split_placement(Placement::Left),
+            TmuxSplitPlacement::Left
+        );
+        assert_eq!(
+            tmux_split_placement(Placement::Right),
+            TmuxSplitPlacement::Right
+        );
+        assert_eq!(
+            tmux_split_placement(Placement::Top),
+            TmuxSplitPlacement::Top
+        );
+        assert_eq!(
+            tmux_split_placement(Placement::Bottom),
+            TmuxSplitPlacement::Bottom
+        );
     }
 }
 

@@ -9,7 +9,7 @@ use gpui::http_client::Url;
 use gpui::{App, Font, FontFallbacks, Global, font, px};
 use gpui_component::{Theme, ThemeMode};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tracing::{error, info};
@@ -1627,6 +1627,12 @@ pub struct AppSettings {
     /// 没有记录的面板保持默认右侧。
     #[serde(default)]
     pub terminal_tool_panel_placements: BTreeMap<String, SidebarPlacement>,
+    /// 是否启用 tmux 控制通道集成；受连接的禁用 Shell Integration 设置约束。
+    #[serde(default = "default_true")]
+    pub terminal_tmux_integration: bool,
+    /// 自定义 tmux socket 路径；空值表示使用 tmux 默认 socket。
+    #[serde(default)]
+    pub terminal_tmux_socket: String,
     #[serde(default)]
     pub local_terminal_profile: LocalTerminalProfileSettings,
     #[serde(default)]
@@ -1718,6 +1724,12 @@ pub struct AppSettings {
     /// 首页连接卡片是否在后台采集并显示远端 CPU/内存/磁盘占用（#279）。
     #[serde(default = "default_true")]
     pub home_show_host_metrics: bool,
+    /// 已开启「资源监控」的连接 ID。
+    ///
+    /// 监控页与首页列表共用这份选择：只有在这里的连接才会建立后台采集会话，
+    /// 默认空集合表示不为任何连接采集。
+    #[serde(default)]
+    pub monitored_connection_ids: BTreeSet<i64>,
     /// 连接列表排序方式
     #[serde(default)]
     pub connection_sort_order: ConnectionSortOrder,
@@ -2148,6 +2160,8 @@ impl Default for AppSettings {
             terminal_desktop_notification_duration: TerminalDesktopNotificationDuration::default(),
             terminal_desktop_notification_sound: default_true(),
             terminal_tool_panel_placements: BTreeMap::new(),
+            terminal_tmux_integration: true,
+            terminal_tmux_socket: String::new(),
             local_terminal_profile: LocalTerminalProfileSettings::default(),
             log_file_path: String::new(),
             log_level: LogLevel::default(),
@@ -2182,6 +2196,7 @@ impl Default for AppSettings {
             interface_density: AppearanceDensity::default(),
             home_show_recent_connections: true,
             home_show_host_metrics: true,
+            monitored_connection_ids: BTreeSet::new(),
             connection_sort_order: ConnectionSortOrder::default(),
             home_navigation_menu_expanded: true,
             connection_sidebar_expanded: true,
@@ -2452,6 +2467,20 @@ impl AppSettings {
         settings.normalize_terminal_settings();
         settings.save();
         cx.set_global(settings);
+    }
+
+    /// 该连接是否已开启资源监控（监控页与首页列表共用同一份选择）。
+    pub fn connection_monitoring_enabled(&self, connection_id: i64) -> bool {
+        self.monitored_connection_ids.contains(&connection_id)
+    }
+
+    /// 开启或关闭某连接的资源监控；返回选择是否真的发生变化。
+    pub fn set_connection_monitoring(&mut self, connection_id: i64, enabled: bool) -> bool {
+        if enabled {
+            self.monitored_connection_ids.insert(connection_id)
+        } else {
+            self.monitored_connection_ids.remove(&connection_id)
+        }
     }
 
     pub fn current_system_hotkey(&self) -> &str {
@@ -3104,6 +3133,34 @@ mod tests {
         let legacy_settings: AppSettings =
             serde_json::from_value(serde_json::json!({})).expect("empty deserialize");
         assert!(legacy_settings.home_show_host_metrics);
+    }
+
+    #[test]
+    fn connection_monitoring_defaults_off_and_round_trips() {
+        // 监控页与首页共用这份选择；默认空集合表示不为任何连接采集数据。
+        let settings = AppSettings::default();
+        assert!(settings.monitored_connection_ids.is_empty());
+        assert!(!settings.connection_monitoring_enabled(7));
+
+        let mut settings = AppSettings::default();
+        assert!(settings.set_connection_monitoring(7, true));
+        // 重复开启不产生状态变化，避免无意义的设置写盘。
+        assert!(!settings.set_connection_monitoring(7, true));
+        assert!(settings.connection_monitoring_enabled(7));
+
+        let json = serde_json::to_string(&settings).expect("serialize app settings");
+        assert!(json.contains(r#""monitored_connection_ids":[7]"#));
+        let restored: AppSettings = serde_json::from_str(&json).expect("roundtrip");
+        assert!(restored.connection_monitoring_enabled(7));
+
+        let mut disabled = restored.clone();
+        assert!(disabled.set_connection_monitoring(7, false));
+        assert!(!disabled.connection_monitoring_enabled(7));
+
+        // 旧配置缺省该字段时默认不采集。
+        let legacy: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("empty deserialize");
+        assert!(legacy.monitored_connection_ids.is_empty());
     }
 
     #[test]
@@ -4835,7 +4892,8 @@ mod tests {
                 terminal_desktop_notification_sound: sound,
                 ..AppSettings::default()
             };
-            let json = serde_json::to_string(&settings).expect("应序列化终端桌面通知时长与声音设置");
+            let json =
+                serde_json::to_string(&settings).expect("应序列化终端桌面通知时长与声音设置");
             let restored: AppSettings =
                 serde_json::from_str(&json).expect("应反序列化终端桌面通知时长与声音设置");
             assert_eq!(duration, restored.terminal_desktop_notification_duration);

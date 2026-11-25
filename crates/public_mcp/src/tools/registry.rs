@@ -1,6 +1,7 @@
 use super::{
     PublicMcpToolContext, PublicMcpToolProvider, ToolRuntimeMcpProvider, remote_ops_tool_registry,
     terminal_control_tool_registry, terminal_exec_tool_registry, terminal_read_tool_registry,
+    terminal_tmux_list_tool_registry, terminal_tmux_send_keys_tool_registry,
     terminal_write_command_tool_registry, terminal_write_keys_tool_registry,
 };
 use crate::registry::PublicMcpRegistry;
@@ -88,7 +89,9 @@ impl PublicMcpToolRegistry {
             terminal_exec_tool_registry(registry.clone()),
             terminal_control_tool_registry(registry.clone()),
             terminal_write_command_tool_registry(registry.clone()),
-            terminal_write_keys_tool_registry(registry),
+            terminal_write_keys_tool_registry(registry.clone()),
+            terminal_tmux_list_tool_registry(registry.clone()),
+            terminal_tmux_send_keys_tool_registry(registry),
         ])
     }
 
@@ -312,6 +315,15 @@ mod tests {
             ],
             client_names(&registry)
         );
+    }
+
+    #[test]
+    fn terminal_registry_exposes_tmux_pane_tools() {
+        let registry = PublicMcpToolRegistry::terminal(PublicMcpRegistry::default())
+            .expect("terminal tools should build");
+        let names = client_names(&registry);
+        assert!(names.contains(&"terminal_tmux_list_panes".to_string()));
+        assert!(names.contains(&"terminal_tmux_send_keys".to_string()));
     }
 
     #[test]

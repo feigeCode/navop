@@ -18,6 +18,7 @@ mod quick_command_panel;
 mod remote_path;
 mod server_monitor_panel;
 mod settings_panel;
+mod tmux_panes_panel;
 pub(crate) mod tool_dock;
 
 use broadcast_input_panel::{BroadcastInputPanel, BroadcastInputPanelConfig};
@@ -33,6 +34,7 @@ pub use server_monitor_panel::{
     ServerMonitorPanelEvent, probe_host_resource_usage,
 };
 pub use settings_panel::SettingsPanel;
+pub use tmux_panes_panel::{TmuxPanesPanel, TmuxPanesPanelEvent};
 
 use crate::{
     TerminalHighlightRule,
@@ -75,6 +77,7 @@ use std::sync::Arc;
 use terminal::ReportedWorkingDir;
 use terminal::resolve_reported_working_dir;
 use terminal::terminal::{SshTerminalConfig, TerminalConnectionKind};
+use terminal::tmux::TmuxSessionState;
 use workspace_explorer::{
     ExplorerFramePlacement, WorkspaceEditor, WorkspaceExplorer, WorkspaceExplorerConfig,
     WorkspaceExplorerEvent, WorkspaceTheme,
@@ -155,7 +158,8 @@ fn terminal_ai_system_instruction(connection_kind: TerminalConnectionKind) -> St
 8. 资源作用域里的 cwd / screen / selection 是这台终端此刻的现场：涉及路径或「当前目录」时直接使用，不要猜测，也不要默认 $HOME 或 /root。
 9. 需要继承当前目录、已激活虚拟环境、alias/函数或临时环境变量时，用 terminal_exec（即 terminal.exec）；省略 target 时会落到当前终端，正在前台输入时可能返回 Busy，此时不要改用 ssh_exec 去猜目录。若进入 sudo -i / su 等嵌套 shell 后 terminal_exec 一直 Busy，而提示符空闲，可用 terminal_write_command（即 terminal.write_command）直接写入一条命令，再用 terminal_read 读取可见结果。
 10. 用 ssh_exec（即 ssh.exec）做后台远程执行时，省略 cwd 会继承目标终端的当前目录；若作用域里的 cwd 与目标机器不一致（例如终端里又 ssh 到了另一台机器），必须显式传 cwd；需要干净目录时显式传 cwd（绝对路径或 $HOME）。
-11. 作用域里没有 cwd 时不要假设任何目录：先用 terminal_read 确认现场，或直接询问用户。"#
+11. 作用域里没有 cwd 时不要假设任何目录：先用 terminal_read 确认现场，或直接询问用户。
+12. 作用域里出现 tmux 时，cwd 属于 active pane；用 terminal_tmux_list_panes 查看 pane，用 terminal_tmux_send_keys 向指定 pane 写入。tmux 内 terminal_exec 可能 Busy，这是预期行为；copy-mode 下按键会被 tmux 消费。"#
     )
 }
 
@@ -366,10 +370,12 @@ pub enum SidebarPanel {
     ConnectionNotes,
     /// 服务器监控面板（仅 SSH 终端）
     ServerMonitor,
+    /// tmux session / window / pane 树
+    TmuxPanes,
 }
 
 impl SidebarPanel {
-    pub const ALL: [SidebarPanel; 8] = [
+    pub const ALL: [SidebarPanel; 9] = [
         SidebarPanel::FileExplorer,
         SidebarPanel::Settings,
         SidebarPanel::HistoryCommand,
@@ -378,6 +384,7 @@ impl SidebarPanel {
         SidebarPanel::FileManager,
         SidebarPanel::ConnectionNotes,
         SidebarPanel::ServerMonitor,
+        SidebarPanel::TmuxPanes,
     ];
 
     pub fn all() -> &'static [SidebarPanel] {
@@ -394,6 +401,7 @@ impl SidebarPanel {
             SidebarPanel::FileManager => "terminal.file-manager",
             SidebarPanel::ConnectionNotes => "terminal.connection-notes",
             SidebarPanel::ServerMonitor => "terminal.server-monitor",
+            SidebarPanel::TmuxPanes => "terminal.tmux-panes",
         }
     }
 
@@ -408,6 +416,7 @@ impl SidebarPanel {
             SidebarPanel::FileManager => Icon::new(IconName::Folder),
             SidebarPanel::ConnectionNotes => Icon::new(IconName::File),
             SidebarPanel::ServerMonitor => Icon::new(IconName::Monitor),
+            SidebarPanel::TmuxPanes => Icon::new(IconName::Terminal),
         }
     }
 
@@ -422,6 +431,7 @@ impl SidebarPanel {
             SidebarPanel::FileManager => t!("TerminalSidebar.file_manager"),
             SidebarPanel::ConnectionNotes => t!("TerminalSidebar.connection_notes"),
             SidebarPanel::ServerMonitor => t!("TerminalSidebar.server_monitor"),
+            SidebarPanel::TmuxPanes => t!("TerminalSidebar.tmux_panes"),
         }
         .into()
     }
@@ -494,6 +504,7 @@ fn terminal_sidebar_available_panels(
     has_file_manager: bool,
     has_server_monitor: bool,
     has_connection_notes: bool,
+    has_tmux_panes: bool,
     history_supported: bool,
     broadcast_supported: bool,
 ) -> Vec<SidebarPanel> {
@@ -512,6 +523,9 @@ fn terminal_sidebar_available_panels(
     }
     if has_connection_notes {
         panels.push(SidebarPanel::ConnectionNotes);
+    }
+    if has_tmux_panes {
+        panels.push(SidebarPanel::TmuxPanes);
     }
     if has_server_monitor {
         panels.push(SidebarPanel::ServerMonitor);
@@ -817,6 +831,10 @@ pub enum TerminalSidebarEvent {
     ShowLineNumbersChanged(bool),
     /// 路径与终端同步开关
     SyncPathChanged(bool),
+    /// tmux 控制通道集成开关
+    TmuxIntegrationChanged(bool),
+    /// 自定义 tmux socket 路径
+    TmuxSocketChanged(String),
     /// 自定义高亮规则变更
     CustomHighlightsChanged(Vec<TerminalHighlightRule>),
     /// 在独立页签中打开当前 SSH 连接的 SFTP 文件管理器
@@ -827,6 +845,13 @@ pub enum TerminalSidebarEvent {
     SaveAsConnection,
     /// 请求将终端当前工作目录同步到文件管理器
     SyncWorkingDir,
+    /// 选择 tmux window
+    TmuxSelectWindow(String),
+    /// 选择 tmux window 下的 pane
+    TmuxSelectPane {
+        window_id: String,
+        pane_id: String,
+    },
 }
 
 /// 需要等凭据就绪才能补建的 SSH 工具面板所需的构造输入。
@@ -863,6 +888,10 @@ pub struct TerminalSidebar {
     tool_dock: TerminalToolDockState,
     /// 设置面板
     settings_panel: Entity<SettingsPanel>,
+    /// tmux pane 树面板
+    tmux_panes_panel: Entity<TmuxPanesPanel>,
+    /// 当前是否存在可展示的 tmux session
+    tmux_panes_available: bool,
     /// 历史命令面板
     history_command_panel: Option<Entity<HistoryCommandPanel>>,
     /// AI 聊天面板
@@ -1092,6 +1121,7 @@ impl TerminalSidebar {
                 self.file_manager_panel.is_some(),
                 self.server_monitor_panel.is_some(),
                 self.connection_notes_panel.is_some(),
+                self.tmux_panes_available,
                 self.history_command_panel.is_some(),
                 self.broadcast_input_panel.is_some(),
             ));
@@ -1174,6 +1204,7 @@ impl TerminalSidebar {
                 cx,
             )
         });
+        let tmux_panes_panel = cx.new(|cx| TmuxPanesPanel::new(colors.clone(), cx));
         let broadcast_input_panel = broadcast_supported
             .then(|| broadcast_input_registry(cx))
             .flatten()
@@ -1390,6 +1421,12 @@ impl TerminalSidebar {
                     }
                     cx.emit(TerminalSidebarEvent::SyncPathChanged(*enabled));
                 }
+                settings_panel::SettingsPanelEvent::TmuxIntegrationChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::TmuxIntegrationChanged(*enabled));
+                }
+                settings_panel::SettingsPanelEvent::TmuxSocketChanged(socket) => {
+                    cx.emit(TerminalSidebarEvent::TmuxSocketChanged(socket.clone()));
+                }
                 settings_panel::SettingsPanelEvent::CustomHighlightsChanged(rules) => {
                     cx.emit(TerminalSidebarEvent::CustomHighlightsChanged(rules.clone()));
                 }
@@ -1429,7 +1466,26 @@ impl TerminalSidebar {
             },
         );
 
-        let mut subs = vec![set_sub, ai_chat_sub];
+        let tmux_panes_sub = cx.subscribe(
+            &tmux_panes_panel,
+            |_this, _, event: &TmuxPanesPanelEvent, cx| match event {
+                TmuxPanesPanelEvent::Close => {}
+                TmuxPanesPanelEvent::SelectWindow { window_id } => {
+                    cx.emit(TerminalSidebarEvent::TmuxSelectWindow(window_id.clone()));
+                }
+                TmuxPanesPanelEvent::SelectPane {
+                    window_id,
+                    pane_id,
+                } => {
+                    cx.emit(TerminalSidebarEvent::TmuxSelectPane {
+                        window_id: window_id.clone(),
+                        pane_id: pane_id.clone(),
+                    });
+                }
+            },
+        );
+
+        let mut subs = vec![set_sub, ai_chat_sub, tmux_panes_sub];
         if let Some(sub) = history_sub {
             subs.push(sub);
         }
@@ -1481,12 +1537,15 @@ impl TerminalSidebar {
             file_manager_panel.is_some(),
             server_monitor_panel.is_some(),
             connection_notes_panel.is_some(),
+            false,
             history_command_panel.is_some(),
             broadcast_input_panel.is_some(),
         );
         let mut sidebar = Self {
             tool_dock: TerminalToolDockState::new(available_panels),
             settings_panel,
+            tmux_panes_panel,
+            tmux_panes_available: false,
             history_command_panel,
             ai_chat_panel,
             ai_connection_resource,
@@ -1804,6 +1863,9 @@ impl TerminalSidebar {
                 .server_monitor_panel
                 .as_ref()
                 .map(|panel| panel.clone().into()),
+            SidebarPanel::TmuxPanes => self
+                .tmux_panes_available
+                .then(|| self.tmux_panes_panel.clone().into()),
         }
     }
 
@@ -2015,6 +2077,10 @@ impl TerminalSidebar {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_current_theme(theme_clone, window, cx);
         });
+        let colors = self.colors.clone();
+        self.tmux_panes_panel.update(cx, |panel, cx| {
+            panel.set_colors(colors, cx);
+        });
         if let Some(ref history_panel) = self.history_command_panel {
             history_panel.update(cx, |panel, cx| {
                 panel.set_colors(self.colors.clone(), cx);
@@ -2158,6 +2224,42 @@ impl TerminalSidebar {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_show_line_numbers(enabled, cx);
         });
+    }
+
+    pub fn set_tmux_integration(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_tmux_integration(enabled, cx);
+        });
+    }
+
+    pub fn set_tmux_socket(
+        &mut self,
+        socket: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_tmux_socket(socket, window, cx);
+        });
+    }
+
+    pub(crate) fn sync_tmux_panes_state(
+        &mut self,
+        state: Option<TmuxSessionState>,
+        cx: &mut Context<Self>,
+    ) {
+        let available = state.as_ref().is_some_and(|state| state.attached);
+        let should_open = available && !self.tmux_panes_available;
+        self.tmux_panes_available = available;
+        self.tmux_panes_panel.update(cx, |panel, cx| {
+            panel.set_state(state, cx);
+        });
+        self.refresh_available_panels(cx);
+        if should_open {
+            self.open_tool_internal(SidebarPanel::TmuxPanes, cx);
+        } else if !available && self.tool_dock.is_tool_open(SidebarPanel::TmuxPanes) {
+            self.close_tool(SidebarPanel::TmuxPanes, cx);
+        }
     }
 
     pub fn set_confirm_multiline_paste(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -2797,7 +2899,7 @@ mod tests {
 
     #[test]
     fn sidebar_default_panels_do_not_include_rich_input() {
-        assert_eq!(8, SidebarPanel::all().len());
+        assert_eq!(9, SidebarPanel::all().len());
         assert!(
             SidebarPanel::all()
                 .iter()
@@ -2814,7 +2916,8 @@ mod tests {
 
     #[test]
     fn history_command_panel_is_available_for_local_terminals() {
-        let panels = terminal_sidebar_available_panels(true, false, false, false, true, false);
+        let panels =
+            terminal_sidebar_available_panels(true, false, false, false, false, true, false);
 
         assert!(panels.contains(&SidebarPanel::FileExplorer));
         assert!(panels.contains(&SidebarPanel::HistoryCommand));
@@ -2822,11 +2925,12 @@ mod tests {
         assert!(!panels.contains(&SidebarPanel::FileManager));
         assert!(!panels.contains(&SidebarPanel::ConnectionNotes));
         assert!(!panels.contains(&SidebarPanel::ServerMonitor));
+        assert!(!panels.contains(&SidebarPanel::TmuxPanes));
     }
 
     #[test]
     fn history_command_panel_is_available_for_ssh_terminals() {
-        let panels = terminal_sidebar_available_panels(false, true, true, true, true, true);
+        let panels = terminal_sidebar_available_panels(false, true, true, true, true, true, true);
 
         assert!(!panels.contains(&SidebarPanel::FileExplorer));
         assert!(panels.contains(&SidebarPanel::HistoryCommand));
@@ -2834,17 +2938,18 @@ mod tests {
         assert!(panels.contains(&SidebarPanel::FileManager));
         assert!(panels.contains(&SidebarPanel::ConnectionNotes));
         assert!(panels.contains(&SidebarPanel::ServerMonitor));
+        assert!(panels.contains(&SidebarPanel::TmuxPanes));
     }
 
     #[test]
     fn ai_chat_is_available_in_the_terminal_sidebar() {
-        for (explorer, manager, monitor, notes, history, broadcast) in [
-            (true, false, false, false, true, false),
-            (false, true, true, true, true, true),
-            (false, false, false, false, false, false),
+        for (explorer, manager, monitor, notes, tmux, history, broadcast) in [
+            (true, false, false, false, false, true, false),
+            (false, true, true, true, true, true, true),
+            (false, false, false, false, false, false, false),
         ] {
             let panels = terminal_sidebar_available_panels(
-                explorer, manager, monitor, notes, history, broadcast,
+                explorer, manager, monitor, notes, tmux, history, broadcast,
             );
             assert!(
                 panels.contains(&SidebarPanel::AiChat),
@@ -2855,7 +2960,8 @@ mod tests {
 
     #[test]
     fn history_command_panel_is_not_available_for_serial_terminals() {
-        let panels = terminal_sidebar_available_panels(false, false, false, false, false, false);
+        let panels =
+            terminal_sidebar_available_panels(false, false, false, false, false, false, false);
 
         assert!(!panels.contains(&SidebarPanel::FileExplorer));
         assert!(!panels.contains(&SidebarPanel::HistoryCommand));
@@ -2863,6 +2969,7 @@ mod tests {
         assert!(!panels.contains(&SidebarPanel::FileManager));
         assert!(!panels.contains(&SidebarPanel::ConnectionNotes));
         assert!(!panels.contains(&SidebarPanel::ServerMonitor));
+        assert!(!panels.contains(&SidebarPanel::TmuxPanes));
     }
 
     #[test]

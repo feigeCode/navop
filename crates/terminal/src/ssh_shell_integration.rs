@@ -56,8 +56,11 @@ fn minified_shell_integration_body(body: &str) -> String {
 
 fn runtime_shell_integration_body() -> String {
     let script = crate::shell_integration::embedded_shell_integration_script();
-    let body =
-        minified_shell_integration_body(&script.lines().skip(3).collect::<Vec<_>>().join("\n"));
+    let body = script
+        .split_once("# __ONETCLI_BODY_START__")
+        .map(|(_, body)| body)
+        .expect("shell integration script must contain the body marker");
+    let body = minified_shell_integration_body(body);
     // zsh 的 history 关联数组只读，事后无法删除条目；靠 bootstrap 行注册的
     // zshaddhistory 钩子（见 SHELL_INTEGRATION_BOOTSTRAP_COMMAND）在入史前拦下
     // 注入行。bash 则在注入尾部按「倒序」history -d 清掉 bootstrap 行与注入行：
@@ -430,7 +433,9 @@ mod tests {
         let bootstrap = String::from_utf8(SHELL_INTEGRATION_BOOTSTRAP_COMMAND.to_vec())
             .expect("bootstrap command must be UTF-8 shell text");
         assert!(bootstrap.contains("ZSH_VERSION"));
-        assert!(bootstrap.contains("zshaddhistory_functions+=(__onetcli_suppress_runtime_history)"));
+        assert!(
+            bootstrap.contains("zshaddhistory_functions+=(__onetcli_suppress_runtime_history)")
+        );
         assert!(bootstrap.contains("ShellIntegrationBootstrap=1"));
     }
 
@@ -444,10 +449,8 @@ mod tests {
             return; // 非 macOS/Linux 环境跳过
         }
         let integration = RuntimeShellIntegration::new(true);
-        let script_path = std::env::temp_dir().join(format!(
-            "onetcli-injection-e2e-{}.sh",
-            std::process::id()
-        ));
+        let script_path =
+            std::env::temp_dir().join(format!("onetcli-injection-e2e-{}.sh", std::process::id()));
         // 两行握手序列写成脚本喂给交互 bash（\r 结尾还原 PTY 输入形态）
         let mut feed = String::new();
         feed.push_str("echo USER_MARKER_BEFORE\n");
@@ -469,7 +472,10 @@ mod tests {
             .arg("--noprofile")
             .arg("--norc")
             .arg("-i")
-            .env("HISTFILE", format!("/tmp/onetcli-hist-e2e-{}", std::process::id()))
+            .env(
+                "HISTFILE",
+                format!("/tmp/onetcli-hist-e2e-{}", std::process::id()),
+            )
             .stdin(std::fs::File::open(&script_path).expect("open feed"))
             .output()
             .expect("run interactive bash");
@@ -487,10 +493,7 @@ mod tests {
                 if !number.chars().all(|c| c.is_ascii_digit()) || number.is_empty() {
                     continue;
                 }
-                assert!(
-                    !rest.contains("ONETCLI"),
-                    "history 残留注入条目: {rest}"
-                );
+                assert!(!rest.contains("ONETCLI"), "history 残留注入条目: {rest}");
             }
         }
         // 用户命令保留，握手确实发生过
@@ -560,7 +563,8 @@ mod tests {
             .output()
             .expect("run interactive zsh");
         let _ = std::fs::remove_file(&script_path);
-        let text = strip_osc_sequences(&String::from_utf8_lossy(&output.stdout)).replace('\r', "\n");
+        let text =
+            strip_osc_sequences(&String::from_utf8_lossy(&output.stdout)).replace('\r', "\n");
 
         // fc -l 列表行形如 "  12  command"：注入大行不允许出现
         for line in text.lines() {
@@ -580,8 +584,7 @@ mod tests {
         }
         // 用户命令保留，握手确实发生过（ZPRE 行 + bootstrap 行都在列表里）
         assert!(
-            text.lines()
-                .any(|l| l.contains("USER_MARKER_BEFORE")),
+            text.lines().any(|l| l.contains("USER_MARKER_BEFORE")),
             "用户命令被误删: {text}"
         );
     }
@@ -609,7 +612,8 @@ mod tests {
         assert!(command.contains("ShellIntegrationReady=1"));
         assert!(command.contains("ShellIntegrationFailed=1"));
         assert!(command.contains("if eval"));
-        assert!(command.contains("_ONETCLI_SHELL_INTEGRATED=1"));
+        assert!(!command.contains("_ONETCLI_SHELL_INTEGRATED=1"));
+        assert!(!command.contains("__ONETCLI_BODY_START__"));
         assert!(!command.contains(".config/onetcli"));
         assert!(!command.contains(".bashrc"));
         assert!(!command.contains(".zshrc"));

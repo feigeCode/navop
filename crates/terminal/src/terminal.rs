@@ -70,6 +70,10 @@ use crate::session_logging::{
 #[cfg(not(target_os = "windows"))]
 use crate::shell_integration::embedded_shell_integration_script;
 use crate::ssh_backend::{SshBackendConnect, is_keyboard_interactive_transport_closed_failure};
+use crate::tmux::{
+    TmuxControlEvent, TmuxControllerHandle, TmuxSessionState, TmuxTarget, discover_tmux_client,
+    open_control_transport, spawn_tmux_control,
+};
 #[cfg(target_os = "windows")]
 use crate::windows_environment::{
     environment_value, merge_environment_overrides, refreshed_windows_environment,
@@ -140,6 +144,8 @@ pub enum TerminalModelEvent {
     WorkingDirChanged(crate::osc::ReportedWorkingDir),
     /// 会话锁定/解锁状态变化
     LockStateChanged,
+    /// tmux 控制通道状态变化；None 表示已断开。
+    TmuxChanged(Option<TmuxSessionState>),
 }
 
 /// 终端连接状态
@@ -1518,6 +1524,28 @@ pub struct Terminal {
     scrollback_lines: usize,
     /// 逐行到达时间；只用于左边距的时间戳展示，不进网格。
     line_timeline: SharedLineTimeline,
+    /// tmux 控制通道与当前交互 PTY 的发现状态。
+    tmux: TmuxRuntime,
+}
+
+#[derive(Default)]
+struct TmuxRuntime {
+    interactive_tty: Option<String>,
+    probe_in_flight: bool,
+    probe_last_started: Option<std::time::Instant>,
+    state: Option<TmuxSessionState>,
+    controller: Option<TmuxControllerHandle>,
+    integration_enabled: bool,
+    socket: Option<String>,
+    config_generation: u64,
+    reconnect_attempt: u8,
+    reconnect_scheduled: bool,
+}
+
+fn tmux_reconnect_delay(attempt: u8) -> Duration {
+    let exponent = u32::from(attempt.min(6));
+    Duration::from_millis(500u64.saturating_mul(1u64 << exponent))
+        .min(Duration::from_secs(30))
 }
 
 #[derive(Clone)]
@@ -1989,6 +2017,7 @@ impl Terminal {
             connection_kind: TerminalConnectionKind::Local,
             local_restart: None,
             scrollback_lines,
+            tmux: TmuxRuntime::default(),
         }
     }
 
@@ -2117,6 +2146,7 @@ impl Terminal {
                 event_proxy: event_proxy.clone(),
             }),
             scrollback_lines,
+            tmux: TmuxRuntime::default(),
         };
 
         let generation = terminal.next_connection_generation();
@@ -2450,6 +2480,7 @@ impl Terminal {
             connection_kind: TerminalConnectionKind::Ssh,
             local_restart: None,
             scrollback_lines,
+            tmux: TmuxRuntime::default(),
         };
 
         if terminal.ssh_credential_prompt_policy.requires_credentials() {
@@ -2589,6 +2620,7 @@ impl Terminal {
             connection_kind: TerminalConnectionKind::Serial,
             local_restart: None,
             scrollback_lines,
+            tmux: TmuxRuntime::default(),
         }
     }
 
@@ -2720,6 +2752,7 @@ impl Terminal {
             connection_kind: TerminalConnectionKind::Telnet,
             local_restart: None,
             scrollback_lines,
+            tmux: TmuxRuntime::default(),
         }
     }
 
@@ -2865,6 +2898,7 @@ impl Terminal {
                 connection_kind,
                 local_restart: None,
                 scrollback_lines,
+                tmux: TmuxRuntime::default(),
             },
             PendingPlaybackEventLoop {
                 event_rx,
@@ -3923,6 +3957,7 @@ impl Terminal {
             TerminalEvent::CommandStart => {
                 self.command_record_gate.command_started();
                 cx.emit(TerminalModelEvent::CommandStart);
+                self.maybe_start_tmux_probe(cx);
             }
             TerminalEvent::TitleChanged(title) => {
                 self.title = title.clone();
@@ -3970,10 +4005,252 @@ impl Terminal {
                 let accepted = self.command_record_gate.command_recorded(command);
                 self.accept_recorded_command(accepted, cx);
             }
+            TerminalEvent::NavopTty(tty) => {
+                tracing::debug!(%tty, "captured interactive terminal tty for tmux discovery");
+                self.tmux.interactive_tty = Some(tty);
+            }
+            TerminalEvent::TmuxControllerReady {
+                controller,
+                generation,
+            } => {
+                if generation != self.tmux.config_generation {
+                    controller.shutdown();
+                    return;
+                }
+                tracing::debug!("tmux controller is ready");
+                self.tmux.controller = Some(controller);
+            }
+            TerminalEvent::TmuxAttached { state, generation } => {
+                if generation != self.tmux.config_generation {
+                    return;
+                }
+                tracing::debug!(
+                    session_id = %state.session_id,
+                    windows = state.windows.len(),
+                    panes = state.panes.len(),
+                    "tmux state updated"
+                );
+                self.tmux.state = Some(state.clone());
+                self.tmux.probe_in_flight = false;
+                cx.emit(TerminalModelEvent::TmuxChanged(Some(state)));
+            }
+            TerminalEvent::TmuxChanged { state, generation } => {
+                if generation != self.tmux.config_generation {
+                    return;
+                }
+                tracing::debug!(
+                    session_id = %state.session_id,
+                    windows = state.windows.len(),
+                    panes = state.panes.len(),
+                    "tmux state updated"
+                );
+                self.tmux.state = Some(state.clone());
+                self.tmux.probe_in_flight = false;
+                self.tmux.reconnect_attempt = 0;
+                cx.emit(TerminalModelEvent::TmuxChanged(Some(state)));
+            }
+            TerminalEvent::TmuxDetached { reason, generation } => {
+                if generation != self.tmux.config_generation {
+                    return;
+                }
+                tracing::debug!(%reason, "tmux control channel detached");
+                self.tmux.state = None;
+                self.tmux.controller = None;
+                self.tmux.probe_in_flight = false;
+                cx.emit(TerminalModelEvent::TmuxChanged(None));
+                if reason != "interactive tmux client detached" {
+                    self.schedule_tmux_reconnect(cx);
+                }
+            }
+            TerminalEvent::TmuxProbeFinished { generation } => {
+                if generation != self.tmux.config_generation {
+                    return;
+                }
+                self.tmux.probe_in_flight = false;
+            }
         }
     }
 
+    fn maybe_start_tmux_probe(&mut self, cx: &mut Context<Self>) {
+        if !self.tmux.integration_enabled
+            || self.session_mode != TerminalSessionMode::Live
+            || self.tmux.probe_in_flight
+            || self.tmux.controller.is_some()
+            || self.tmux.interactive_tty.is_none()
+            || self
+                .tmux
+                .probe_last_started
+                .is_some_and(|started| started.elapsed() < Duration::from_secs(5))
+        {
+            return;
+        }
+        if self.connection_kind == TerminalConnectionKind::Ssh
+            && self
+                .ssh_config
+                .as_ref()
+                .is_none_or(|config| config.disable_shell_integration)
+        {
+            return;
+        }
+        let Some(target) = (match self.connection_kind {
+            TerminalConnectionKind::Local => Some(TmuxTarget::Local),
+            TerminalConnectionKind::Ssh => self.ssh_session_manager.clone().map(TmuxTarget::Ssh),
+            TerminalConnectionKind::Serial | TerminalConnectionKind::Telnet => None,
+        }) else {
+            return;
+        };
+        let Some(tty) = self.tmux.interactive_tty.clone() else {
+            return;
+        };
+        let socket = self.tmux.socket.clone();
+        let generation = self.tmux.config_generation;
+        let Some(event_tx) = self.event_tx.clone() else {
+            return;
+        };
+        self.tmux.probe_in_flight = true;
+        self.tmux.probe_last_started = Some(std::time::Instant::now());
+        tracing::debug!(
+            kind = ?self.connection_kind,
+            tty = %tty,
+            "starting tmux client discovery"
+        );
+        Tokio::spawn(cx, async move {
+            let mut discovered = None;
+            for delay in [
+                Duration::from_millis(250),
+                Duration::from_millis(500),
+                Duration::from_millis(750),
+            ] {
+                tokio::time::sleep(delay).await;
+                match discover_tmux_client(&target, &tty, socket.as_deref()).await {
+                    Ok(Some(found)) => {
+                        tracing::debug!(
+                            session_id = %found.session_id,
+                            version = ?found.version,
+                            "tmux client discovered"
+                        );
+                        discovered = Some(found);
+                        break;
+                    }
+                    Ok(None) => {
+                        tracing::debug!("no tmux client matched the interactive tty");
+                    }
+                    Err(error) => {
+                        tracing::debug!(%error, "tmux client discovery failed");
+                    }
+                }
+            }
+            let Some(discovered) = discovered else {
+                let _ = event_tx.send(TerminalEvent::TmuxProbeFinished { generation });
+                return;
+            };
+            let transport = match open_control_transport(
+                &target,
+                &discovered.session_id,
+                socket.as_deref(),
+            )
+            .await
+            {
+                Ok(transport) => transport,
+                Err(error) => {
+                    tracing::debug!(%error, "tmux control channel attach failed");
+                    let _ = event_tx.send(TerminalEvent::TmuxProbeFinished { generation });
+                    return;
+                }
+            };
+            let (control_tx, mut control_rx) = unbounded_channel::<TmuxControlEvent>();
+            let controller = spawn_tmux_control(
+                transport,
+                discovered.version,
+                discovered.session_id,
+                tty,
+                control_tx,
+            );
+            let _ = event_tx.send(TerminalEvent::TmuxControllerReady {
+                controller,
+                generation,
+            });
+            while let Some(event) = control_rx.recv().await {
+                let event = match event {
+                    TmuxControlEvent::Attached(state) => {
+                        TerminalEvent::TmuxAttached { state, generation }
+                    }
+                    TmuxControlEvent::Changed(state) => {
+                        TerminalEvent::TmuxChanged { state, generation }
+                    }
+                    TmuxControlEvent::Detached { reason } => TerminalEvent::TmuxDetached {
+                        reason,
+                        generation,
+                    },
+                };
+                if event_tx.send(event).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn schedule_tmux_reconnect(&mut self, cx: &mut Context<Self>) {
+        if !self.tmux.integration_enabled
+            || self.session_mode != TerminalSessionMode::Live
+            || self.tmux.reconnect_scheduled
+            || self.tmux.interactive_tty.is_none()
+        {
+            return;
+        }
+        self.tmux.reconnect_attempt = self.tmux.reconnect_attempt.saturating_add(1);
+        let delay = tmux_reconnect_delay(self.tmux.reconnect_attempt);
+        self.tmux.reconnect_scheduled = true;
+        self.tmux.probe_last_started = None;
+        tracing::debug!(
+            attempt = self.tmux.reconnect_attempt,
+            delay_ms = delay.as_millis(),
+            "scheduling tmux control reconnect"
+        );
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = this.update(cx, |terminal, cx| {
+                terminal.tmux.reconnect_scheduled = false;
+                terminal.maybe_start_tmux_probe(cx);
+            });
+        })
+        .detach();
+    }
+
     // ========== 公共 API ==========
+
+    /// 应用 tmux 集成配置；配置变化会关闭旧控制通道并按新配置重新探测。
+    pub fn configure_tmux_integration(
+        &mut self,
+        enabled: bool,
+        socket: String,
+        cx: &mut Context<Self>,
+    ) {
+        let socket = Some(socket.trim().to_string()).filter(|socket| !socket.is_empty());
+        if self.tmux.integration_enabled == enabled && self.tmux.socket == socket {
+            return;
+        }
+
+        let had_runtime_state = self.tmux.state.is_some();
+        if let Some(controller) = self.tmux.controller.take() {
+            controller.shutdown();
+        }
+        self.tmux.config_generation = self.tmux.config_generation.saturating_add(1);
+        self.tmux.integration_enabled = enabled;
+        self.tmux.socket = socket;
+        self.tmux.state = None;
+        self.tmux.probe_in_flight = false;
+        self.tmux.probe_last_started = None;
+        self.tmux.reconnect_attempt = 0;
+        self.tmux.reconnect_scheduled = false;
+        if had_runtime_state {
+            cx.emit(TerminalModelEvent::TmuxChanged(None));
+        }
+        if enabled {
+            self.maybe_start_tmux_probe(cx);
+        }
+    }
 
     /// 获取 Term 的共享引用
     pub fn term(&self) -> &Arc<FairMutex<Term<GpuiEventProxy>>> {
@@ -4011,8 +4288,20 @@ impl Terminal {
         self.connection_id
     }
 
-    /// 获取当前工作目录（由 OSC 7 更新，仅 SSH 终端）
+    /// 获取当前工作目录。
+    ///
+    /// tmux attached 时优先使用 active pane 的 `pane_current_path`；普通终端
+    /// 仍使用 OSC 7。
     pub fn current_working_dir(&self) -> Option<&str> {
+        if let Some(cwd) = self
+            .tmux
+            .state
+            .as_ref()
+            .filter(|state| state.attached)
+            .and_then(TmuxSessionState::active_cwd)
+        {
+            return Some(cwd);
+        }
         self.reported_working_dir
             .as_ref()
             .map(|reported| reported.path.as_str())
@@ -4024,6 +4313,29 @@ impl Terminal {
     /// 需要主机信息的下游（如侧边栏文件面板）应使用本方法。
     pub fn reported_working_dir(&self) -> Option<&crate::osc::ReportedWorkingDir> {
         self.reported_working_dir.as_ref()
+    }
+
+    pub fn tmux_session(&self) -> Option<&TmuxSessionState> {
+        self.tmux.state.as_ref()
+    }
+
+    pub fn tmux_controller(&self) -> Option<&TmuxControllerHandle> {
+        self.tmux.controller.as_ref()
+    }
+
+    /// tmux active pane 的路径，附带现有 OSC 7 已知的 host 信息。
+    pub fn tmux_reported_working_dir(&self) -> Option<crate::osc::ReportedWorkingDir> {
+        let path = self
+            .tmux
+            .state
+            .as_ref()
+            .filter(|state| state.attached)
+            .and_then(TmuxSessionState::active_cwd)?;
+        let host = self
+            .reported_working_dir
+            .as_ref()
+            .and_then(|reported| reported.host.as_deref());
+        Some(crate::osc::ReportedWorkingDir::new(host, path.to_string()))
     }
 
     pub fn rows(&self) -> usize {
@@ -4110,7 +4422,9 @@ impl Terminal {
     /// 返回当前终端自身已完成 X11 请求的结果。
     /// 后端安装前不得回退共享 transport 状态，否则其他标签页会被误报为成功。
     pub fn x11_status(&self) -> Option<ssh::X11ForwardingStatus> {
-        self.backend.as_ref().and_then(|backend| backend.x11_status())
+        self.backend
+            .as_ref()
+            .and_then(|backend| backend.x11_status())
     }
 
     pub fn apply_ssh_connection_update(&mut self, update: SshConnectionUpdate) -> Result<()> {
@@ -5012,6 +5326,16 @@ impl Terminal {
         drop(term);
         self.child_exited = None;
         self.reported_working_dir = None;
+        if let Some(controller) = self.tmux.controller.take() {
+            controller.shutdown();
+        }
+        self.tmux.config_generation = self.tmux.config_generation.saturating_add(1);
+        self.tmux.state = None;
+        self.tmux.interactive_tty = None;
+        self.tmux.probe_in_flight = false;
+        self.tmux.probe_last_started = None;
+        self.tmux.reconnect_attempt = 0;
+        self.tmux.reconnect_scheduled = false;
     }
 
     pub fn host_key_verification_request(&self) -> Option<HostKeyVerificationRequest> {
@@ -5122,6 +5446,9 @@ impl Terminal {
         }
         if let Some(ref backend) = self.backend {
             backend.shutdown();
+        }
+        if let Some(controller) = &self.tmux.controller {
+            controller.shutdown();
         }
         if let Ok(recording_runtime) = &self.recording_runtime {
             if let Err(error) = recording_runtime.shutdown() {
@@ -5379,7 +5706,7 @@ mod tests {
         HostKeyVerificationReason, HostKeyVerificationRequest, LocalConfig, SessionLockState,
         SshConnectionUpdate, SshCredentialPromptPolicy, TermDimensions, Terminal,
         TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder,
-        TerminalScrollProxy, TerminalSessionMode, TerminalSshCredentials,
+        TerminalScrollProxy, TerminalSessionMode, TerminalSshCredentials, TmuxRuntime,
         build_automatic_session_log_request, build_cd_command, build_ssh_base_init_commands,
         build_ssh_init_commands, clear_screen_shell_redraw_bytes, compose_ssh_init_commands,
         flush_pending_terminal_events, format_connection_error, host_key_verification_request,
@@ -5588,6 +5915,7 @@ mod tests {
             connection_kind: TerminalConnectionKind::Ssh,
             local_restart: None,
             scrollback_lines: 10_000,
+            tmux: TmuxRuntime::default(),
         }
     }
 
@@ -7954,6 +8282,7 @@ mod tests {
             connection_kind: TerminalConnectionKind::Ssh,
             local_restart: None,
             scrollback_lines: 10_000,
+            tmux: TmuxRuntime::default(),
         };
 
         let mut processor: Processor<StdSyncHandler> = Processor::new();
@@ -7992,6 +8321,56 @@ mod tests {
         assert_eq!(terminal.title(), "old title");
         assert_eq!(terminal.current_working_dir(), None);
         assert_eq!(terminal.child_exited(), None);
+    }
+
+    #[test]
+    fn tmux_active_pane_overrides_osc7_for_cwd_and_reported_path() {
+        let mut terminal =
+            test_terminal_with_recording_runtime(Terminal::create_recording_runtime(
+                unbounded_channel().0,
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ));
+        terminal.reported_working_dir = Some(crate::osc::ReportedWorkingDir::new(
+            Some("remote-host"),
+            "/old".to_string(),
+        ));
+        terminal.tmux.state = Some(crate::tmux::TmuxSessionState {
+            session_id: "$0".to_string(),
+            session_name: "main".to_string(),
+            attached: true,
+            windows: vec![crate::tmux::TmuxWindow {
+                id: "@1".to_string(),
+                index: "0".to_string(),
+                name: "editor".to_string(),
+                active: true,
+            }],
+            panes: vec![crate::tmux::TmuxPane {
+                id: "%1".to_string(),
+                window_id: "@1".to_string(),
+                width: 80,
+                height: 24,
+                window_active: true,
+                active_in_window: true,
+                cwd: Some("/tmux/project".to_string()),
+                command: "bash".to_string(),
+                command_running: None,
+                command_status: None,
+                in_mode: false,
+                title: "shell".to_string(),
+                pid: 1,
+            }],
+            ..crate::tmux::TmuxSessionState::default()
+        });
+
+        assert_eq!(terminal.current_working_dir(), Some("/tmux/project"));
+        let reported = terminal
+            .tmux_reported_working_dir()
+            .expect("tmux reported cwd");
+        assert_eq!(reported.path, "/tmux/project");
+        assert_eq!(reported.host.as_deref(), Some("remote-host"));
+
+        terminal.tmux.state = None;
+        assert_eq!(terminal.current_working_dir(), Some("/old"));
     }
 
     #[test]
@@ -8299,6 +8678,7 @@ mod tests {
             connection_kind: TerminalConnectionKind::Ssh,
             local_restart: None,
             scrollback_lines: 10_000,
+            tmux: TmuxRuntime::default(),
         };
 
         terminal.set_scrollback_lines(250_000);
@@ -8316,6 +8696,15 @@ mod tests {
 
         let error = parse_stored_telnet_params(&conn).expect_err("非法 JSON 应解析失败");
         assert!(error.contains("Telnet 连接参数损坏或不兼容"));
+    }
+
+    #[test]
+    fn tmux_reconnect_delay_uses_bounded_exponential_backoff() {
+        assert_eq!(super::tmux_reconnect_delay(0), Duration::from_millis(500));
+        assert_eq!(super::tmux_reconnect_delay(1), Duration::from_secs(1));
+        assert_eq!(super::tmux_reconnect_delay(3), Duration::from_secs(4));
+        assert_eq!(super::tmux_reconnect_delay(6), Duration::from_secs(30));
+        assert_eq!(super::tmux_reconnect_delay(u8::MAX), Duration::from_secs(30));
     }
 }
 

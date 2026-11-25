@@ -39,9 +39,7 @@ mod tests {
             "onetcli-shell-integration-test-{}.sh",
             std::process::id()
         ));
-        let script = embedded_shell_integration_script()
-            .replace("[[ $- != *i* ]] && return", ":")
-            .replace("[[ -n \"${_ONETCLI_SHELL_INTEGRATED:-}\" ]] && return", ":");
+        let script = integration_body_for_test();
         std::fs::write(&script_path, script).expect("write shell integration script");
 
         let output = Command::new(bash)
@@ -63,6 +61,69 @@ mod tests {
         assert!(stdout.contains("RESULT:cd /data/Seeyon/Comi/comi-install/config/nginx"));
     }
 
+    fn guarded_script_for_test(suffix: &str) -> std::path::PathBuf {
+        let script_path = std::env::temp_dir().join(format!(
+            "onetcli-shell-integration-guard-{}-{}.sh",
+            suffix,
+            std::process::id()
+        ));
+        let script = embedded_shell_integration_script()
+            .replacen("[[ $- != *i* ]] && return", ":", 1);
+        std::fs::write(&script_path, script).expect("write guarded integration script");
+        script_path
+    }
+
+    #[test]
+    fn tmux_pane_installs_hooks_when_parent_marker_already_exists() {
+        if !std::path::Path::new("/bin/bash").exists() {
+            return;
+        }
+        let script_path = guarded_script_for_test("tmux-pane");
+        let output = Command::new("/bin/bash")
+            .arg("--noprofile")
+            .arg("--norc")
+            .arg("-c")
+            .arg(format!(
+                "source '{}'; printf '%s' \"$PROMPT_COMMAND\"",
+                script_path.display()
+            ))
+            .env("_ONETCLI_SHELL_INTEGRATED", "%0")
+            .env("TMUX_PANE", "%0")
+            .output()
+            .expect("run bash");
+        let _ = std::fs::remove_file(&script_path);
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("__onetcli_precmd_bash"),
+            "tmux pane shell must install hooks when inherited marker belongs to another shell"
+        );
+    }
+
+    #[test]
+    fn same_shell_source_is_still_idempotent() {
+        if !std::path::Path::new("/bin/bash").exists() {
+            return;
+        }
+        let script_path = guarded_script_for_test("same-shell");
+        let output = Command::new("/bin/bash")
+            .arg("--noprofile")
+            .arg("--norc")
+            .arg("-c")
+            .arg(format!(
+                "source '{}'; first=$(printf '%s' \"$PROMPT_COMMAND\"); source '{}'; \
+                 second=$(printf '%s' \"$PROMPT_COMMAND\"); \
+                 if [[ \"$first\" == \"$second\" ]]; then printf 'IDEMPOTENT'; else printf 'CHANGED'; fi",
+                script_path.display(),
+                script_path.display()
+            ))
+            .env("_ONETCLI_SHELL_INTEGRATED", "%0")
+            .env("TMUX_PANE", "%0")
+            .output()
+            .expect("run bash");
+        let _ = std::fs::remove_file(&script_path);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("IDEMPOTENT"), "stdout: {stdout}");
+    }
+
     /// 写出可 source 的 integration 脚本（去掉交互/幂等守卫，便于在测试里直接 source）。
     fn sourceable_script_for_test(suffix: &str) -> std::path::PathBuf {
         let script_path = std::env::temp_dir().join(format!(
@@ -70,11 +131,16 @@ mod tests {
             suffix,
             std::process::id()
         ));
-        let script = embedded_shell_integration_script()
-            .replace("[[ $- != *i* ]] && return", ":")
-            .replace("[[ -n \"${_ONETCLI_SHELL_INTEGRATED:-}\" ]] && return", ":");
+        let script = integration_body_for_test();
         std::fs::write(&script_path, script).expect("write shell integration script");
         script_path
+    }
+
+    fn integration_body_for_test() -> String {
+        embedded_shell_integration_script()
+            .split_once("# __ONETCLI_BODY_START__")
+            .map(|(_, body)| body.to_string())
+            .expect("shell integration body marker")
     }
 
     /// 取脚本注册到 PROMPT_COMMAND 的钩子文本。
@@ -284,9 +350,7 @@ mod tests {
             "onetcli-shell-integration-repeat-test-{}.sh",
             std::process::id()
         ));
-        let script = embedded_shell_integration_script()
-            .replace("[[ $- != *i* ]] && return", ":")
-            .replace("[[ -n \"${_ONETCLI_SHELL_INTEGRATED:-}\" ]] && return", ":");
+        let script = integration_body_for_test();
         std::fs::write(&script_path, script).expect("write shell integration script");
 
         let output = Command::new(bash)

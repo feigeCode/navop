@@ -12,3 +12,4 @@ services:
     container_name: navop-ssh-test
     ports:
       - "127.0.0.1:2222:2222"
+      - "127.0.0.1:2223:2223"

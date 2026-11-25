@@ -124,6 +124,53 @@ pub type TerminalControlFuture =
     Pin<Box<dyn Future<Output = Result<TerminalControlResult>> + Send + 'static>>;
 pub type TerminalControlCancellation = CancellationToken;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TmuxPaneInfo {
+    pub pane_id: String,
+    pub window_id: String,
+    pub window_name: String,
+    pub active: bool,
+    pub cwd: Option<String>,
+    pub command: String,
+    pub in_mode: bool,
+    pub width: u16,
+    pub height: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TmuxPaneListResult {
+    pub session_id: String,
+    pub session_name: String,
+    pub active_pane: Option<String>,
+    pub panes: Vec<TmuxPaneInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TmuxSendKeysRequest {
+    pub pane_id: String,
+    pub keys: String,
+    pub submit: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TmuxSendKeysResult {
+    pub pane_id: String,
+    pub queued: bool,
+}
+
+pub type TerminalTmuxFuture =
+    Pin<Box<dyn Future<Output = Result<TmuxSendKeysResult>> + Send + 'static>>;
+
+pub trait TerminalTmuxSessionHandle: Send + Sync + 'static {
+    fn snapshot(&self) -> TerminalSessionSnapshot;
+    fn list_panes(&self) -> Result<TmuxPaneListResult>;
+    fn send_keys(
+        &self,
+        request: TmuxSendKeysRequest,
+        cancellation: TerminalControlCancellation,
+    ) -> TerminalTmuxFuture;
+}
+
 #[derive(Clone, Default)]
 pub struct PublicMcpRegistry {
     sessions: Arc<Mutex<HashMap<String, Arc<dyn TerminalSessionHandle>>>>,
@@ -132,6 +179,7 @@ pub struct PublicMcpRegistry {
     terminal_read_sessions: Arc<Mutex<HashMap<String, Arc<dyn TerminalReadSessionHandle>>>>,
     terminal_control_sessions: Arc<Mutex<HashMap<String, Arc<dyn TerminalControlSessionHandle>>>>,
     terminal_input_sessions: Arc<Mutex<HashMap<String, Arc<dyn TerminalInputSessionHandle>>>>,
+    terminal_tmux_sessions: Arc<Mutex<HashMap<String, Arc<dyn TerminalTmuxSessionHandle>>>>,
     command_store: RemoteCommandStore,
 }
 
@@ -169,6 +217,7 @@ impl PublicMcpRegistry {
         let terminal_exec_ids = self.terminal_exec_session_ids();
         let terminal_control_ids = self.terminal_control_session_ids();
         let terminal_input_ids = self.terminal_input_session_ids();
+        let terminal_tmux_ids = self.terminal_tmux_session_ids();
         let remote_ops_ids = self.remote_ops_session_ids();
 
         sessions
@@ -180,6 +229,7 @@ impl PublicMcpRegistry {
                     &terminal_exec_ids,
                     &terminal_control_ids,
                     &terminal_input_ids,
+                    &terminal_tmux_ids,
                     &remote_ops_ids,
                 );
                 listed_session_info(snapshot, capabilities, kind)
@@ -263,6 +313,21 @@ impl PublicMcpRegistry {
             .remove(session_id);
     }
 
+    pub fn register_terminal_tmux(&self, handle: impl TerminalTmuxSessionHandle) {
+        let snapshot = handle.snapshot();
+        self.terminal_tmux_sessions
+            .lock()
+            .expect("public MCP registry lock poisoned")
+            .insert(snapshot.session_id, Arc::new(handle));
+    }
+
+    pub fn unregister_terminal_tmux(&self, session_id: &str) {
+        self.terminal_tmux_sessions
+            .lock()
+            .expect("public MCP registry lock poisoned")
+            .remove(session_id);
+    }
+
     pub fn remote_exec(
         &self,
         session_id: &str,
@@ -323,6 +388,23 @@ impl PublicMcpRegistry {
         let handle = self.terminal_input_handle(target)?;
         ensure_visible_terminal_session(&handle.snapshot())?;
         handle.write_keys(request)
+    }
+
+    pub fn terminal_tmux_list_panes(&self, target: &str) -> Result<TmuxPaneListResult> {
+        let handle = self.terminal_tmux_handle(target)?;
+        ensure_visible_terminal_session(&handle.snapshot())?;
+        handle.list_panes()
+    }
+
+    pub async fn terminal_tmux_send_keys(
+        &self,
+        target: &str,
+        request: TmuxSendKeysRequest,
+        cancellation: CancellationToken,
+    ) -> Result<TmuxSendKeysResult> {
+        let handle = self.terminal_tmux_handle(target)?;
+        ensure_visible_terminal_session(&handle.snapshot())?;
+        handle.send_keys(request, cancellation).await
     }
 
     /// background 命令存储。执行桥用它注册命令，MCP 工具用它 poll/output/cancel。
@@ -413,6 +495,15 @@ impl PublicMcpRegistry {
             .ok_or_else(|| anyhow!(unknown_session_error(target)))
     }
 
+    fn terminal_tmux_handle(&self, target: &str) -> Result<Arc<dyn TerminalTmuxSessionHandle>> {
+        self.terminal_tmux_sessions
+            .lock()
+            .expect("public MCP registry lock poisoned")
+            .get(target)
+            .cloned()
+            .ok_or_else(|| anyhow!(unknown_session_error(target)))
+    }
+
     fn handle(&self, session_id: &str) -> Result<Arc<dyn TerminalSessionHandle>> {
         self.sessions
             .lock()
@@ -442,6 +533,15 @@ impl PublicMcpRegistry {
 
     fn terminal_input_session_ids(&self) -> HashSet<String> {
         self.terminal_input_sessions
+            .lock()
+            .expect("public MCP registry lock poisoned")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    pub fn terminal_tmux_session_ids(&self) -> HashSet<String> {
+        self.terminal_tmux_sessions
             .lock()
             .expect("public MCP registry lock poisoned")
             .keys()
@@ -499,6 +599,7 @@ fn session_capabilities(
     terminal_exec_ids: &HashSet<String>,
     terminal_control_ids: &HashSet<String>,
     terminal_input_ids: &HashSet<String>,
+    terminal_tmux_ids: &HashSet<String>,
     remote_ops_ids: &HashSet<String>,
 ) -> Vec<ResourceCapability> {
     let has_terminal_exec = terminal_exec_ids.contains(session_id);
@@ -515,6 +616,9 @@ fn session_capabilities(
     }
     if terminal_input_ids.contains(session_id) {
         capabilities.push(ResourceCapability::TerminalInput);
+    }
+    if terminal_tmux_ids.contains(session_id) {
+        capabilities.push(ResourceCapability::Tmux);
     }
     if has_remote_exec {
         capabilities.push(ResourceCapability::RemoteExec);
