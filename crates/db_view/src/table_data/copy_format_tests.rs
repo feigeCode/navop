@@ -122,6 +122,36 @@ fn json_escapes_column_names_and_only_emits_strict_json_numbers() {
 }
 
 #[test]
+fn record_json_value_keeps_row_types_and_binary_sidecar() {
+    let data = vec![vec![
+        Some("42".into()),
+        None,
+        Some("base64:AQID".into()),
+        Some("true".into()),
+    ]];
+    let typed_cells = vec![vec![
+        TableCellValue::Text("42".into()),
+        TableCellValue::Null,
+        TableCellValue::Binary(vec![1, 2, 3]),
+        TableCellValue::Text("true".into()),
+    ]];
+    let columns = vec!["id".into(), "name".into(), "blob".into(), "enabled".into()];
+    let metadata = TableMetadata::new("users");
+    let context = CopyFormatContext::new(&data, &columns, &metadata).with_typed_cells(&typed_cells);
+
+    assert_eq!(
+        CopyFormatter::record_json_value(context, 0),
+        Some(serde_json::json!({
+            "id": 42,
+            "name": null,
+            "blob": "base64:AQID",
+            "enabled": true,
+        }))
+    );
+    assert_eq!(CopyFormatter::record_json_value(context, 1), None);
+}
+
+#[test]
 fn plain_copy_formats_use_binary_sidecar_without_guessing_text() {
     let data = vec![
         vec![

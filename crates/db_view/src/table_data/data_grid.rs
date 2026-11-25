@@ -47,6 +47,7 @@ use db::{
 use gpui_component::button::ButtonVariants;
 use gpui_component::dialog::DialogButtonProps;
 use gpui_component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
+use json_view::JsonValueView;
 use one_core::connection_notifier::{ConnectionDataEvent, GlobalConnectionNotifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
@@ -3249,6 +3250,25 @@ impl DataGrid {
         cx.emit(DataGridEvent::SaveChangesRequested);
     }
 
+    fn handle_view_record_json(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((display_row_ix, value)) = self.selected_record_json(cx) else {
+            window.push_notification(t!("TableDataGrid.record_json_select_one").to_string(), cx);
+            return;
+        };
+        let json_view = cx.new(|cx| JsonValueView::new(value, window, cx));
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            dialog
+                .title(t!("TableDataGrid.record_json_title", row = display_row_ix + 1).to_string())
+                .w(px(760.))
+                .child(div().w_full().h(px(540.)).child(json_view.clone()))
+        });
+    }
+
     fn handle_large_text_editor(
         &mut self,
         _: &ClickEvent,
@@ -3669,6 +3689,34 @@ impl DataGrid {
         rows.sort();
         rows.dedup();
         rows
+    }
+
+    /// 返回当前唯一选中记录的显示行号和 JSON 对象。
+    ///
+    /// 读取的是表的强类型行数据：过滤后的显示行会先换回实际行，隐藏列也会
+    /// 保留在记录对象里，避免“看到的是当前列，查看时却丢字段”。
+    pub fn selected_record_json(&self, cx: &App) -> Option<(usize, serde_json::Value)> {
+        let selected_rows = self.selected_row_indices(cx);
+        let [display_row_ix] = selected_rows.as_slice() else {
+            return None;
+        };
+
+        let table = self.table.read(cx);
+        let delegate = table.delegate();
+        let actual_row_ix = delegate.resolve_display_row(*display_row_ix)?;
+        let columns: Vec<SharedString> = delegate
+            .column_names()
+            .into_iter()
+            .map(SharedString::from)
+            .collect();
+        let (data, binary_cells) = delegate.get_rows_with_binary_cells(&[actual_row_ix]).ok()?;
+        let typed_cells = delegate.get_typed_rows_data(&[actual_row_ix]).ok()?;
+        let metadata =
+            TableMetadata::new(self.config.table_name.clone()).with_columns(columns.clone());
+        let context = CopyFormatContext::new(&data, &columns, &metadata)
+            .with_binary_cells(&binary_cells)
+            .with_typed_cells(&typed_cells);
+        CopyFormatter::record_json_value(context, 0).map(|value| (*display_row_ix, value))
     }
 
     /// 复制当前选中行为指定类型的 SQL
@@ -4722,6 +4770,7 @@ impl DataGrid {
         let editable = self.config.editable;
         let loading = self.table.read(cx).delegate().is_loading();
         let saving = self.table.read(cx).delegate().is_saving();
+        let single_record_selected = self.selected_row_indices(cx).len() == 1;
         let data_grid = cx.entity().clone();
         // 纵向「列：值」形态没有「行 × 列」的二维落点：行增删、表内查找、
         // 大文本编辑器收起。但单元格编辑本身在纵向视图里是有落点的（一条
@@ -4803,6 +4852,14 @@ impl DataGrid {
                 )
             })
             .child(div().flex_1())
+            .child(
+                Button::new("record-json")
+                    .with_size(Size::Medium)
+                    .label("JSON")
+                    .tooltip(t!("TableDataGrid.record_json").to_string())
+                    .disabled(loading || !single_record_selected)
+                    .on_click(cx.listener(Self::handle_view_record_json)),
+            )
             .child(self.render_view_mode_button(cx))
             .child(self.render_column_visibility_button(cx))
             .child(self.render_column_locate_button(cx))
