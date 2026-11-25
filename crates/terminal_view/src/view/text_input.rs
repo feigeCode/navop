@@ -356,6 +356,15 @@ impl TerminalView {
                 Cow::Owned(s) => s.into_bytes(),
             };
             self.write_to_pty(bytes, cx);
+            return;
+        }
+
+        // 普通可打印字符由终端自己消费并停止传播：否则按键会继续进入 macOS
+        // 的 NSTextInputContext，长按被系统截获为 Press-and-Hold 重音候选浮窗，
+        // 同时抑制自动重复（vim 中长按 h/j/k/l 光标无法连续移动）。
+        if let Some(text) = crate::keys::direct_input_text(&event.keystroke) {
+            self.commit_text(text, cx);
+            cx.stop_propagation();
         }
     }
 }

@@ -9,6 +9,7 @@ one-assets = { workspace = true }
 terminal = { workspace = true }
 public_mcp = { workspace = true }
 ssh = { workspace = true }
+otp = { workspace = true }
 sftp = { workspace = true }
 sftp_transfer = { workspace = true }
 ftp = { workspace = true }

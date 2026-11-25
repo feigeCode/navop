@@ -1,6 +1,8 @@
 use crate::credential_vault::CredentialVaultView;
 use crate::home_tab::HomePage;
 use crate::license::is_feature_enabled;
+#[cfg(feature = "shell")]
+use crate::monitor_tab::MonitorTab;
 
 use crate::setting_tab::SettingsPanel;
 #[cfg(feature = "shell")]
@@ -287,6 +289,26 @@ impl HomePage {
                         let view =
                             cx.new(|cx| crate::toolbox_tab::ToolboxTab::new(home, window, cx));
                         TabItem::new("toolbox", "home", view)
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
+    #[cfg(feature = "shell")]
+    pub(crate) fn add_monitor_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tabs = self.active_tab_container(cx);
+        let connections = self.connections.clone();
+        window.defer(cx, move |window, cx| {
+            tabs.update(cx, |tabs, cx| {
+                tabs.activate_or_add_tab_lazy(
+                    "monitor",
+                    |window, cx| {
+                        let view = cx.new(|cx| MonitorTab::new(connections, window, cx));
+                        view.update(cx, |view, cx| view.restart_sampling(cx));
+                        TabItem::new("monitor", "home", view)
                     },
                     window,
                     cx,

@@ -227,6 +227,11 @@ pub(crate) fn build_table_design_from_metadata(
     let mut options = TableOptions::default();
     if let Some(table_info) = table_info {
         options.comment = table_info.comment.clone().unwrap_or_default();
+        // issue #586：既有表的引擎/字符集/排序规则必须一起带进原始设计，
+        // 否则设计器只能看到默认值，保存时也无从判断表设置是否被改动。
+        options.engine = table_info.engine.clone();
+        options.charset = table_info.charset.clone();
+        options.collation = table_info.collation.clone();
     }
 
     TableDesign {
@@ -375,7 +380,8 @@ pub struct TableDesigner {
     auto_increment_input: Entity<InputState>,
     columns_editor: Entity<ColumnsEditor>,
     indexes_editor: Entity<IndexesEditor>,
-    _charsets: Vec<CharsetInfo>,
+    engines: Vec<EngineSelectItem>,
+    charsets: Vec<CharsetInfo>,
     sql_preview_input: Entity<EditorState>,
     ddl_preview_input: Entity<EditorState>,
     preview_refresh_state: PreviewRefreshScheduleState,
@@ -519,7 +525,7 @@ impl TableDesigner {
             if engines.is_empty() {
                 SelectState::new(vec![], None, window, cx)
             } else {
-                SelectState::new(engines, Some(IndexPath::new(0)), window, cx)
+                SelectState::new(engines.clone(), Some(IndexPath::new(0)), window, cx)
             }
         });
 
@@ -654,7 +660,8 @@ impl TableDesigner {
             auto_increment_input,
             columns_editor,
             indexes_editor,
-            _charsets: charsets,
+            engines,
+            charsets,
             sql_preview_input,
             ddl_preview_input,
             preview_refresh_state: PreviewRefreshScheduleState::default(),
@@ -723,20 +730,185 @@ impl TableDesigner {
             .cloned()
             .unwrap_or_else(|| "utf8mb4".to_string());
 
-        let collations = Self::get_collations(&self.config.database_type, &selected_charset, cx);
-        let collation_items: Vec<CollationSelectItem> = collations
-            .iter()
+        let mut collations =
+            Self::get_collations(&self.config.database_type, &selected_charset, cx);
+        // issue #586：回填表的排序规则时要能在字符集切换后保住它。观察者晚于
+        // 回填执行，若无条件选回字符集默认值，用户看到的仍是「默认」。
+        // 只有当前排序规则自成一个字符集（与选中字符集不兼容）时才退到默认值，
+        // 用户手动切换字符集正属于这种情况。
+        let current_collation = self
+            .collation_select
+            .read(cx)
+            .selected_value()
             .cloned()
+            .filter(|value| !value.is_empty());
+        if let Some(collation) = current_collation.as_deref() {
+            if Self::collation_belongs_to_charset(collation, &selected_charset)
+                && !collations.iter().any(|info| info.name == collation)
+            {
+                // 服务端扩展排序规则不在插件静态列表里，补进来才能保住它。
+                collations.insert(
+                    0,
+                    CollationInfo {
+                        name: collation.to_string(),
+                        charset: selected_charset.clone(),
+                        is_default: false,
+                    },
+                );
+            }
+        }
+        let collation_items: Vec<CollationSelectItem> = collations
+            .into_iter()
             .map(|info| CollationSelectItem { info })
             .collect();
         let default_idx = collation_items
             .iter()
             .position(|c| c.info.is_default)
             .unwrap_or(0);
+        let selected_idx = current_collation
+            .and_then(|collation| {
+                collation_items
+                    .iter()
+                    .position(|item| item.info.name == collation)
+            })
+            .unwrap_or(default_idx);
 
         self.collation_select.update(cx, |state, inner_cx| {
             state.set_items(collation_items, window, inner_cx);
-            state.set_selected_index(Some(IndexPath::new(default_idx)), window, inner_cx);
+            state.set_selected_index(Some(IndexPath::new(selected_idx)), window, inner_cx);
+        });
+    }
+
+    /// 排序规则名以字符集名为前缀（`utf8mb4_0900_ai_ci`），据此判断
+    /// 它是否属于当前字符集，避免切换字符集后还挂着上一个字符集的排序规则。
+    fn collation_belongs_to_charset(collation: &str, charset: &str) -> bool {
+        collation
+            .strip_prefix(charset)
+            .is_some_and(|rest| rest.starts_with('_'))
+    }
+
+    /// issue #586：把既有表的引擎/字符集/排序规则回填到选项栏，
+    /// 并让新增列默认继承这套表设置。
+    fn apply_loaded_table_options(
+        &mut self,
+        options: &TableOptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(engine) = options.engine.as_deref().filter(|value| !value.is_empty()) {
+            // 引擎清单同样来自插件静态能力描述，服务端新引擎需要先补进列表。
+            if !self.engines.iter().any(|item| item.name == engine) {
+                self.engines.push(EngineSelectItem {
+                    name: engine.to_string(),
+                });
+                let items = self.engines.clone();
+                self.engine_select.update(cx, |state, cx| {
+                    state.set_items(items, window, cx);
+                });
+            }
+            if self
+                .engine_select
+                .read(cx)
+                .selected_value()
+                .map(String::as_str)
+                != Some(engine)
+            {
+                let engine = engine.to_string();
+                self.engine_select.update(cx, |state, cx| {
+                    state.set_selected_value(&engine, window, cx);
+                });
+            }
+        }
+
+        // 个别驱动只回传排序规则、不回传字符集；MySQL 的排序规则名本身
+        // 带字符集前缀，据此把字符集补回来，避免选项栏落回默认值。
+        let loaded_charset = options
+            .charset
+            .clone()
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                let collation = options
+                    .collation
+                    .as_deref()
+                    .filter(|value| !value.is_empty())?;
+                let charset = collation.split('_').next()?;
+                self.charsets
+                    .iter()
+                    .any(|info| info.name == charset)
+                    .then(|| charset.to_string())
+            });
+
+        if let Some(charset) = loaded_charset.as_deref() {
+            // 服务端可能返回插件静态字符集列表之外的字符集。此时必须补进
+            // 列表再选中，否则会落回第一项，保存时误改表字符集。
+            if !self.charsets.iter().any(|info| info.name == charset) {
+                self.charsets.push(CharsetInfo {
+                    name: charset.to_string(),
+                    description: charset.to_string(),
+                    default_collation: options.collation.clone().unwrap_or_default(),
+                });
+                let items: Vec<CharsetSelectItem> = self
+                    .charsets
+                    .iter()
+                    .cloned()
+                    .map(|info| CharsetSelectItem { info })
+                    .collect();
+                self.charset_select.update(cx, |state, cx| {
+                    state.set_items(items, window, cx);
+                });
+            }
+            let charset = charset.to_string();
+            self.charset_select.update(cx, |state, cx| {
+                state.set_selected_value(&charset, window, cx);
+            });
+            self.apply_loaded_charset_collations(
+                &charset,
+                options.collation.as_deref(),
+                window,
+                cx,
+            );
+        }
+
+        self.columns_editor.update(cx, |editor, cx| {
+            editor.set_table_defaults(loaded_charset, options.collation.clone());
+            cx.notify();
+        });
+    }
+
+    /// 按表字符集重建排序规则列表，并选中表自己的排序规则。
+    fn apply_loaded_charset_collations(
+        &mut self,
+        charset: &str,
+        collation: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut collations = Self::get_collations(&self.config.database_type, charset, cx);
+        if let Some(collation) = collation.filter(|value| !value.is_empty()) {
+            if !collations.iter().any(|info| info.name == collation) {
+                // 元数据里的排序规则可能不在插件的静态列表中，补进来才能显示真实值。
+                collations.insert(
+                    0,
+                    CollationInfo {
+                        name: collation.to_string(),
+                        charset: charset.to_string(),
+                        is_default: false,
+                    },
+                );
+            }
+        }
+        let items: Vec<CollationSelectItem> = collations
+            .into_iter()
+            .map(|info| CollationSelectItem { info })
+            .collect();
+        let selected_idx = collation
+            .and_then(|collation| items.iter().position(|item| item.info.name == collation))
+            .or_else(|| items.iter().position(|item| item.info.is_default))
+            .unwrap_or(0);
+
+        self.collation_select.update(cx, |state, cx| {
+            state.set_items(items, window, cx);
+            state.set_selected_index(Some(IndexPath::new(selected_idx)), window, cx);
         });
     }
 
@@ -1447,7 +1619,12 @@ impl TableDesigner {
                                 table_info.as_ref(),
                                 cx,
                             );
+                            // issue #586：表自己的引擎/字符集/排序规则要回填到
+                            // 选项栏，新增列也默认继承它们；否则编辑既有表时只
+                            // 能看到设计器的默认值。
+                            let loaded_options = original_design.options.clone();
                             designer.original_design = Some(original_design);
+                            designer.apply_loaded_table_options(&loaded_options, window, cx);
                             designer.update_previews(window, cx);
                             designer.finish_structure_load(cx);
                         });
@@ -1982,6 +2159,9 @@ pub struct ColumnsEditor {
     column_widths: [Pixels; COLUMN_EDITOR_COLUMN_COUNT],
     data_types: Vec<String>,
     charsets: Vec<CharsetInfo>,
+    /// 表级默认字符集/排序规则，新增列默认继承（issue #586）。
+    table_charset: Option<String>,
+    table_collation: Option<String>,
     database_type: DatabaseType,
     column_editor_capabilities: ColumnEditorCapabilities,
     scroll_handle: UniformListScrollHandle,
@@ -2051,6 +2231,8 @@ impl ColumnsEditor {
             column_widths: COLUMN_EDITOR_DEFAULT_WIDTHS,
             data_types,
             charsets,
+            table_charset: None,
+            table_collation: None,
             database_type,
             column_editor_capabilities,
             scroll_handle: UniformListScrollHandle::default(),
@@ -2060,6 +2242,71 @@ impl ColumnsEditor {
             _search_subscription: search_sub,
             _subscriptions: vec![],
         }
+    }
+
+    /// issue #586：记录表级字符集/排序规则，之后新增的列默认继承它们。
+    fn set_table_defaults(&mut self, charset: Option<String>, collation: Option<String>) {
+        let charset = charset.filter(|value| !value.is_empty());
+        let collation = collation.filter(|value| !value.is_empty());
+        // 服务端可能返回插件静态字符集列表之外的字符集；补进列表新增列才选得中。
+        if let Some(charset) = charset.as_deref() {
+            if !self.charsets.iter().any(|info| info.name == charset) {
+                self.charsets.push(CharsetInfo {
+                    name: charset.to_string(),
+                    description: charset.to_string(),
+                    default_collation: collation.clone().unwrap_or_default(),
+                });
+            }
+        }
+        self.table_charset = charset;
+        self.table_collation = collation;
+    }
+
+    /// 新增列的字符集候选项：表默认字符集存在时直接选中它。
+    fn new_column_charset_selection(&self) -> (Vec<CharsetSelectItem>, usize) {
+        let items: Vec<CharsetSelectItem> = std::iter::once(CharsetSelectItem {
+            info: CharsetInfo {
+                name: "".to_string(),
+                description: t!("Table.default").to_string(),
+                default_collation: "".to_string(),
+            },
+        })
+        .chain(
+            self.charsets
+                .iter()
+                .cloned()
+                .map(|info| CharsetSelectItem { info }),
+        )
+        .collect();
+        let selected = self
+            .table_charset
+            .as_deref()
+            .and_then(|charset| items.iter().position(|item| item.info.name == charset))
+            .unwrap_or(0);
+        (items, selected)
+    }
+
+    /// 新增列的排序规则候选项：跟随表默认字符集，并选中表自己的排序规则。
+    fn new_column_collation_selection(&self, cx: &App) -> (Vec<CollationSelectItem>, usize) {
+        let Some(charset) = self.table_charset.as_deref() else {
+            return (
+                vec![CollationSelectItem {
+                    info: CollationInfo {
+                        name: "".to_string(),
+                        charset: "".to_string(),
+                        is_default: true,
+                    },
+                }],
+                0,
+            );
+        };
+        let global_state = cx.global::<GlobalDbState>();
+        let plugin = global_state.db_manager.get_plugin(&self.database_type).ok();
+        Self::build_existing_collation_selection(
+            plugin.as_deref(),
+            charset,
+            self.table_collation.as_deref(),
+        )
     }
 
     fn resize_column_width(
@@ -2211,32 +2458,20 @@ impl ColumnsEditor {
         let comment_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("Table.comment").to_string()));
 
-        let charset_items: Vec<CharsetSelectItem> = std::iter::once(CharsetSelectItem {
-            info: CharsetInfo {
-                name: "".to_string(),
-                description: t!("Table.default").to_string(),
-                default_collation: "".to_string(),
-            },
-        })
-        .chain(
-            self.charsets
-                .iter()
-                .cloned()
-                .map(|info| CharsetSelectItem { info }),
-        )
-        .collect();
-        let charset_select =
-            cx.new(|cx| SelectState::new(charset_items, Some(IndexPath::new(0)), window, cx));
+        // issue #586：新增列默认继承表字符集/排序规则，而不是停在「默认」。
+        let (charset_items, charset_idx) = self.new_column_charset_selection();
+        let charset_select = cx.new(|cx| {
+            SelectState::new(charset_items, Some(IndexPath::new(charset_idx)), window, cx)
+        });
 
+        let (collation_items, collation_idx) = self.new_column_collation_selection(cx);
         let collation_select = cx.new(|cx| {
-            let items = vec![CollationSelectItem {
-                info: CollationInfo {
-                    name: "".to_string(),
-                    charset: "".to_string(),
-                    is_default: true,
-                },
-            }];
-            SelectState::new(items, Some(IndexPath::new(0)), window, cx)
+            SelectState::new(
+                collation_items,
+                Some(IndexPath::new(collation_idx)),
+                window,
+                cx,
+            )
         });
 
         let enum_values_input = cx.new(|cx| {
@@ -4385,6 +4620,71 @@ mod tests {
         assert_eq!("User table", design.options.comment);
     }
 
+    /// issue #586：既有表的引擎/字符集/排序规则要一起进入原始设计。
+    ///
+    /// 只带表注释时，设计器的选项栏永远是默认值，保存时也无从判断表设置
+    /// 是否被改动（MySQL 的 ALTER 在 original 侧为 None 时会直接跳过表选项）。
+    #[test]
+    fn test_build_table_design_from_metadata_preserves_table_options() {
+        let table_info = TableInfo {
+            name: "users".to_string(),
+            object_type: db::TableObjectType::Table,
+            schema: Some("app".to_string()),
+            comment: Some("用户表".to_string()),
+            engine: Some("InnoDB".to_string()),
+            create_time: None,
+            charset: Some("utf8mb4".to_string()),
+            collation: Some("utf8mb4_0900_ai_ci".to_string()),
+        };
+
+        let design = build_table_design_from_metadata(
+            DatabaseType::MySQL,
+            "app".to_string(),
+            "users".to_string(),
+            &[],
+            &[],
+            Some(&table_info),
+            None,
+        );
+
+        assert_eq!(Some("InnoDB"), design.options.engine.as_deref());
+        assert_eq!(Some("utf8mb4"), design.options.charset.as_deref());
+        assert_eq!(
+            Some("utf8mb4_0900_ai_ci"),
+            design.options.collation.as_deref()
+        );
+    }
+
+    /// issue #586：新增列带上表字符集/排序规则时，ADD COLUMN 要显式写出
+    /// CHARACTER SET/COLLATE；表选项本身没变，ALTER 不应附带表级设置。
+    #[test]
+    fn test_mysql_add_column_inherits_table_charset() {
+        let plugin = build_plugin(&DatabaseType::MySQL);
+        let mut original = build_design(vec![build_col("id")], vec!["id"]);
+        original.options.engine = Some("InnoDB".to_string());
+        original.options.charset = Some("utf8mb4".to_string());
+        original.options.collation = Some("utf8mb4_0900_ai_ci".to_string());
+
+        let mut added = build_col("nickname");
+        added.data_type = "VARCHAR".to_string();
+        added.length = Some(64);
+        added.is_nullable = true;
+        added.charset = Some("utf8mb4".to_string());
+        added.collation = Some("utf8mb4_0900_ai_ci".to_string());
+        let mut current = original.clone();
+        current.columns.push(added);
+
+        let sql = plugin.build_alter_table_sql(&original, &current);
+
+        assert!(sql.contains("ADD COLUMN"), "{sql}");
+        assert!(
+            sql.contains("VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"),
+            "{sql}"
+        );
+        assert!(!sql.contains("DEFAULT CHARSET"), "{sql}");
+        assert!(!sql.contains("COLLATE=utf8mb4_0900_ai_ci"), "{sql}");
+    }
+
     #[test]
     fn test_mysql_rename_sql_uses_change_column() {
         let plugin = MySqlPlugin::new();
@@ -5726,6 +6026,71 @@ mod tests {
         let (_designer, armed_at_open, _visual) = designer_window(cx, None);
 
         assert!(!armed_at_open);
+    }
+
+    /// issue #586：回填表设置后，选项栏显示表自己的字符集/排序规则，
+    /// 之后新增的列默认继承它们，而不是停在「- 默认」/「(default)」。
+    #[gpui::test]
+    fn loaded_table_options_reach_the_options_bar_and_new_columns(cx: &mut gpui::TestAppContext) {
+        let (designer, _armed_at_open, visual) = designer_window(cx, None);
+        let options = TableOptions {
+            engine: Some("InnoDB".to_string()),
+            charset: Some("utf8mb4".to_string()),
+            collation: Some("utf8mb4_0900_ai_ci".to_string()),
+            ..TableOptions::default()
+        };
+
+        visual.update(|window, cx| {
+            let columns_editor = designer.read(cx).columns_editor.clone();
+            designer.update(cx, |designer, cx| {
+                designer.apply_loaded_table_options(&options, window, cx);
+            });
+            columns_editor.update(cx, |editor, cx| editor.add_column(window, cx));
+        });
+
+        visual.read(|cx| {
+            let designer = designer.read(cx);
+            assert_eq!(
+                Some("utf8mb4".to_string()),
+                designer.charset_select.read(cx).selected_value().cloned()
+            );
+            assert_eq!(
+                Some("utf8mb4_0900_ai_ci".to_string()),
+                designer.collation_select.read(cx).selected_value().cloned()
+            );
+
+            let column = designer
+                .columns_editor
+                .read(cx)
+                .get_columns(cx)
+                .pop()
+                .expect("新增列应当存在");
+            assert_eq!(Some("utf8mb4".to_string()), column.charset);
+            assert_eq!(Some("utf8mb4_0900_ai_ci".to_string()), column.collation);
+        });
+
+        // 只回传排序规则时，从排序规则名反推字符集，不能落回默认值。
+        let collation_only = TableOptions {
+            charset: None,
+            collation: Some("utf8mb4_unicode_ci".to_string()),
+            ..TableOptions::default()
+        };
+        visual.update(|window, cx| {
+            designer.update(cx, |designer, cx| {
+                designer.apply_loaded_table_options(&collation_only, window, cx);
+            });
+        });
+        visual.read(|cx| {
+            let designer = designer.read(cx);
+            assert_eq!(
+                Some("utf8mb4".to_string()),
+                designer.charset_select.read(cx).selected_value().cloned()
+            );
+            assert_eq!(
+                Some("utf8mb4_unicode_ci".to_string()),
+                designer.collation_select.read(cx).selected_value().cloned()
+            );
+        });
     }
 
     /// 加载期间面板是加载中占位，而不是一片空白表单；加载结束后回到表单。

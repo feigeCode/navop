@@ -165,6 +165,7 @@ impl HomePage {
             menu = menu.child(self.render_nav_row(
                 match application {
                     NavigationApplication::AiWorkbench => "home-app-ai-workbench",
+                    NavigationApplication::Monitor => "home-app-monitor",
                     NavigationApplication::Team => "home-app-team",
                     NavigationApplication::Notes => "home-app-notes",
                     NavigationApplication::JsonFormatter => "home-app-json",

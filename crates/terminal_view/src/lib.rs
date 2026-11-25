@@ -43,8 +43,8 @@ pub use sidebar::{
     init_terminal_extension_panels as init_sidebar_extension_panels,
 };
 pub use sidebar::{
-    HostResourceUsage, SettingsPanel, SidebarPanel, TerminalSidebar, TerminalSidebarEvent,
-    probe_host_resource_usage,
+    HostDiskUsage, HostMonitorSession, HostMonitorSnapshot, HostResourceUsage, SettingsPanel,
+    SidebarPanel, TerminalSidebar, TerminalSidebarEvent, probe_host_resource_usage,
 };
 pub use ssh_form::{SshFormPostSaveAction, SshFormWindow, SshFormWindowConfig};
 pub use telnet_form_window::{TelnetFormWindow, TelnetFormWindowConfig};

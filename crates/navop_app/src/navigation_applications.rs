@@ -4,6 +4,7 @@ use rust_i18n::t;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NavigationApplication {
     AiWorkbench,
+    Monitor,
     Team,
     Notes,
     JsonFormatter,
@@ -17,7 +18,7 @@ pub(crate) enum NavigationApplication {
 
 pub(crate) fn home_applications(show_team: bool) -> Vec<NavigationApplication> {
     use NavigationApplication::*;
-    let mut applications = vec![AiWorkbench];
+    let mut applications = vec![Monitor, AiWorkbench];
     if show_team {
         applications.push(Team);
     }
@@ -31,7 +32,7 @@ pub(crate) fn home_applications(show_team: bool) -> Vec<NavigationApplication> {
     ]);
     // 已知主机与会话日志属于终端领域：没有终端领域的产品不展示这两个入口。
     if !crate::product::supports_shell_domain() {
-        applications.retain(|app| !matches!(app, KnownHosts | SessionLogs));
+        applications.retain(|app| !matches!(app, Monitor | KnownHosts | SessionLogs));
     }
     // 扩展页依赖 nsh 扩展宿主；没有宿主（32 位 Windows）时整块入口不展示。
     if !crate::nsh_ui_available() {
@@ -46,6 +47,7 @@ impl NavigationApplication {
             Self::AiWorkbench => {
                 t!("Settings.General.Startup.default_page_ai_workbench").to_string()
             }
+            Self::Monitor => t!("Monitor.title").to_string(),
             Self::Team => t!("TeamManagement.title").to_string(),
             Self::Notes => t!("Home.notes").to_string(),
             Self::Toolbox => t!("Home.toolbox").to_string(),
@@ -61,6 +63,7 @@ impl NavigationApplication {
     pub(crate) fn icon(self) -> one_assets::IconName {
         match self {
             Self::AiWorkbench => one_assets::IconName::AILine,
+            Self::Monitor => one_assets::IconName::Monitor,
             Self::Team => one_assets::IconName::TeamLine,
             Self::Notes => one_assets::IconName::NotesLine,
             Self::Toolbox => one_assets::IconName::LayoutDashboard,
@@ -83,6 +86,7 @@ mod tests {
     fn home_application_order_and_team_gate_are_stable() {
         use NavigationApplication::*;
         let mut with_team = vec![
+            Monitor,
             AiWorkbench,
             Team,
             Notes,
@@ -93,6 +97,7 @@ mod tests {
             SessionLogs,
         ];
         let mut without_team = vec![
+            Monitor,
             AiWorkbench,
             Notes,
             Extensions,
@@ -105,6 +110,10 @@ mod tests {
         if !crate::nsh_ui_available() {
             with_team.retain(|app| *app != Extensions);
             without_team.retain(|app| *app != Extensions);
+        }
+        if !crate::product::supports_shell_domain() {
+            with_team.retain(|app| !matches!(app, Monitor | KnownHosts | SessionLogs));
+            without_team.retain(|app| !matches!(app, Monitor | KnownHosts | SessionLogs));
         }
         assert_eq!(home_applications(true), with_team);
         assert_eq!(home_applications(false), without_team);

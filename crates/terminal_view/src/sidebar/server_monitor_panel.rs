@@ -1,6 +1,7 @@
 //! 终端侧边栏服务器监控面板
 
 use anyhow::{Context as _, Result, anyhow};
+use async_trait::async_trait;
 use chrono::Utc;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -24,9 +25,13 @@ use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::get_config_dir;
 use one_ui::{IconButton, IconButtonRole};
+use otp::OtpSecret;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
-use ssh::{ChannelEvent, RusshChannel, SshChannel, SshSessionManager};
+use ssh::{
+    ChannelEvent, KeyboardInteractiveRequest, KeyboardInteractiveResponder,
+    KeyboardInteractiveTarget, RusshChannel, SshAuth, SshChannel, SshSessionManager,
+};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -2331,6 +2336,230 @@ impl HostResourceUsage {
     }
 }
 
+/// 监控页展示的单个挂载点信息。
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostDiskUsage {
+    pub filesystem: String,
+    pub mount: String,
+    pub size_kib: u64,
+    pub available_kib: u64,
+    pub percent: f64,
+}
+
+/// 监控页使用的一份完整远端资源快照。
+///
+/// 与首页的 [`HostResourceUsage`] 不同，这里保留内存构成、逐挂载点磁盘信息、
+/// 逻辑核心数和进程数，供独立监控页绘制多指标卡片。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HostMonitorSnapshot {
+    pub os_name: Option<String>,
+    pub uptime_seconds: Option<f64>,
+    pub cpu_percent: Option<f64>,
+    pub cpu_cores: Vec<CpuUsageCore>,
+    pub memory_total_kib: Option<u64>,
+    pub memory_used_kib: Option<u64>,
+    pub memory_free_kib: Option<u64>,
+    pub memory_cached_kib: Option<u64>,
+    pub disks: Vec<HostDiskUsage>,
+    pub network_rx_bytes_per_sec: Option<f64>,
+    pub network_tx_bytes_per_sec: Option<f64>,
+    pub process_count: Option<u64>,
+    pub accelerators: Vec<AcceleratorStats>,
+}
+
+impl HostMonitorSnapshot {
+    pub fn memory_percent(&self) -> Option<f64> {
+        let total = self.memory_total_kib?;
+        let used = self.memory_used_kib?;
+        if total == 0 {
+            return None;
+        }
+        Some(used as f64 * 100.0 / total as f64)
+    }
+
+    pub fn cpu_core_count(&self) -> Option<usize> {
+        (!self.cpu_cores.is_empty()).then_some(self.cpu_cores.len())
+    }
+}
+
+/// 独立监控页使用的长连接采集会话。
+///
+/// 第一次采样会连续读取两次 CPU/网络计数，以便立即得到有意义的占用率；
+/// 后续采样复用同一 SSH 会话，并由调用方按页面刷新间隔驱动。
+pub struct HostMonitorSession {
+    session_manager: Arc<SshSessionManager>,
+    session_id: String,
+    previous_cpu: Option<Vec<CpuSnapshot>>,
+    previous_network: Option<NetworkTotals>,
+    prepared: bool,
+}
+
+impl HostMonitorSession {
+    pub fn new(mut config: crate::SshTerminalConfig, keyboard_interactive: bool) -> Self {
+        if keyboard_interactive {
+            let responder = HostMonitorMfaResponder {
+                target_password: password_from_ssh_auth(&config.ssh_config.auth),
+                jump_password: config
+                    .ssh_config
+                    .jump_server
+                    .as_ref()
+                    .and_then(|jump| password_from_ssh_auth(&jump.auth)),
+                otp: config.otp.clone(),
+            };
+            config.ssh_config.keyboard_interactive_responder =
+                Some(Arc::new(responder) as Arc<dyn KeyboardInteractiveResponder>);
+        }
+        Self {
+            session_manager: Arc::new(SshSessionManager::new(config.ssh_config)),
+            session_id: format!("host-monitor-{}", Utc::now().timestamp_millis()),
+            previous_cpu: None,
+            previous_network: None,
+            prepared: false,
+        }
+    }
+
+    pub async fn sample(&mut self) -> Result<HostMonitorSnapshot> {
+        if !self.prepared {
+            let first =
+                refresh_remote_stats(self.session_manager.clone(), &self.session_id, true).await?;
+            self.remember(&first);
+            self.prepared = true;
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+
+        let stats =
+            refresh_remote_stats(self.session_manager.clone(), &self.session_id, false).await?;
+        let cpu_usage = self
+            .previous_cpu
+            .as_ref()
+            .map(|previous| sample_cpu_usage(previous, &stats.cpu_snapshots));
+        let network_rate = match (
+            self.previous_network.as_ref(),
+            stats.network_totals.as_ref(),
+        ) {
+            (Some(previous), Some(current)) => network_sampling_interval(previous, current)
+                .map(|interval| sample_network_rates(previous, current, interval)),
+            _ => None,
+        };
+        let snapshot =
+            build_host_monitor_snapshot(&stats, cpu_usage.as_ref(), network_rate.as_ref());
+        self.remember(&stats);
+        Ok(snapshot)
+    }
+
+    pub async fn disconnect(&self) {
+        let _ = self.session_manager.disconnect().await;
+    }
+
+    fn remember(&mut self, stats: &ServerStats) {
+        if !stats.cpu_snapshots.is_empty() {
+            self.previous_cpu = Some(stats.cpu_snapshots.clone());
+        }
+        if let Some(network) = &stats.network_totals {
+            self.previous_network = Some(network.clone());
+        }
+    }
+}
+
+struct HostMonitorMfaResponder {
+    target_password: Option<String>,
+    jump_password: Option<String>,
+    otp: Option<OtpSecret>,
+}
+
+impl HostMonitorMfaResponder {
+    fn auto_answers(&self, request: &KeyboardInteractiveRequest) -> Option<Vec<String>> {
+        let password = match request.target {
+            KeyboardInteractiveTarget::JumpServer => self.jump_password.as_deref(),
+            KeyboardInteractiveTarget::TargetServer => self.target_password.as_deref(),
+        };
+        ssh::auto_answer_keyboard_interactive(
+            request,
+            self.otp.as_ref(),
+            password,
+            0,
+            otp::current_unix_seconds(),
+        )
+        .or_else(|| request.prompts.is_empty().then(Vec::new))
+        .or_else(|| {
+            let password = password?;
+            (!request.prompts.is_empty()
+                && request
+                    .prompts
+                    .iter()
+                    .all(|prompt| ssh::is_password_prompt(&prompt.prompt)))
+            .then(|| vec![password.to_string(); request.prompts.len()])
+        })
+    }
+}
+
+#[async_trait]
+impl KeyboardInteractiveResponder for HostMonitorMfaResponder {
+    async fn respond(&self, request: KeyboardInteractiveRequest) -> Result<Vec<String>> {
+        let answers = self.auto_answers(&request);
+        tracing::debug!(
+            target = ?request.target,
+            otp_configured = self.otp.is_some(),
+            password_configured = match request.target {
+                KeyboardInteractiveTarget::JumpServer => self.jump_password.is_some(),
+                KeyboardInteractiveTarget::TargetServer => self.target_password.is_some(),
+            },
+            prompts = ?request
+                .prompts
+                .iter()
+                .map(|prompt| prompt.prompt.as_str())
+                .collect::<Vec<_>>(),
+            auto_answered = answers.is_some(),
+            "host monitor keyboard-interactive request"
+        );
+        answers.ok_or_else(|| {
+            anyhow!("keyboard-interactive authentication requires unsupported manual input")
+        })
+    }
+}
+
+fn password_from_ssh_auth(auth: &SshAuth) -> Option<String> {
+    match auth {
+        SshAuth::Password(password) if !password.is_empty() => Some(password.clone()),
+        SshAuth::Chain(steps) => steps.iter().find_map(password_from_ssh_auth),
+        _ => None,
+    }
+}
+
+fn build_host_monitor_snapshot(
+    stats: &ServerStats,
+    cpu_usage: Option<&CpuUsageSample>,
+    network_rate: Option<&NetworkRateSample>,
+) -> HostMonitorSnapshot {
+    HostMonitorSnapshot {
+        os_name: stats.os.as_ref().map(|os| os.pretty_name.clone()),
+        uptime_seconds: stats.time.as_ref().and_then(|time| time.uptime_seconds),
+        cpu_percent: cpu_usage.map(|sample| sample.total_percent),
+        cpu_cores: cpu_usage
+            .map(|sample| sample.cores.clone())
+            .unwrap_or_default(),
+        memory_total_kib: stats.memory.as_ref().map(|memory| memory.total),
+        memory_used_kib: stats.memory.as_ref().map(|memory| memory.used),
+        memory_free_kib: stats.memory.as_ref().map(|memory| memory.free),
+        memory_cached_kib: stats.memory.as_ref().map(|memory| memory.buffcache),
+        disks: stats
+            .disks
+            .iter()
+            .map(|disk| HostDiskUsage {
+                filesystem: disk.fs.clone(),
+                mount: disk.mount.clone(),
+                size_kib: disk.size,
+                available_kib: disk.available,
+                percent: disk.percent,
+            })
+            .collect(),
+        network_rx_bytes_per_sec: network_rate.map(|rate| rate.rx_bytes_per_sec),
+        network_tx_bytes_per_sec: network_rate.map(|rate| rate.tx_bytes_per_sec),
+        process_count: stats.process.as_ref().map(|process| process.all),
+        accelerators: stats.accelerators.clone(),
+    }
+}
+
 #[derive(Default)]
 struct ProbeSample {
     uptime: Option<f64>,
@@ -2631,12 +2860,12 @@ fn format_bytes_per_sec(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AcceleratorVendor, CpuSnapshot, HistoryLimit, HostResourceUsage, MemoryStats,
-        NetworkTotals, ProcessEntry, REMOTE_MONITOR_SCRIPT, build_collect_command,
-        build_legacy_cleanup_command, history_points, history_tick_margin,
-        network_sampling_interval, parse_cpu_snapshot_output, parse_probe_sample_output,
-        parse_server_stats, push_history_point, sample_cpu_usage, sample_network_rates,
-        split_sections,
+        AcceleratorVendor, CpuSnapshot, HistoryLimit, HostMonitorMfaResponder, HostResourceUsage,
+        MemoryStats, NetworkRateSample, NetworkTotals, ProcessEntry, REMOTE_MONITOR_SCRIPT,
+        build_collect_command, build_host_monitor_snapshot, build_legacy_cleanup_command,
+        history_points, history_tick_margin, network_sampling_interval, parse_cpu_snapshot_output,
+        parse_probe_sample_output, parse_server_stats, push_history_point, sample_cpu_usage,
+        sample_network_rates, split_sections,
     };
 
     #[test]
@@ -2692,6 +2921,150 @@ mod tests {
             .as_deref(),
             Some("网速 ↑1.5K/s ↓2.9K/s")
         );
+    }
+
+    #[test]
+    fn host_monitor_snapshot_projects_rich_stats_for_dashboard() {
+        let stats = parse_server_stats(
+            r#"
+meta:
+  supported: true
+os:
+  type: Linux
+  prettyName: Ubuntu 24.04 LTS
+time:
+  timestamp: 100
+  uptimeSeconds: 7200
+cpu:
+  snapshot:
+    - name: "cpu"
+      loadUser: 130
+      loadSystem: 60
+      loadIdle: 910
+      loadTotal: 1100
+    - name: "cpu0"
+      loadUser: 70
+      loadSystem: 30
+      loadIdle: 450
+      loadTotal: 550
+memory:
+  total: 8192
+  free: 1024
+  used: 4096
+  buffcache: 3072
+  swapTotal: 0
+  swapUsed: 0
+  swapFree: 0
+fsSize:
+  - fs: "/dev/nvme0n1p2"
+    size: 1048576
+    available: 524288
+    percent: "50%"
+    mount: "/"
+  - fs: "/dev/nvme0n1p3"
+    size: 2097152
+    available: 419430
+    percent: "80%"
+    mount: "/data"
+network:
+  uptime: 7200
+  interfaces:
+    - name: "eth0"
+      rxBytesTotal: 9000
+      txBytesTotal: 7000
+process:
+  all: 142
+  running: 3
+  blocked: 1
+  sleeping: 138
+"#,
+        )
+        .expect("dashboard payload should parse");
+        let cpu = sample_cpu_usage(
+            &[
+                CpuSnapshot::new("cpu", 100, 40, 860, 1000),
+                CpuSnapshot::new("cpu0", 50, 20, 430, 500),
+            ],
+            &stats.cpu_snapshots,
+        );
+        let network = NetworkRateSample {
+            rx_delta: 2_000,
+            tx_delta: 1_000,
+            rx_bytes_per_sec: 2_000.0,
+            tx_bytes_per_sec: 1_000.0,
+        };
+
+        let snapshot = build_host_monitor_snapshot(&stats, Some(&cpu), Some(&network));
+
+        assert_eq!(snapshot.os_name.as_deref(), Some("Ubuntu 24.04 LTS"));
+        assert_eq!(snapshot.uptime_seconds, Some(7200.0));
+        assert_eq!(snapshot.cpu_percent, Some(50.0));
+        assert_eq!(snapshot.cpu_cores.len(), 1);
+        assert_eq!(snapshot.memory_total_kib, Some(8192));
+        assert_eq!(snapshot.memory_used_kib, Some(4096));
+        assert_eq!(snapshot.disks.len(), 2);
+        assert_eq!(snapshot.disks[1].mount, "/data");
+        assert_eq!(snapshot.disks[1].percent, 80.0);
+        assert_eq!(snapshot.network_rx_bytes_per_sec, Some(2_000.0));
+        assert_eq!(snapshot.network_tx_bytes_per_sec, Some(1_000.0));
+        assert_eq!(snapshot.process_count, Some(142));
+    }
+
+    #[test]
+    fn monitor_mfa_responder_auto_answers_password_and_totp() {
+        let responder = HostMonitorMfaResponder {
+            target_password: Some("tester-pass".to_string()),
+            jump_password: None,
+            otp: Some(
+                otp::OtpSecret::from_base32("JBSWY3DPEHPK3PXP")
+                    .expect("test OTP secret should parse"),
+            ),
+        };
+        let request = ssh::KeyboardInteractiveRequest {
+            target: ssh::KeyboardInteractiveTarget::TargetServer,
+            name: "Keyboard-interactive authentication".to_string(),
+            instructions: String::new(),
+            prompts: vec![
+                ssh::KeyboardInteractivePrompt {
+                    prompt: "Password:".to_string(),
+                    echo: false,
+                },
+                ssh::KeyboardInteractivePrompt {
+                    prompt: "Verification code:".to_string(),
+                    echo: false,
+                },
+            ],
+        };
+
+        let answers = responder
+            .auto_answers(&request)
+            .expect("password + TOTP prompts should be answered automatically");
+
+        assert_eq!(answers[0], "tester-pass");
+        assert_eq!(answers[1].len(), 6);
+        assert!(answers[1].chars().all(|ch| ch.is_ascii_digit()));
+
+        let password_only = ssh::KeyboardInteractiveRequest {
+            target: ssh::KeyboardInteractiveTarget::TargetServer,
+            name: "Keyboard-interactive authentication".to_string(),
+            instructions: String::new(),
+            prompts: vec![ssh::KeyboardInteractivePrompt {
+                prompt: "Password: ".to_string(),
+                echo: false,
+            }],
+        };
+        assert_eq!(
+            responder.auto_answers(&password_only),
+            Some(vec!["tester-pass".to_string()])
+        );
+
+        let continuation = ssh::KeyboardInteractiveRequest {
+            target: ssh::KeyboardInteractiveTarget::TargetServer,
+            name: "Keyboard-interactive authentication".to_string(),
+            instructions: String::new(),
+            prompts: Vec::new(),
+        };
+        assert_eq!(responder.auto_answers(&continuation), Some(Vec::new()));
     }
 
     #[test]

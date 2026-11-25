@@ -29,7 +29,8 @@ pub use file_manager_panel::{FileManagerPanel, FileManagerPanelEvent};
 pub use history_command_panel::{HistoryCommandPanel, HistoryCommandPanelEvent};
 pub use quick_command_panel::{QuickCommandPanel, QuickCommandPanelEvent};
 pub use server_monitor_panel::{
-    HostResourceUsage, ServerMonitorPanel, ServerMonitorPanelEvent, probe_host_resource_usage,
+    HostDiskUsage, HostMonitorSession, HostMonitorSnapshot, HostResourceUsage, ServerMonitorPanel,
+    ServerMonitorPanelEvent, probe_host_resource_usage,
 };
 pub use settings_panel::SettingsPanel;
 
