@@ -39,6 +39,15 @@ const HOME_PROGRAM_DIRS: &[&str] = &[
     ".local/share/pnpm",
 ];
 
+/// 自带安装脚本、把可执行文件放进 `$HOME/.<vendor>/bin` 的 CLI 目录。
+///
+/// 这类 CLI 既不进 Homebrew 也不进 nvm，只靠安装脚本往用户目录写一份可执行文件：
+/// Kimi CLI 的安装脚本装出 `~/.kimi-code/bin/kimi`。GUI 进程被 launchd 裁剪成
+/// `/usr/bin:/bin:/usr/sbin:/sbin` 的 PATH 里没有它，只靠 shell 的 PATH 兜底就会
+/// 在 ACP 设置页报「找不到命令 `kimi`」。
+#[cfg(not(windows))]
+const VENDOR_PROGRAM_DIRS: &[&str] = &[".kimi-code/bin"];
+
 /// 按 PATH 与 GUI 不可见目录解析外部命令。
 ///
 /// `name` 可以是裸命令名（`npx`），也可以是绝对/相对路径（此时只校验该文件）。
@@ -192,6 +201,7 @@ fn fallback_program_dirs() -> Vec<PathBuf> {
         return dirs;
     };
     dirs.extend(HOME_PROGRAM_DIRS.iter().map(|rel| home.join(rel)));
+    dirs.extend(VENDOR_PROGRAM_DIRS.iter().map(|rel| home.join(rel)));
     dirs.extend(node_version_dirs(&home));
     dirs
 }
@@ -447,5 +457,40 @@ mod tests {
     fn unix_uses_the_bare_program_name() {
         assert_eq!(vec!["npx".to_string()], executable_names("npx"));
         assert!(!needs_shell_wrapper(Path::new("/opt/homebrew/bin/npx")));
+    }
+
+    /// Kimi CLI 的安装脚本只写 `~/.kimi-code/bin`，兜底目录少了这条，
+    /// GUI（launchd PATH）里就会报「找不到命令 `kimi`」。
+    #[cfg(not(windows))]
+    #[test]
+    fn fallback_dirs_cover_vendor_self_installed_cli() {
+        let home = dirs::home_dir().expect("home dir");
+        let dirs = fallback_program_dirs();
+
+        for dir in VENDOR_PROGRAM_DIRS {
+            assert!(
+                dirs.contains(&home.join(dir)),
+                "兜底目录缺少 {dir}: {dirs:?}"
+            );
+        }
+    }
+
+    /// 进程 PATH 里没有用户目录时，仍然要从兜底目录解析出厂商自装的 CLI。
+    #[cfg(not(windows))]
+    #[test]
+    fn vendor_installed_program_resolves_from_fallback_dirs() {
+        let home = temp_dir("vendor-home");
+        let vendor = home.join(VENDOR_PROGRAM_DIRS[0]);
+        std::fs::create_dir_all(&vendor).expect("create vendor dir");
+        write_program(&vendor.join("kimi"));
+
+        let resolved = resolve_program_in(
+            "kimi",
+            Some(OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin")),
+            std::slice::from_ref(&vendor),
+        );
+
+        assert_eq!(Some(vendor.join("kimi")), resolved);
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
