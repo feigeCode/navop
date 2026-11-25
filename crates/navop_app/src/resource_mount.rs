@@ -9,7 +9,9 @@ pub const CONTENT_BUDGET: f32 = 560.0;
 /// 内容宽度的绝对硬底线；不允许靠继续压缩内容来维持多栏并排。
 pub const MIN_SIDE_BY_SIDE_CONTENT_WIDTH: f32 = 420.0;
 
+#[cfg(test)]
 const GLOBAL_NAVIGATION_WIDTH: f32 = 52.0;
+#[cfg(test)]
 const HOME_NAVIGATION_WIDTH: f32 = 184.0;
 
 /// 当前页面声明的真实资源，不代表外壳应凭空创建资源。
@@ -36,6 +38,8 @@ pub struct ResourceDeclaration {
     pub is_local: bool,
 }
 
+/// 便捷构造只服务测试：生产代码必须显式说明工作区语义。
+#[cfg(test)]
 impl ResourceDeclaration {
     pub const fn new(resource: ResourceKind) -> Self {
         Self {
@@ -261,6 +265,7 @@ pub fn plan_mount_with_navigation_width(
 }
 
 /// 默认兼容调用；窗口外壳应传入真实菜单宽度（包括折叠后的 58px）。
+#[cfg(test)]
 pub fn plan_mount(
     layout: AppLayout,
     active: &ResourceDeclaration,
@@ -390,8 +395,8 @@ mod tests {
     #[gpui::test]
     fn the_shell_handle_actually_resizes_and_persists_the_panel(cx: &mut gpui::TestAppContext) {
         use gpui::{
-            AppContext as _, Bounds, Context as _, Modifiers, MouseButton, Point,
-            VisualTestContext, WindowBounds, WindowOptions, px, size,
+            AppContext as _, Bounds, Modifiers, MouseButton, Point, VisualTestContext,
+            WindowBounds, WindowOptions, px, size,
         };
         cx.update(gpui_component::init);
         let (window, host) = cx.update(|cx| {

@@ -770,10 +770,6 @@ impl SettingsPanel {
             .map_or(0, |category| category.page_ix)
     }
 
-    fn selected_page_ix(&self, cx: &App) -> usize {
-        self.page_ix_for(self.categories.read(cx).selected, cx)
-    }
-
     fn select_page(&mut self, id: SettingsCategoryId, cx: &mut Context<Self>) {
         self.categories.update(cx, |categories, _| {
             if categories.items.iter().any(|category| category.id == id) {
@@ -2269,7 +2265,7 @@ impl Render for SettingsPanel {
         self.ensure_pages(cx);
 
         let initial_page = self.initial_page;
-        let (settings_id, mut initial_page_ix) = match initial_page {
+        let (settings_id, initial_page_ix) = match initial_page {
             InitialPage::Sync => (
                 "main-app-settings-sync",
                 self.page_ix_for(SettingsCategoryId::Sync, cx),

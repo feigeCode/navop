@@ -34,15 +34,12 @@ pub(crate) use connection_share::connection_full_info_text;
 #[derive(Clone, Copy)]
 pub(super) struct SidebarPalette {
     pub background: Hsla,
-    pub rail_background: Hsla,
     pub foreground: Hsla,
     pub muted: Hsla,
     pub hover: Hsla,
     pub selected: Hsla,
-    pub selected_border: Hsla,
     pub muted_foreground: Hsla,
     pub border: Hsla,
-    pub accent: Hsla,
 }
 
 impl SidebarPalette {
@@ -62,7 +59,6 @@ impl SidebarPalette {
         };
         Self {
             background,
-            rail_background: shade(background, dark_mode),
             foreground: cx.theme().sidebar_foreground,
             // sidebar_accent 已变为主页导航选中浅蓝；连接树行的 hover/徽标底保持中性，
             // 不随主页侧栏主题补丁变色（refinement §5.3）。
@@ -75,10 +71,8 @@ impl SidebarPalette {
                 cx.theme().list_hover
             },
             selected: cx.theme().list_active,
-            selected_border: cx.theme().list_active_border,
             muted_foreground: cx.theme().muted_foreground,
             border: cx.theme().sidebar_border,
-            accent: cx.theme().sidebar_primary,
         }
     }
 }
@@ -87,30 +81,14 @@ impl From<domain_api::SidebarColors> for SidebarPalette {
     fn from(colors: domain_api::SidebarColors) -> Self {
         Self {
             background: colors.background,
-            rail_background: shade(colors.background, true),
             foreground: colors.foreground,
             muted: colors.muted,
             hover: colors.muted,
             selected: hsla(colors.accent.h, colors.accent.s, colors.accent.l, 0.18),
-            selected_border: colors.accent,
             muted_foreground: colors.muted_foreground,
             border: colors.border,
-            accent: colors.accent,
         }
     }
-}
-
-/// Slightly darken a background color so the tree header stays visually
-/// distinct from the connection panel without turning nearly black in dark
-/// terminal themes.
-fn shade(color: Hsla, dark_mode: bool) -> Hsla {
-    let amount = if dark_mode { -0.02 } else { -0.015 };
-    hsla(
-        color.h,
-        color.s,
-        (color.l + amount).clamp(0.0, 1.0),
-        color.a,
-    )
 }
 
 /// 行悬停底色：贴着面板底色抬一层——浅色壳上加深、深色壳上提亮。
@@ -319,14 +297,6 @@ impl PersistentConnectionSidebar {
         }
     }
 
-    pub(crate) fn set_home_navigation_layout(&mut self, cx: &mut Context<Self>) {
-        if !self.home_embedded || !self.home_navigation_layout {
-            self.home_embedded = true;
-            self.home_navigation_layout = true;
-            cx.notify();
-        }
-    }
-
     pub(crate) fn set_tree_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
         if self.tree_expanded != expanded {
             self.tree_expanded = expanded;
@@ -340,15 +310,6 @@ impl PersistentConnectionSidebar {
 
     pub(crate) fn is_auto_hide_tree(&self) -> bool {
         self.auto_hide_tree
-    }
-
-    /// 非自动隐藏模式下，连接树作为与终端并排的分割面板渲染，而不是浮层。
-    pub(crate) fn render_docked_connection_tree(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        self.render_docked_tree(cx)
     }
 
     /// 同一个连接树 Entity 由外壳按资源计划换宿主；不创建第二棵树或重新加载连接。

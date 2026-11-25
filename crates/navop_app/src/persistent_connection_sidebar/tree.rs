@@ -38,12 +38,6 @@ impl PersistentConnectionSidebar {
         self.render_tree_impl(Some(width), cx)
     }
 
-    /// 停靠渲染（docked=true 时树从窗口顶部开始，macOS 头部需避让红绿灯）。
-    pub(crate) fn render_docked_tree(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
-        self.home_embedded = false;
-        self.render_tree_impl(Some(self.tree_width), cx)
-    }
-
     pub(super) fn render_connection_tree(
         &mut self,
         _palette: SidebarPalette,
@@ -488,26 +482,26 @@ mod tests {
             .split("fn render_home_tree")
             .nth(1)
             .expect("home tree entry exists")
-            .split("fn render_docked_tree")
+            .split("fn render_home_navigation_tree")
+            .next()
+            .unwrap();
+        let navigation = implementation
+            .split("fn render_home_navigation_tree")
+            .nth(1)
+            .expect("home navigation tree entry exists")
+            .split("fn render_connection_tree")
             .next()
             .unwrap();
         let docked = implementation
-            .split("fn render_docked_tree")
+            .split("fn render_connection_tree")
             .nth(1)
             .expect("docked tree entry exists")
-            .split("fn render_connection_tree")
-            .next()
-            .unwrap();
-        let floating = implementation
-            .split("fn render_connection_tree")
-            .nth(1)
-            .expect("floating tree entry exists")
             .split("fn render_tree_impl")
             .next()
             .unwrap();
 
-        assert!(home.contains("self.home_embedded = true"));
+        assert!(home.contains("self.home_navigation_layout = false"));
+        assert!(navigation.contains("self.home_navigation_layout = true"));
         assert!(docked.contains("self.home_embedded = false"));
-        assert!(floating.contains("self.home_embedded = false"));
     }
 }
