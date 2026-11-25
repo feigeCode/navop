@@ -1276,6 +1276,29 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_terminal_without_tmux_does_not_register_tmux_tools() {
+        let registry = PublicMcpRegistry::default();
+        let registration = TerminalPublicMcpRegistration {
+            session_id: "terminal-1".to_string(),
+            state: Arc::new(Mutex::new(snapshot(McpConnectionState::Connected))),
+            registry: registry.clone(),
+            exec: Arc::new(Mutex::new(None)),
+            control: Arc::new(Mutex::new(None)),
+            input: Arc::new(Mutex::new(None)),
+            tmux_state: Arc::new(Mutex::new(None)),
+            tmux_controller: Arc::new(Mutex::new(None)),
+            terminal_exec_registered: std::sync::atomic::AtomicBool::new(false),
+            terminal_control_registered: std::sync::atomic::AtomicBool::new(false),
+            terminal_input_registered: std::sync::atomic::AtomicBool::new(false),
+            terminal_tmux_registered: std::sync::atomic::AtomicBool::new(false),
+        };
+
+        registration.ensure_terminal_tmux_registered();
+
+        assert!(registry.terminal_tmux_session_ids().is_empty());
+    }
+
+    #[test]
     fn tmux_handle_projects_cached_state_to_pane_info() {
         let state = Arc::new(Mutex::new(snapshot(McpConnectionState::Connected)));
         let tmux_state = Arc::new(Mutex::new(Some(TmuxSessionState {
