@@ -1,9 +1,10 @@
-//! 系统桌面通知桥接（当前实现 Windows 原生 Toast）。
+//! 系统桌面通知桥接（Windows Toast / macOS 通知中心 / Linux freedesktop 通知）。
 //!
 //! 当终端或子视图发出 [`TabAttention`]（例如 CLI 工具通过 OSC 9 / OSC 777
-//! 发送的审批请求或任务完成通知）且满足触发条件时，弹出 Windows 系统通知；
-//! 点击通知后通过 [`crate::integration::tray::activate_session_from_external`]
-//! 安全投递回 GPUI 前台任务，唤醒主窗口并切换到对应标签页。
+//! 发送的审批请求或任务完成通知）且满足触发条件时，弹出当前平台的系统通知。
+//! Windows 与 Linux 上点击通知会通过
+//! [`crate::integration::tray::activate_session_from_external`] 安全投递回 GPUI
+//! 前台任务，唤醒主窗口并切换到对应标签页；macOS 的点击由通知中心激活应用本身。
 
 use one_core::settings::{
     AppSettings, TerminalDesktopNotificationDuration, TerminalDesktopNotificationMode,
@@ -27,6 +28,73 @@ impl DesktopNotificationOptions {
             duration: settings.terminal_desktop_notification_duration,
             sound_enabled: settings.terminal_desktop_notification_sound,
         }
+    }
+}
+
+/// 当前平台系统通知的能力矩阵。
+///
+/// 三个平台的系统通知模型差异很大，设置页只应展示真正生效的选项：
+///
+/// - Windows Toast：停留时长、提示音、点击回跳标签页全都支持。
+/// - macOS 通知中心：停留时长由系统（通知中心 / 专注模式）决定，提示音可指定系统音效，
+///   点击通知只会激活应用，无法定位到具体标签页。
+/// - Linux freedesktop 通知：停留时长映射到 `expire_timeout`，提示音由各通知守护进程
+///   自行决定（不暴露开关），点击「打开」动作可以回跳标签页。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotificationSupport {
+    /// 当前平台是否有可用的系统通知后端。
+    pub system_notification: bool,
+    /// 「停留时长」设置是否生效。
+    pub duration: bool,
+    /// 「提示音」设置是否生效。
+    pub sound: bool,
+    /// 点击通知是否能回到触发它的标签页。
+    pub click_activation: bool,
+}
+
+/// 当前平台的系统通知能力。
+#[must_use]
+pub const fn support() -> NotificationSupport {
+    if cfg!(target_os = "windows") {
+        NotificationSupport {
+            system_notification: true,
+            duration: true,
+            sound: true,
+            click_activation: true,
+        }
+    } else if cfg!(target_os = "macos") {
+        NotificationSupport {
+            system_notification: true,
+            duration: false,
+            sound: true,
+            click_activation: false,
+        }
+    } else if cfg!(target_os = "linux") {
+        NotificationSupport {
+            system_notification: true,
+            duration: true,
+            sound: false,
+            click_activation: true,
+        }
+    } else {
+        NotificationSupport {
+            system_notification: false,
+            duration: false,
+            sound: false,
+            click_activation: false,
+        }
+    }
+}
+
+/// 把「停留时长」换算成毫秒。
+///
+/// Linux 通知用 `expire_timeout` 表达停留时长；Windows Toast 的 `duration` 属性
+/// 只有 long / short 两档语义，走 [`TerminalDesktopNotificationDuration::as_str`]。
+#[must_use]
+pub const fn duration_millis(duration: TerminalDesktopNotificationDuration) -> u32 {
+    match duration {
+        TerminalDesktopNotificationDuration::Long => 25_000,
+        TerminalDesktopNotificationDuration::Short => 5_000,
     }
 }
 
@@ -284,7 +352,126 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+mod platform {
+    use notify_rust::Notification;
+    use objc2_foundation::NSBundle;
+    use one_core::settings::TerminalDesktopNotificationDuration;
+    use std::sync::Once;
+
+    /// 系统自带的提示音名称，关闭提示音时不下发 `soundName`，由系统静音弹出。
+    const NOTIFICATION_SOUND: &str = "Glass";
+
+    /// 发送者身份只需要、也只能设置一次。
+    static APPLICATION_IDENTITY: Once = Once::new();
+
+    /// 把通知发送者设成当前 app bundle 的 identifier。
+    ///
+    /// `notify-rust` 的 macOS 后端（`mac-notification-sys`）在首次发送前会用
+    /// AppleScript 去解析一个叫 `use_default` 的 app，解析失败就回退成
+    /// `com.apple.Finder`；而 macOS 现在不允许 legacy 通知客户端冒用现代客户端
+    /// （Finder）的身份，`usernoted` 会直接拒绝这条通知（日志里是
+    /// `You can't mix modern clients with legacy clients`）。所以这里赶在第一次发送
+    /// 之前显式设成我们自己的 bundle id；未打包的 `cargo run` 没有 bundle id，
+    /// 只能退回默认身份，系统通知不会弹出。
+    fn ensure_application_identity() {
+        APPLICATION_IDENTITY.call_once(|| {
+            let Some(bundle_identifier) = current_bundle_identifier() else {
+                tracing::debug!(
+                    "不在 .app bundle 中运行，macOS 系统通知需要打包后的 bundle identifier"
+                );
+                return;
+            };
+            if let Err(error) = mac_notification_sys::set_application(&bundle_identifier) {
+                tracing::warn!(%error, %bundle_identifier, "设置 macOS 通知发送者身份失败");
+            }
+        });
+    }
+
+    fn current_bundle_identifier() -> Option<String> {
+        NSBundle::mainBundle()
+            .bundleIdentifier()
+            .map(|identifier| identifier.to_string())
+    }
+
+    pub(super) fn send_tab_notification(
+        _tab_id: Option<String>,
+        title: String,
+        body: String,
+        _duration: TerminalDesktopNotificationDuration,
+        sound_enabled: bool,
+    ) {
+        ensure_application_identity();
+
+        // 投递需要走 XPC 并等待系统回执，挪到后台线程，别卡 GPUI 主线程。
+        std::thread::spawn(move || {
+            let mut notification = Notification::new();
+            notification.summary(&title).body(&body);
+            if sound_enabled {
+                notification.sound_name(NOTIFICATION_SOUND);
+            }
+
+            // notify-rust 的 macOS 后端要等句柄 drop 才真正把通知交给
+            // `NSUserNotificationCenter`，所以这里显式收尾；投递失败在 drop 内部
+            // 只能被吞掉，外层 `Err` 只覆盖「构造通知」阶段。
+            match notification.show() {
+                Ok(handle) => drop(handle),
+                Err(error) => tracing::warn!(%error, "发送 macOS 系统通知失败"),
+            }
+        });
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod platform {
+    use super::duration_millis;
+    use notify_rust::{Notification, Timeout};
+    use one_core::settings::TerminalDesktopNotificationDuration;
+    use rust_i18n::t;
+
+    /// freedesktop 通知里「默认动作」的固定标识，点击通知主体时触发。
+    const DEFAULT_ACTION: &str = "default";
+
+    pub(super) fn send_tab_notification(
+        tab_id: Option<String>,
+        title: String,
+        body: String,
+        duration: TerminalDesktopNotificationDuration,
+        _sound_enabled: bool,
+    ) {
+        // D-Bus 往返和 `wait_for_action` 的阻塞等待都必须离开 UI 线程。
+        std::thread::spawn(move || {
+            let mut notification = Notification::new();
+            notification
+                .appname(crate::display_name())
+                .summary(&title)
+                .body(&body)
+                .timeout(Timeout::Milliseconds(duration_millis(duration)));
+            if tab_id.is_some() {
+                notification.action(DEFAULT_ACTION, t!("DesktopNotification.open").as_ref());
+            }
+
+            let handle = match notification.show() {
+                Ok(handle) => handle,
+                Err(error) => {
+                    tracing::warn!(%error, "发送 Linux 系统通知失败");
+                    return;
+                }
+            };
+
+            // 通知关闭/超时也会回调 `__closed`，只有默认动作才代表用户点了通知。
+            if let Some(target_tab_id) = tab_id {
+                handle.wait_for_action(move |action| {
+                    if action == DEFAULT_ACTION {
+                        crate::integration::tray::activate_session_from_external(target_tab_id);
+                    }
+                });
+            }
+        });
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 mod platform {
     use one_core::settings::TerminalDesktopNotificationDuration;
 
@@ -301,6 +488,44 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn support_matrix_matches_current_platform() {
+        let support = support();
+        // 三个桌面平台都已经接通系统通知后端，非桌面平台才会落到兜底空实现。
+        assert_eq!(
+            cfg!(any(
+                target_os = "windows",
+                target_os = "macos",
+                target_os = "linux"
+            )),
+            support.system_notification
+        );
+        assert_eq!(
+            cfg!(any(target_os = "windows", target_os = "linux")),
+            support.duration
+        );
+        assert_eq!(
+            cfg!(any(target_os = "windows", target_os = "macos")),
+            support.sound
+        );
+        assert_eq!(
+            cfg!(any(target_os = "windows", target_os = "linux")),
+            support.click_activation
+        );
+    }
+
+    #[test]
+    fn duration_millis_maps_to_platform_timeout() {
+        assert_eq!(
+            25_000,
+            duration_millis(TerminalDesktopNotificationDuration::Long)
+        );
+        assert_eq!(
+            5_000,
+            duration_millis(TerminalDesktopNotificationDuration::Short)
+        );
+    }
 
     #[test]
     fn dispatches_according_to_notification_mode() {

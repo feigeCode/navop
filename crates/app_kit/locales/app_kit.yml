@@ -387,3 +387,7 @@ DesktopNotification:
     en: System notifications are working. Terminal alerts (OSC 9 / OSC 777) will appear here.
     zh-CN: 系统通知工作正常，后续终端通知（OSC 9 / OSC 777）将在此处弹出提醒。
     zh-HK: 系統通知運作正常，後續終端通知（OSC 9 / OSC 777）將在此處彈出提醒。
+  open:
+    en: Open
+    zh-CN: 打开
+    zh-HK: 開啟

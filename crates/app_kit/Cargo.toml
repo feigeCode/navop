@@ -45,6 +45,17 @@ tray-icon = { version = "0.25", default-features = false }
 [target.'cfg(target_os = "linux")'.dependencies]
 tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
 x11rb = "0.13"
+# 系统通知：freedesktop 通知走 D-Bus，notify-rust 的 `z`（zbus）特性是默认后端。
+notify-rust = "4.18"
+
+# 系统通知：macOS 走 notify-rust 的 NSUserNotification 后端（mac-notification-sys）。
+# 关掉默认特性，避免在 macOS 上把用不到的 zbus / serde 依赖一起编进来。
+# 另外直接依赖 mac-notification-sys 用来显式设置通知发送者身份，并用
+# objc2-foundation 读取当前 app bundle 的 identifier。
+[target.'cfg(target_os = "macos")'.dependencies]
+mac-notification-sys = "0.6"
+notify-rust = { version = "4.18", default-features = false }
+objc2-foundation = { version = "0.3", features = ["NSBundle", "NSString"] }
 
 # Windows 单实例、桌面通知与自更新安装：沿用全量产品的实现（tokio 异步 I/O、zip 解包、Shell / WinRT Toast 通知）。
 [target.'cfg(target_os = "windows")'.dependencies]

@@ -16,17 +16,16 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::ActiveTheme;
-#[cfg(target_os = "windows")]
 use gpui_component::Sizable;
-#[cfg(target_os = "windows")]
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::setting::{
     NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage,
 };
 use gpui_component::{h_flex, v_flex};
-#[cfg(target_os = "windows")]
-use one_core::settings::{TerminalDesktopNotificationDuration, TerminalDesktopNotificationMode};
-use one_core::settings::{AppSettings, monospace_font_options};
+use one_core::settings::{
+    AppSettings, TerminalDesktopNotificationDuration, TerminalDesktopNotificationMode,
+    monospace_font_options,
+};
 use rust_i18n::t;
 use terminal_view::{
     MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, available_monospace_fonts, current_settings,
@@ -46,7 +45,7 @@ impl SettingsSectionProvider for ShellSettingsProvider {
 }
 
 /// 终端设置页：外观、回滚与日志、剪贴板、输入辅助、危险操作确认、界面与按键、
-/// 系统通知（仅 Windows），最后是本地终端默认 shell 与自定义终端。
+/// 系统通知（按平台能力展示），最后是本地终端默认 shell 与自定义终端。
 fn terminal_settings_page(cx: &mut App) -> SettingPage {
     let profile = AppSettings::global(cx).local_terminal_profile.clone();
     let defaults = AppSettings::default();
@@ -58,8 +57,10 @@ fn terminal_settings_page(cx: &mut App) -> SettingPage {
         terminal_safety_group(&defaults),
         terminal_interface_group(&defaults),
     ];
-    #[cfg(target_os = "windows")]
-    groups.push(terminal_notification_group(&defaults));
+    let notification_support = app_kit::integration::desktop_notification::support();
+    if notification_support.system_notification {
+        groups.push(terminal_notification_group(&defaults, notification_support));
+    }
     groups.push(local_terminal::local_terminal_setting_group(&profile));
 
     SettingPage::new(t!("Settings.terminal.title"))
@@ -212,23 +213,28 @@ fn terminal_interface_group(defaults: &AppSettings) -> SettingGroup {
         ])
 }
 
-/// 系统通知（仅 Windows）：触发时机、停留时长、提示音、测试通知与 Codex CLI 配置提示。
-#[cfg(target_os = "windows")]
-fn terminal_notification_group(defaults: &AppSettings) -> SettingGroup {
+/// 系统通知：触发时机、按平台能力展示的停留时长 / 提示音、测试通知与 Codex CLI 配置提示。
+///
+/// 各平台能力差异见 [`app_kit::integration::desktop_notification::NotificationSupport`]：
+/// macOS 的通知停留时长由系统决定、Linux 的提示音由通知守护进程决定，对应的选项直接不展示，
+/// 免得用户改了一个不会生效的设置。
+fn terminal_notification_group(
+    defaults: &AppSettings,
+    support: app_kit::integration::desktop_notification::NotificationSupport,
+) -> SettingGroup {
+    let mut items = vec![desktop_notification_mode_item(defaults)];
+    if support.duration {
+        items.push(desktop_notification_duration_item(defaults));
+    }
+    if support.sound {
+        items.push(desktop_notification_sound_item(defaults));
+    }
+    items.push(desktop_notification_test_item());
+    items.push(desktop_notification_codex_tip_item());
+
     SettingGroup::new()
         .title(t!("Settings.terminal.desktop_notification_group"))
-        .items(vec![
-            desktop_notification_mode_item(defaults),
-            desktop_notification_duration_item(defaults),
-            bool_item(
-                "desktop_notification_sound",
-                defaults.terminal_desktop_notification_sound,
-                |settings| settings.terminal_desktop_notification_sound,
-                |settings, value| settings.terminal_desktop_notification_sound = value,
-            ),
-            desktop_notification_test_item(),
-            desktop_notification_codex_tip_item(),
-        ])
+        .items(items)
 }
 
 /// 终端等宽字体下拉。
@@ -474,53 +480,10 @@ fn bool_item(
     .description(t!(description_key.as_str()).to_string())
 }
 
-#[cfg(test)]
-mod tests {
-    /// 终端配色必须是卡片选择器，和应用外观页的调色板一致；
-    /// 早先这里是下拉框，和外观页观感割裂。
-    #[test]
-    fn terminal_theme_renders_cards_instead_of_a_dropdown() {
-        let source = include_str!("settings.rs");
-        assert!(
-            source.contains(concat!("render_terminal_theme", "_picker(cx)")),
-            "终端配色必须走卡片选择器"
-        );
-        assert!(
-            source.contains(concat!("terminal-theme-card", "-")),
-            "卡片需要稳定的 id，便于点击与测试定位"
-        );
-        // 下拉写法会把 value 转成字符串再写回 terminal_theme；
-        // 断言里拆成两段拼接，避免注释/断言文本命中自身。
-        assert!(
-            !source.contains(concat!("settings.terminal_theme", " = value.to_string()")),
-            "终端配色不应再退回下拉框"
-        );
-    }
-
-    /// 卡片列表要覆盖「跟随应用」+ 终端自带调色板，不能只列预设。
-    #[test]
-    fn terminal_theme_cards_follow_the_shared_theme_list() {
-        let source = include_str!("settings.rs");
-        let picker = source
-            .split("fn render_terminal_theme_picker")
-            .nth(1)
-            .expect("render_terminal_theme_picker 必须存在")
-            .split("fn render_terminal_theme_card")
-            .next()
-            .expect("picker 有结束标记");
-        assert!(
-            picker.contains("TerminalTheme::all(cx.theme())"),
-            "主题列表必须来自 TerminalTheme::all，与应用主题联动"
-        );
-    }
-}
-
 /// 终端系统通知（OSC 9 / OSC 777）弹出时机。
-#[cfg(target_os = "windows")]
 const CODEX_NOTIFICATION_CONFIG_SNIPPET: &str =
     "[tui]\nnotifications = true\nnotification_method = \"osc9\"\nnotification_condition = \"always\"";
 
-#[cfg(target_os = "windows")]
 fn desktop_notification_mode_item(defaults: &AppSettings) -> SettingItem {
     SettingItem::new(
         t!("Settings.terminal.desktop_notification_mode"),
@@ -568,7 +531,6 @@ fn desktop_notification_mode_item(defaults: &AppSettings) -> SettingItem {
     .description(t!("Settings.terminal.desktop_notification_mode_description").to_string())
 }
 
-#[cfg(target_os = "windows")]
 fn desktop_notification_duration_item(defaults: &AppSettings) -> SettingItem {
     SettingItem::new(
         t!("Settings.terminal.desktop_notification_duration"),
@@ -604,7 +566,15 @@ fn desktop_notification_duration_item(defaults: &AppSettings) -> SettingItem {
     .description(t!("Settings.terminal.desktop_notification_duration_description").to_string())
 }
 
-#[cfg(target_os = "windows")]
+fn desktop_notification_sound_item(defaults: &AppSettings) -> SettingItem {
+    bool_item(
+        "desktop_notification_sound",
+        defaults.terminal_desktop_notification_sound,
+        |settings| settings.terminal_desktop_notification_sound,
+        |settings, value| settings.terminal_desktop_notification_sound = value,
+    )
+}
+
 fn desktop_notification_test_item() -> SettingItem {
     SettingItem::new(
         t!("Settings.terminal.desktop_notification_test"),
@@ -625,7 +595,6 @@ fn desktop_notification_test_item() -> SettingItem {
     .description(t!("Settings.terminal.desktop_notification_test_description").to_string())
 }
 
-#[cfg(target_os = "windows")]
 fn desktop_notification_codex_tip_item() -> SettingItem {
     SettingItem::render(|_options, _window, cx| {
         let theme = cx.theme();
@@ -691,4 +660,45 @@ fn desktop_notification_codex_tip_item() -> SettingItem {
         "osc9".to_string(),
         "config.toml".to_string(),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    /// 终端配色必须是卡片选择器，和应用外观页的调色板一致；
+    /// 早先这里是下拉框，和外观页观感割裂。
+    #[test]
+    fn terminal_theme_renders_cards_instead_of_a_dropdown() {
+        let source = include_str!("settings.rs");
+        assert!(
+            source.contains(concat!("render_terminal_theme", "_picker(cx)")),
+            "终端配色必须走卡片选择器"
+        );
+        assert!(
+            source.contains(concat!("terminal-theme-card", "-")),
+            "卡片需要稳定的 id，便于点击与测试定位"
+        );
+        // 下拉写法会把 value 转成字符串再写回 terminal_theme；
+        // 断言里拆成两段拼接，避免注释/断言文本命中自身。
+        assert!(
+            !source.contains(concat!("settings.terminal_theme", " = value.to_string()")),
+            "终端配色不应再退回下拉框"
+        );
+    }
+
+    /// 卡片列表要覆盖「跟随应用」+ 终端自带调色板，不能只列预设。
+    #[test]
+    fn terminal_theme_cards_follow_the_shared_theme_list() {
+        let source = include_str!("settings.rs");
+        let picker = source
+            .split("fn render_terminal_theme_picker")
+            .nth(1)
+            .expect("render_terminal_theme_picker 必须存在")
+            .split("fn render_terminal_theme_card")
+            .next()
+            .expect("picker 有结束标记");
+        assert!(
+            picker.contains("TerminalTheme::all(cx.theme())"),
+            "主题列表必须来自 TerminalTheme::all，与应用主题联动"
+        );
+    }
 }
