@@ -699,7 +699,7 @@ pub(crate) struct PopupWindowContent {
 }
 
 impl PopupWindowContent {
-    fn new(view: AnyView, title: String, hide_titlebar_when_fullscreen: bool) -> Self {
+    pub(crate) fn new(view: AnyView, title: String, hide_titlebar_when_fullscreen: bool) -> Self {
         crate::popup_lifecycle::record_session_opened();
         Self {
             view: Some(view),
@@ -765,13 +765,26 @@ impl Render for PopupWindowContent {
                         cx.notify();
                     }))
             })
-            .justify_center()
             .size_full()
             .bg(cx.theme().background)
             .when(!auto_hide_titlebar, |this| {
                 this.child(render_popup_titlebar(self.title.clone()))
             })
-            .children(self.view.clone())
+            // 标题栏优先级高于业务内容：业务视图只使用标题栏下方的剩余高度。
+            // 业务视图普遍用 `size_full()` 占满整窗；若把它直接作为这个 v_flex 的子项，
+            // 标题栏 34px + 整窗高度会超出窗口，而 `justify_center` 会把超出的部分
+            // 平均挤到上下两侧，导致标题栏向上溢出被裁（Windows 自绘的最小化/最大化/
+            // 关闭按钮全在这 34px 内，表现为按钮显示不全）。
+            // 用 `flex_1 + min_h_0` 承接后，视图在剩余空间内布局，超出部分由弹窗
+            // 边界裁剪，永远不会顶掉标题栏。
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_hidden()
+                    .children(self.view.clone()),
+            )
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)
