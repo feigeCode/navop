@@ -9,7 +9,7 @@ use gpui::http_client::Url;
 use gpui::{App, Font, FontFallbacks, Global, font, px};
 use gpui_component::{Theme, ThemeMode};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tracing::{error, info};
@@ -1649,6 +1649,12 @@ pub struct AppSettings {
     /// 首页连接卡片是否在后台采集并显示远端 CPU/内存/磁盘占用（#279）。
     #[serde(default = "default_true")]
     pub home_show_host_metrics: bool,
+    /// 已开启「资源监控」的连接 ID。
+    ///
+    /// 监控页与首页列表共用这份选择：只有在这里的连接才会建立后台采集会话，
+    /// 默认空集合表示不为任何连接采集。
+    #[serde(default)]
+    pub monitored_connection_ids: BTreeSet<i64>,
     /// 连接列表排序方式
     #[serde(default)]
     pub connection_sort_order: ConnectionSortOrder,
@@ -2106,6 +2112,7 @@ impl Default for AppSettings {
             home_connection_layout: HomeConnectionLayout::default(),
             home_show_recent_connections: true,
             home_show_host_metrics: true,
+            monitored_connection_ids: BTreeSet::new(),
             connection_sort_order: ConnectionSortOrder::default(),
             connection_sidebar_expanded: true,
             connection_sidebar_tree_state: ConnectionSidebarTreeState::default(),
@@ -2345,6 +2352,20 @@ impl AppSettings {
         settings.normalize_terminal_settings();
         settings.save();
         cx.set_global(settings);
+    }
+
+    /// 该连接是否已开启资源监控（监控页与首页列表共用同一份选择）。
+    pub fn connection_monitoring_enabled(&self, connection_id: i64) -> bool {
+        self.monitored_connection_ids.contains(&connection_id)
+    }
+
+    /// 开启或关闭某连接的资源监控；返回选择是否真的发生变化。
+    pub fn set_connection_monitoring(&mut self, connection_id: i64, enabled: bool) -> bool {
+        if enabled {
+            self.monitored_connection_ids.insert(connection_id)
+        } else {
+            self.monitored_connection_ids.remove(&connection_id)
+        }
     }
 
     pub fn current_system_hotkey(&self) -> &str {
@@ -2682,7 +2703,6 @@ mod tests {
     use super::{
         AiChatBackendSelection, AiChatSettings, AiChatToolExecutionMode, AppSettings,
         CloseButtonBehavior, ConnectionSortOrder, CustomFont, DEFAULT_AI_REQUEST_TIMEOUT_SECS,
-        TabDoubleClickAction, TerminalDesktopNotificationDuration, TerminalDesktopNotificationMode,
         DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
         DEFAULT_TERMINAL_THEME, HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
         LocalTerminalProfileKind, LocalTerminalProfileSettings, LogLevel,
@@ -2690,7 +2710,8 @@ mod tests {
         MAX_REMEMBERED_ACP_SESSIONS, MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState,
         MarkdownDefaultViewMode, MasterKeyStorage, McpPermissionMode, McpServerMode,
         PersonalSyncBackendKind, RemoteFileOpenMode, SidebarPlacement, SqlFormatSettings,
-        SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider, TableViewMode,
+        SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider, TabDoubleClickAction,
+        TableViewMode, TerminalDesktopNotificationDuration, TerminalDesktopNotificationMode,
         UpdateChannel, UpdateMirror, default_grid_font_fallback_families,
         default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
         is_installed_font_family, monospace_font_options,
@@ -2927,6 +2948,34 @@ mod tests {
         let legacy_settings: AppSettings =
             serde_json::from_value(serde_json::json!({})).expect("empty deserialize");
         assert!(legacy_settings.home_show_host_metrics);
+    }
+
+    #[test]
+    fn connection_monitoring_defaults_off_and_round_trips() {
+        // 监控页与首页共用这份选择；默认空集合表示不为任何连接采集数据。
+        let settings = AppSettings::default();
+        assert!(settings.monitored_connection_ids.is_empty());
+        assert!(!settings.connection_monitoring_enabled(7));
+
+        let mut settings = AppSettings::default();
+        assert!(settings.set_connection_monitoring(7, true));
+        // 重复开启不产生状态变化，避免无意义的设置写盘。
+        assert!(!settings.set_connection_monitoring(7, true));
+        assert!(settings.connection_monitoring_enabled(7));
+
+        let json = serde_json::to_string(&settings).expect("serialize app settings");
+        assert!(json.contains(r#""monitored_connection_ids":[7]"#));
+        let restored: AppSettings = serde_json::from_str(&json).expect("roundtrip");
+        assert!(restored.connection_monitoring_enabled(7));
+
+        let mut disabled = restored.clone();
+        assert!(disabled.set_connection_monitoring(7, false));
+        assert!(!disabled.connection_monitoring_enabled(7));
+
+        // 旧配置缺省该字段时默认不采集。
+        let legacy: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("empty deserialize");
+        assert!(legacy.monitored_connection_ids.is_empty());
     }
 
     #[test]
@@ -4658,7 +4707,8 @@ mod tests {
                 terminal_desktop_notification_sound: sound,
                 ..AppSettings::default()
             };
-            let json = serde_json::to_string(&settings).expect("应序列化终端桌面通知时长与声音设置");
+            let json =
+                serde_json::to_string(&settings).expect("应序列化终端桌面通知时长与声音设置");
             let restored: AppSettings =
                 serde_json::from_str(&json).expect("应反序列化终端桌面通知时长与声音设置");
             assert_eq!(duration, restored.terminal_desktop_notification_duration);
