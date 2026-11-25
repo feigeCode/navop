@@ -327,13 +327,33 @@ pub fn to_esc_str_with_backspace(
     None
 }
 
+/// 普通可打印按键应直接写入 PTY 的字符。
+///
+/// macOS 默认开启按住重音候选（Press-and-Hold）：未被消费的可打印按键会进入
+/// `NSTextInputContext`，长按被系统截获为候选浮窗并抑制自动重复，导致 vim 中
+/// 长按 h/j/k/l 时光标不动。终端必须在 keydown 阶段消费这类按键并停止传播。
+///
+/// 只接受平台换算后的 `key_char`（shift+a -> "A"）；Control/Alt/Command/功能
+/// 修饰键继续由转义序列或输入法处理。输入法激活时可打印键在更早的 IME 分支
+/// 被消费，不会走到这里。
+pub fn direct_input_text(keystroke: &Keystroke) -> Option<&str> {
+    let modifiers = &keystroke.modifiers;
+    if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
+        return None;
+    }
+
+    let text = keystroke.key_char.as_deref()?;
+    let printable = !text.is_empty() && text.chars().all(|ch| !ch.is_control());
+    printable.then_some(text)
+}
+
 #[cfg(test)]
 mod tests {
     use alacritty_terminal::term::TermMode;
-    use gpui::Keystroke;
+    use gpui::{Keystroke, Modifiers};
     use one_core::storage::TelnetBackspaceCode;
 
-    use super::{to_esc_str, to_esc_str_with_backspace};
+    use super::{direct_input_text, to_esc_str, to_esc_str_with_backspace};
 
     #[test]
     fn app_cursor_arrow_mapping() {
@@ -582,6 +602,84 @@ mod tests {
                 .unwrap()
                 .as_ref(),
             "\x1b[1;3D"
+        );
+    }
+
+    fn keystroke(key: &str, key_char: Option<&str>, modifiers: Modifiers) -> Keystroke {
+        Keystroke {
+            modifiers,
+            key: key.to_string(),
+            key_char: key_char.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn direct_input_text_allows_plain_and_shifted_characters() {
+        assert_eq!(
+            direct_input_text(&keystroke("l", Some("l"), Modifiers::default())),
+            Some("l")
+        );
+
+        let shifted = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            direct_input_text(&keystroke("l", Some("L"), shifted)),
+            Some("L")
+        );
+
+        // 平台层会为空格显式提供 key_char；空格不映射转义序列，必须能直通。
+        assert_eq!(
+            direct_input_text(&keystroke("space", Some(" "), Modifiers::default())),
+            Some(" ")
+        );
+
+        // 非美式布局上 key 与 key_char 可以不同，以 key_char 为准。
+        assert_eq!(
+            direct_input_text(&keystroke("a", Some("中"), Modifiers::default())),
+            Some("中")
+        );
+    }
+
+    #[test]
+    fn direct_input_text_rejects_modified_and_control_keys() {
+        for modifiers in [
+            Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            Modifiers {
+                alt: true,
+                ..Default::default()
+            },
+            Modifiers {
+                platform: true,
+                ..Default::default()
+            },
+            Modifiers {
+                function: true,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                direct_input_text(&keystroke("l", Some("l"), modifiers)),
+                None
+            );
+        }
+
+        // 控制字符与缺失 key_char 的按键继续交给转义序列/文本系统。
+        assert_eq!(
+            direct_input_text(&keystroke("enter", Some("\n"), Modifiers::default())),
+            None
+        );
+        assert_eq!(
+            direct_input_text(&keystroke("l", None, Modifiers::default())),
+            None
+        );
+        assert_eq!(
+            direct_input_text(&keystroke("l", Some(""), Modifiers::default())),
+            None
         );
     }
 }
