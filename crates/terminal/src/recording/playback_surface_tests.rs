@@ -168,7 +168,13 @@ fn malicious_terminal_sequences_cannot_escape_the_playback_surface() {
             | TerminalEvent::ClipboardLoad(_)
             | TerminalEvent::WorkingDirChanged(_)
             | TerminalEvent::CommandFinished { .. }
-            | TerminalEvent::CommandRecorded(_) => {
+            | TerminalEvent::CommandRecorded(_)
+            | TerminalEvent::NavopTty(_)
+            | TerminalEvent::TmuxAttached { .. }
+            | TerminalEvent::TmuxChanged { .. }
+            | TerminalEvent::TmuxDetached { .. }
+            | TerminalEvent::TmuxControllerReady { .. }
+            | TerminalEvent::TmuxProbeFinished { .. } => {
                 panic!("playback-safe parser leaked a non-render event")
             }
         }

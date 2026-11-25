@@ -5,7 +5,8 @@ use public_mcp::registry::{
     TerminalControlCancellation, TerminalControlFuture, TerminalControlSessionHandle,
     TerminalExecCancellation, TerminalExecFuture, TerminalExecSessionHandle,
     TerminalInputSessionHandle, TerminalReadSessionHandle, TerminalSessionHandle,
-    TerminalSessionSnapshot,
+    TerminalSessionSnapshot, TerminalTmuxFuture, TerminalTmuxSessionHandle, TmuxPaneInfo,
+    TmuxSendKeysRequest, TmuxSendKeysResult,
 };
 use public_mcp::remote_ops::RemoteCommandStatus;
 use public_mcp::terminal_control::{
@@ -18,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use terminal::terminal::{ConnectionState, Terminal, TerminalConnectionKind};
+use terminal::tmux::{TmuxControllerHandle, TmuxSessionState};
 use terminal::{
     TerminalControlAction as CoreTerminalControlAction, TerminalControlHandle,
     TerminalControlReadiness as CoreTerminalControlReadiness,
@@ -53,9 +55,12 @@ pub struct TerminalPublicMcpRegistration {
     exec: Arc<Mutex<Option<TerminalExecHandle>>>,
     control: Arc<Mutex<Option<TerminalControlHandle>>>,
     input: Arc<Mutex<Option<TerminalInputHandle>>>,
+    tmux_state: Arc<Mutex<Option<TmuxSessionState>>>,
+    tmux_controller: Arc<Mutex<Option<TmuxControllerHandle>>>,
     terminal_exec_registered: AtomicBool,
     terminal_control_registered: AtomicBool,
     terminal_input_registered: AtomicBool,
+    terminal_tmux_registered: AtomicBool,
 }
 
 fn live_terminal_session_id(
@@ -134,6 +139,16 @@ impl TerminalPublicMcpRegistration {
             terminal.external_control_handle(),
             terminal.external_input_handle(),
         );
+        *self
+            .tmux_state
+            .lock()
+            .expect("public MCP tmux state lock poisoned") = terminal.tmux_session().cloned();
+        *self
+            .tmux_controller
+            .lock()
+            .expect("public MCP tmux controller lock poisoned") =
+            terminal.tmux_controller().cloned();
+        self.ensure_terminal_tmux_registered();
         self.ensure_remote_ops_registered(terminal);
     }
 
@@ -236,6 +251,35 @@ impl TerminalPublicMcpRegistration {
             });
     }
 
+    fn ensure_terminal_tmux_registered(&self) {
+        let has_state = self
+            .tmux_state
+            .lock()
+            .expect("public MCP tmux state lock poisoned")
+            .as_ref()
+            .is_some_and(|state| state.attached);
+        let has_controller = self
+            .tmux_controller
+            .lock()
+            .expect("public MCP tmux controller lock poisoned")
+            .is_some();
+        if !has_state || !has_controller {
+            if self.terminal_tmux_registered.swap(false, Ordering::AcqRel) {
+                self.registry.unregister_terminal_tmux(&self.session_id);
+            }
+            return;
+        }
+        if self.terminal_tmux_registered.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.registry
+            .register_terminal_tmux(ThreadSafeTerminalTmuxHandle {
+                state: self.state.clone(),
+                tmux_state: self.tmux_state.clone(),
+                controller: self.tmux_controller.clone(),
+            });
+    }
+
     pub fn unregister(&self, cx: &App) {
         if let Some(registry) = registry(cx) {
             registry.unregister(&self.session_id);
@@ -244,6 +288,7 @@ impl TerminalPublicMcpRegistration {
             registry.unregister_terminal_read(&self.session_id);
             registry.unregister_terminal_control(&self.session_id);
             registry.unregister_terminal_input(&self.session_id);
+            registry.unregister_terminal_tmux(&self.session_id);
         }
     }
 }
@@ -270,6 +315,8 @@ pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublic
     let exec = Arc::new(Mutex::new(terminal.external_exec_handle()));
     let control = Arc::new(Mutex::new(terminal.external_control_handle()));
     let input = Arc::new(Mutex::new(terminal.external_input_handle()));
+    let tmux_state = Arc::new(Mutex::new(terminal.tmux_session().cloned()));
+    let tmux_controller = Arc::new(Mutex::new(terminal.tmux_controller().cloned()));
 
     // 注册结构化远程操作桥。remote ops 与 terminal handle 共享同一份 state，一次 refresh 同步两者。
     if let Some(session_manager) = terminal.ssh_session_manager() {
@@ -289,13 +336,17 @@ pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublic
         exec,
         control,
         input,
+        tmux_state,
+        tmux_controller,
         terminal_exec_registered: AtomicBool::new(false),
         terminal_control_registered: AtomicBool::new(false),
         terminal_input_registered: AtomicBool::new(false),
+        terminal_tmux_registered: AtomicBool::new(false),
     };
     registration.ensure_terminal_exec_registered();
     registration.ensure_terminal_control_registered();
     registration.ensure_terminal_input_registered();
+    registration.ensure_terminal_tmux_registered();
     Some(registration)
 }
 
@@ -333,6 +384,12 @@ struct ThreadSafeTerminalInputHandle {
     input: Arc<Mutex<Option<TerminalInputHandle>>>,
 }
 
+struct ThreadSafeTerminalTmuxHandle {
+    state: Arc<Mutex<TerminalSessionSnapshot>>,
+    tmux_state: Arc<Mutex<Option<TmuxSessionState>>>,
+    controller: Arc<Mutex<Option<TmuxControllerHandle>>>,
+}
+
 impl TerminalInputSessionHandle for ThreadSafeTerminalInputHandle {
     fn snapshot(&self) -> TerminalSessionSnapshot {
         self.state
@@ -357,6 +414,87 @@ impl TerminalInputSessionHandle for ThreadSafeTerminalInputHandle {
             target: request.target,
             sent: true,
             bytes_written,
+        })
+    }
+}
+
+impl TerminalTmuxSessionHandle for ThreadSafeTerminalTmuxHandle {
+    fn snapshot(&self) -> TerminalSessionSnapshot {
+        self.state
+            .lock()
+            .expect("public MCP state lock poisoned")
+            .clone()
+    }
+
+    fn list_panes(&self) -> anyhow::Result<public_mcp::registry::TmuxPaneListResult> {
+        let state = self
+            .tmux_state
+            .lock()
+            .expect("public MCP tmux state lock poisoned")
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("tmux session is not available"))?;
+        anyhow::ensure!(state.attached, "tmux session is detached");
+        let active_pane = state
+            .active_pane()
+            .map(|pane| pane.id.as_str())
+            .unwrap_or_default();
+        let window_name = |window_id: &str| {
+            state
+                .windows
+                .iter()
+                .find(|window| window.id == window_id)
+                .map(|window| window.name.clone())
+                .unwrap_or_default()
+        };
+        let panes = state
+            .panes
+            .iter()
+            .map(|pane| TmuxPaneInfo {
+                pane_id: pane.id.clone(),
+                window_id: pane.window_id.clone(),
+                window_name: window_name(&pane.window_id),
+                active: pane.id == active_pane,
+                cwd: pane.cwd.clone(),
+                command: pane.command.clone(),
+                in_mode: pane.in_mode,
+                width: pane.width,
+                height: pane.height,
+            })
+            .collect();
+        Ok(public_mcp::registry::TmuxPaneListResult {
+            session_id: state.session_id.clone(),
+            session_name: state.session_name.clone(),
+            active_pane: (!active_pane.is_empty()).then(|| active_pane.to_string()),
+            panes,
+        })
+    }
+
+    fn send_keys(
+        &self,
+        request: TmuxSendKeysRequest,
+        cancellation: TerminalControlCancellation,
+    ) -> TerminalTmuxFuture {
+        let controller = self
+            .controller
+            .lock()
+            .expect("public MCP tmux controller lock poisoned")
+            .clone();
+        Box::pin(async move {
+            let controller =
+                controller.ok_or_else(|| anyhow::anyhow!("tmux controller is not ready"))?;
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => {
+                    return Err(anyhow::anyhow!("tmux send_keys cancelled"));
+                }
+                result = controller.send_keys(&request.pane_id, &request.keys, request.submit) => {
+                    result.map_err(|error| anyhow::anyhow!(error))?;
+                }
+            }
+            Ok(TmuxSendKeysResult {
+                pane_id: request.pane_id,
+                queued: true,
+            })
         })
     }
 }
@@ -1082,9 +1220,12 @@ mod tests {
             exec: Arc::new(Mutex::new(None)),
             control: Arc::new(Mutex::new(None)),
             input: Arc::new(Mutex::new(None)),
+            tmux_state: Arc::new(Mutex::new(None)),
+            tmux_controller: Arc::new(Mutex::new(None)),
             terminal_exec_registered: std::sync::atomic::AtomicBool::new(false),
             terminal_control_registered: std::sync::atomic::AtomicBool::new(false),
             terminal_input_registered: std::sync::atomic::AtomicBool::new(false),
+            terminal_tmux_registered: std::sync::atomic::AtomicBool::new(false),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
 
@@ -1132,5 +1273,48 @@ mod tests {
             .expect("terminal exec should use the exec handle registered during refresh");
 
         assert_eq!(1, requests.lock().unwrap().len());
+    }
+
+    #[test]
+    fn tmux_handle_projects_cached_state_to_pane_info() {
+        let state = Arc::new(Mutex::new(snapshot(McpConnectionState::Connected)));
+        let tmux_state = Arc::new(Mutex::new(Some(TmuxSessionState {
+            session_id: "$0".to_string(),
+            session_name: "main".to_string(),
+            attached: true,
+            windows: vec![terminal::tmux::TmuxWindow {
+                id: "@1".to_string(),
+                index: "0".to_string(),
+                name: "editor".to_string(),
+                active: true,
+            }],
+            panes: vec![terminal::tmux::TmuxPane {
+                id: "%2".to_string(),
+                window_id: "@1".to_string(),
+                width: 120,
+                height: 42,
+                window_active: true,
+                active_in_window: true,
+                cwd: Some("/srv/app".to_string()),
+                command: "vim".to_string(),
+                command_running: Some(true),
+                command_status: None,
+                in_mode: false,
+                title: "editor".to_string(),
+                pid: 7,
+            }],
+            ..TmuxSessionState::default()
+        })));
+        let handle = ThreadSafeTerminalTmuxHandle {
+            state,
+            tmux_state,
+            controller: Arc::new(Mutex::new(None)),
+        };
+
+        let panes = handle.list_panes().expect("cached tmux state");
+        assert_eq!(panes.session_name, "main");
+        assert_eq!(panes.active_pane.as_deref(), Some("%2"));
+        assert_eq!(panes.panes[0].window_name, "editor");
+        assert_eq!(panes.panes[0].command, "vim");
     }
 }

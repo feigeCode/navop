@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 otp = { workspace = true }
 # Async runtime
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "process"] }
 tokio-util = { workspace = true }
 futures = { workspace = true }
 anyhow = { workspace = true }

@@ -24,6 +24,7 @@ pub mod telnet_backend;
 mod telnet_expect;
 mod telnet_ingress;
 pub mod terminal;
+pub mod tmux;
 pub mod types;
 #[cfg(any(test, target_os = "windows"))]
 mod windows_environment;

@@ -87,6 +87,13 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             .into_iter()
             .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, SendShiftTab, Some(TERMINAL_CONTEXT), cx)),
     );
+    // tmux 默认 prefix 是 Ctrl+B。终端内必须让这个 C0 字节透传到 PTY，
+    // 不能被子栏切换等 app 级快捷键吞掉；否则用户无法使用 tmux 默认分屏/换窗键。
+    keybindings.extend(
+        shortcuts_for(cx, action_id::TERMINAL_SEND_CTRL_B, &["ctrl-b"])
+            .into_iter()
+            .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, SendCtrlB, Some(TERMINAL_CONTEXT), cx)),
+    );
     keybindings.extend(
         shortcuts_for(cx, action_id::TERMINAL_COPY, &[TERMINAL_COPY_SHORTCUT])
             .into_iter()
@@ -261,6 +268,13 @@ pub(super) fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
     ));
     keybindings.extend(rebind_keybindings(
         cx,
+        action_id::TERMINAL_SEND_CTRL_B,
+        &["ctrl-b"],
+        Some(TERMINAL_CONTEXT),
+        SendCtrlB,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
         action_id::TERMINAL_COPY,
         &[TERMINAL_COPY_SHORTCUT],
         Some(TERMINAL_CONTEXT),
@@ -401,6 +415,7 @@ pub(super) fn is_terminal_action_shortcut(keystroke: &Keystroke, cx: &App) -> bo
     [
         (action_id::TERMINAL_SEND_TAB, vec!["tab"]),
         (action_id::TERMINAL_SEND_SHIFT_TAB, vec!["shift-tab"]),
+        (action_id::TERMINAL_SEND_CTRL_B, vec!["ctrl-b"]),
         (action_id::TERMINAL_COPY, vec![TERMINAL_COPY_SHORTCUT]),
         (action_id::TERMINAL_PASTE, terminal_paste_defaults()),
         (

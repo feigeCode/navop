@@ -25,6 +25,22 @@ TerminalWorkspace:
     en: Cancel Split and Return to Tab Bar
     zh-CN: 取消分屏并返回标签栏
     zh-HK: 取消分屏並返回標籤列
+  tmux_split_failed:
+    en: "Failed to split tmux pane: %{error}"
+    zh-CN: "tmux 分屏失败：%{error}"
+    zh-HK: "tmux 分屏失敗：%{error}"
+  tmux_pane_tree:
+    en: tmux Panes
+    zh-CN: tmux 窗格
+    zh-HK: tmux 窗格
+  tmux_detached:
+    en: tmux control channel disconnected
+    zh-CN: tmux 控制通道已断开
+    zh-HK: tmux 控制通道已斷開
+  tmux_select_failed:
+    en: "Failed to switch tmux pane: %{error}"
+    zh-CN: "切换 tmux 窗格失败：%{error}"
+    zh-HK: "切換 tmux 窗格失敗：%{error}"
   close_title:
     en: Close Terminal Workspace?
     zh-CN: 关闭终端工作区？
@@ -822,6 +838,26 @@ Settings:
     en: Show line numbers
     zh-CN: 显示行号
     zh-HK: 顯示行號
+  tmux_section:
+    en: tmux
+    zh-CN: tmux
+    zh-HK: tmux
+  tmux_integration:
+    en: Enable tmux integration
+    zh-CN: 启用 tmux 集成
+    zh-HK: 啟用 tmux 整合
+  tmux_socket:
+    en: Custom socket path
+    zh-CN: 自定义 socket 路径
+    zh-HK: 自訂 socket 路徑
+  tmux_socket_placeholder:
+    en: Leave empty for the default tmux socket
+    zh-CN: 留空使用 tmux 默认 socket
+    zh-HK: 留空使用 tmux 預設 socket
+  tmux_socket_help:
+    en: Global setting. Applies to local and SSH terminals; changing it rebuilds the tmux control channel.
+    zh-CN: 全局设置，作用于本地和 SSH 终端；修改后会重建 tmux 控制通道。
+    zh-HK: 全域設定，作用於本機與 SSH 終端；修改後會重建 tmux 控制通道。
   file_manager_section:
     en: FILE MANAGER
     zh-CN: 文件管理器
@@ -1338,6 +1374,10 @@ TerminalSidebar:
     en: Server Monitor
     zh-CN: 服务器监控
     zh-HK: 伺服器監控
+  tmux_panes:
+    en: tmux Panes
+    zh-CN: tmux 窗格
+    zh-HK: tmux 窗格
   save_as_connection:
     en: Save as connection
     zh-CN: 保存为连接

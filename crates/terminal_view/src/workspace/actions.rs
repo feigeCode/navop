@@ -17,6 +17,9 @@ impl TerminalWorkspace {
         let Some(source_pane) = self.panes.get(&target).cloned() else {
             return false;
         };
+        if source_pane.update(cx, |pane, cx| pane.split_tmux_window(placement, window, cx)) {
+            return true;
+        }
         if !source_pane.read(cx).duplicate_supported(cx) {
             return false;
         }
@@ -206,5 +209,20 @@ mod tests {
             TerminalPaneId::new(2),
             &TabContentEvent::StateChanged,
         ));
+    }
+
+    #[test]
+    fn workspace_split_proxies_tmux_before_creating_a_navop_pane() {
+        let source = include_str!("actions.rs");
+        let tmux_split = source
+            .find("pane.split_tmux_window(placement, window, cx)")
+            .expect("tmux split route");
+        let duplicate_source = source
+            .find("duplicate_source_snapshot(cx)")
+            .expect("duplicate fallback");
+        assert!(
+            tmux_split < duplicate_source,
+            "tmux split must be attempted before duplicating a Navop pane"
+        );
     }
 }
