@@ -2057,6 +2057,17 @@ impl NavopApp {
         cx.notify();
     }
 
+    /// 独立产品（不带 shell）没有资源拖动手柄；保留同名空实现让共享渲染代码编译。
+    #[cfg(not(feature = "shell"))]
+    fn resize_application_resource(
+        &mut self,
+        _kind: ResourceKind,
+        _position: Option<gpui::Point<gpui::Pixels>>,
+        _initial: gpui::Pixels,
+        _cx: &mut Context<Self>,
+    ) {
+    }
+
     /// 松手后把拖动中的宽度写进设置（内存立即生效、磁盘保存防抖），再撤掉覆盖值。
     #[cfg(feature = "shell")]
     fn finish_application_resource_resize(&mut self, kind: ResourceKind, cx: &mut Context<Self>) {
@@ -2093,6 +2104,7 @@ impl NavopApp {
         self.resource_width_persist_task = Some(task);
     }
 
+    #[cfg(feature = "shell")]
     fn sync_connection_sidebar_theme(&mut self, cx: &mut Context<Self>) {
         // 应用菜单布局下连接面板属于外壳，颜色已经由外壳 token 统一；再套终端主题的
         // 侧栏色会让面板变成另一个底色，和图标栏、标签栏对不上。
