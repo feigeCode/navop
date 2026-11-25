@@ -1,5 +1,11 @@
 use crate::connection_visuals::{ConnectionVisualSize, stored_connection_icon_with_catalog};
 use crate::home_tab::{HomePage, connection_matches_query};
+#[cfg(feature = "shell")]
+use crate::home_tab::{launch_target_descriptor, wsl_distro_item_label};
+#[cfg(feature = "shell")]
+use crate::local_terminal_profiles::{launch_options, launch_target_is_default};
+#[cfg(feature = "shell")]
+use domain_api::{TerminalProfileDescriptor, TerminalProfileKind};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Context, Entity, FontWeight, ParentElement, SharedString, Styled, Task, Window, div, px,
@@ -9,14 +15,34 @@ use gpui_component::{
     list::{ListDelegate, ListItem, ListState},
 };
 use one_assets::IconName;
+#[cfg(feature = "shell")]
+use one_core::settings::AppSettings;
 use one_core::storage::{SshAuthMethod, SshParams, StoredConnection};
 use one_ui::{IconButton, IconButtonRole, IconSize};
 use rust_i18n::t;
 
+#[derive(Clone, Debug)]
+pub(crate) struct QuickOpenLocalTerminalEntry {
+    pub(crate) label: String,
+    pub(crate) badge: String,
+    #[cfg(feature = "shell")]
+    pub(crate) descriptor: TerminalProfileDescriptor,
+    #[cfg_attr(not(feature = "shell"), allow(dead_code))]
+    pub(crate) is_default: bool,
+    pub(crate) search_keywords: String,
+}
+
+#[derive(Clone)]
+enum QuickOpenEntry {
+    LocalTerminal(QuickOpenLocalTerminalEntry),
+    Connection(StoredConnection),
+}
+
 pub(crate) struct ConnectionQuickOpenDelegate {
     parent: Entity<HomePage>,
+    local_terminals: Vec<QuickOpenLocalTerminalEntry>,
     items: Vec<StoredConnection>,
-    filtered_items: Vec<StoredConnection>,
+    filtered_entries: Vec<QuickOpenEntry>,
     selected_index: Option<IndexPath>,
     search_query: String,
     /// 是否已经用这个委托打开过连接。双击的第二下如果赶在对话框关闭动画
@@ -28,15 +54,17 @@ impl ConnectionQuickOpenDelegate {
     pub(crate) fn new(parent: Entity<HomePage>) -> Self {
         Self {
             parent,
+            local_terminals: Vec::new(),
             items: Vec::new(),
-            filtered_items: Vec::new(),
+            filtered_entries: Vec::new(),
             selected_index: None,
             search_query: String::new(),
             opened: false,
         }
     }
 
-    pub(crate) fn update_items(&mut self, connections: &[StoredConnection]) {
+    pub(crate) fn update_items(&mut self, connections: &[StoredConnection], cx: &App) {
+        self.local_terminals = collect_local_terminal_entries(cx);
         // 快速打开只列当前产品能力范围内的连接：独立产品不能从这里绕过列表
         // 看到并打开自己领域之外的类型。
         self.items = connections
@@ -51,22 +79,113 @@ impl ConnectionQuickOpenDelegate {
 
     fn apply_filter(&mut self) {
         if let Some(connection) = temporary_ssh_connection(&self.search_query) {
-            self.filtered_items = vec![connection];
+            self.filtered_entries = vec![QuickOpenEntry::Connection(connection)];
             self.selected_index = Some(IndexPath::default());
             return;
         }
-        if self.search_query.is_empty() {
-            self.filtered_items = self.items.clone();
-            return;
+        let query = self.search_query.trim().to_lowercase();
+        let mut entries = Vec::new();
+        for terminal in &self.local_terminals {
+            if query.is_empty() || quick_open_matches_local_terminal(terminal, &query) {
+                entries.push(QuickOpenEntry::LocalTerminal(terminal.clone()));
+            }
         }
-        let query = self.search_query.to_lowercase();
-        self.filtered_items = self
-            .items
-            .iter()
-            .filter(|conn| quick_open_matches_connection(conn, &query))
-            .cloned()
-            .collect();
+        for connection in &self.items {
+            if query.is_empty() || quick_open_matches_connection(connection, &query) {
+                entries.push(QuickOpenEntry::Connection(connection.clone()));
+            }
+        }
+        self.filtered_entries = entries;
+        if self.filtered_entries.is_empty() {
+            self.selected_index = None;
+        } else if self
+            .selected_index
+            .is_none_or(|ix| ix.row >= self.filtered_entries.len())
+        {
+            self.selected_index = Some(IndexPath::default());
+        }
     }
+}
+
+#[cfg(feature = "shell")]
+fn collect_local_terminal_entries(cx: &App) -> Vec<QuickOpenLocalTerminalEntry> {
+    if !crate::product::supports_shell_domain() {
+        return Vec::new();
+    }
+    let profile_settings = AppSettings::global(cx).local_terminal_profile.clone();
+    let wsl_distributions = app_kit::registry()
+        .shell_extras()
+        .and_then(|extras| extras.wsl_distributions(cx))
+        .unwrap_or_default();
+    build_local_terminal_entries(cfg!(target_os = "windows"), &profile_settings, &wsl_distributions)
+}
+
+#[cfg(not(feature = "shell"))]
+fn collect_local_terminal_entries(_cx: &App) -> Vec<QuickOpenLocalTerminalEntry> {
+    Vec::new()
+}
+
+#[cfg(feature = "shell")]
+fn build_local_terminal_entries(
+    include_windows: bool,
+    profile_settings: &one_core::settings::LocalTerminalProfileSettings,
+    wsl_distributions: &[domain_api::WslDistributionInfo],
+) -> Vec<QuickOpenLocalTerminalEntry> {
+    let badge = t!("Settings.General.LocalTerminal.group_title").to_string();
+    let default_tag = t!("Home.wsl_distributions_default").to_string();
+    let mut entries = Vec::new();
+
+    for (target, label) in launch_options(include_windows, profile_settings) {
+        let is_default = launch_target_is_default(&target, profile_settings, include_windows);
+        let descriptor = launch_target_descriptor(&target);
+        let display_label = if is_default {
+            format!("{label} · {default_tag}")
+        } else {
+            label.clone()
+        };
+        let search_keywords = format!(
+            "{} {} local terminal shell 本地终端 终端",
+            label.to_lowercase(),
+            badge.to_lowercase(),
+        );
+        entries.push(QuickOpenLocalTerminalEntry {
+            label: display_label,
+            badge: badge.clone(),
+            descriptor,
+            is_default,
+            search_keywords,
+        });
+    }
+
+    // 默认本地终端排在最前面，方便打开弹窗后直接回车启动。
+    entries.sort_by_key(|entry| !entry.is_default);
+
+    for distribution in wsl_distributions {
+        let distro = distribution.name.to_string();
+        let display_label = wsl_distro_item_label(&distro, distribution.is_default);
+        let search_keywords = format!(
+            "{} wsl linux local terminal 本地终端 终端",
+            distro.to_lowercase(),
+        );
+        entries.push(QuickOpenLocalTerminalEntry {
+            label: display_label,
+            badge: "WSL".to_string(),
+            descriptor: TerminalProfileDescriptor {
+                kind: TerminalProfileKind::Wsl,
+                id: Some(distro),
+            },
+            is_default: false,
+            search_keywords,
+        });
+    }
+
+    entries
+}
+
+fn quick_open_matches_local_terminal(entry: &QuickOpenLocalTerminalEntry, query: &str) -> bool {
+    entry.label.to_lowercase().contains(query)
+        || entry.badge.to_lowercase().contains(query)
+        || entry.search_keywords.contains(query)
 }
 
 fn quick_open_matches_connection(connection: &StoredConnection, query: &str) -> bool {
@@ -235,7 +354,7 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
     }
 
     fn items_count(&self, _section: usize, _cx: &App) -> usize {
-        self.filtered_items.len()
+        self.filtered_entries.len()
     }
 
     fn render_item(
@@ -244,79 +363,120 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
-        let connection = self.filtered_items.get(ix.row)?.clone();
-        let name = connection.name.clone();
-        let icon = {
-            let extension_catalog = crate::connection_visuals::extension_catalog_from_cx(cx);
-            stored_connection_icon_with_catalog(
-                &connection,
-                ConnectionVisualSize::Tree,
-                extension_catalog.as_deref(),
-            )
-        };
-        let save_parent = self.parent.clone();
-        // 临时连接（无数据库 ID）提供“保存为连接”入口。
-        let temporary_connection = connection.id.is_none().then(|| connection.clone());
-
-        // 打开连接只走 `confirm` 这一条路径：列表内建的点击处理会先
-        // `set_selected_index` 再调用 `confirm`，键盘 Enter 走的也是同一条路径。
-        // 这里不要再给行挂 `on_click` 打开连接，否则一次点击会先后触发行内
-        // 回调与列表 confirm，一次点击创建两个会话（issue #461）。
-        Some(
-            ListItem::new(ix)
-                .mx_2()
-                .h(px(44.0))
-                .px_3()
-                .rounded(px(6.0))
-                .child(
-                    h_flex()
-                        .w_full()
-                        .items_center()
-                        .gap_3()
-                        .child(div().flex_shrink_0().flex().items_center().child(icon))
+        let entry = self.filtered_entries.get(ix.row)?.clone();
+        match entry {
+            QuickOpenEntry::LocalTerminal(terminal) => {
+                let icon = Icon::new(IconName::TerminalColor)
+                    .color()
+                    .with_size(ConnectionVisualSize::Tree.icon_size());
+                Some(
+                    ListItem::new(ix)
+                        .mx_2()
+                        .h(px(44.0))
+                        .px_3()
+                        .rounded(px(6.0))
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .child(SharedString::from(name)),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(SharedString::from(
-                                    crate::connection_visuals::connection_type_display_label(
-                                        &connection,
-                                        cx,
-                                    ),
-                                )),
-                        )
-                        .when_some(temporary_connection, |this, connection| {
-                            this.child(
-                                IconButton::new(
-                                    SharedString::from("quick-open-save-connection"),
-                                    Icon::new(IconName::Save).mono().with_size(IconSize::Small),
+                            h_flex()
+                                .w_full()
+                                .items_center()
+                                .gap_3()
+                                .child(div().flex_shrink_0().flex().items_center().child(icon))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .child(SharedString::from(terminal.label)),
                                 )
-                                .role(IconButtonRole::Compact)
-                                .tooltip(t!("Home.save_as_connection"))
-                                .on_click(move |_, window, cx| {
-                                    cx.stop_propagation();
-                                    let connection = connection.clone();
-                                    save_parent.update(cx, |this, cx| {
-                                        this.show_save_temporary_connection_form(
-                                            connection, window, cx,
-                                        );
-                                    });
-                                    window.close_dialog(cx);
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(SharedString::from(terminal.badge)),
+                                ),
+                        ),
+                )
+            }
+            QuickOpenEntry::Connection(connection) => {
+                let name = connection.name.clone();
+                let icon = {
+                    let extension_catalog = crate::connection_visuals::extension_catalog_from_cx(cx);
+                    stored_connection_icon_with_catalog(
+                        &connection,
+                        ConnectionVisualSize::Tree,
+                        extension_catalog.as_deref(),
+                    )
+                };
+                let save_parent = self.parent.clone();
+                // 临时连接（无数据库 ID）提供“保存为连接”入口。
+                let temporary_connection = connection.id.is_none().then(|| connection.clone());
+
+                // 打开连接只走 `confirm` 这一条路径：列表内建的点击处理会先
+                // `set_selected_index` 再调用 `confirm`，键盘 Enter 走的也是同一条路径。
+                // 这里不要再给行挂 `on_click` 打开连接，否则一次点击会先后触发行内
+                // 回调与列表 confirm，一次点击创建两个会话（issue #461）。
+                Some(
+                    ListItem::new(ix)
+                        .mx_2()
+                        .h(px(44.0))
+                        .px_3()
+                        .rounded(px(6.0))
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .items_center()
+                                .gap_3()
+                                .child(div().flex_shrink_0().flex().items_center().child(icon))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .child(SharedString::from(name)),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(SharedString::from(
+                                            crate::connection_visuals::connection_type_display_label(
+                                                &connection,
+                                                cx,
+                                            ),
+                                        )),
+                                )
+                                .when_some(temporary_connection, |this, connection| {
+                                    this.child(
+                                        IconButton::new(
+                                            SharedString::from("quick-open-save-connection"),
+                                            Icon::new(IconName::Save)
+                                                .mono()
+                                                .with_size(IconSize::Small),
+                                        )
+                                        .role(IconButtonRole::Compact)
+                                        .tooltip(t!("Home.save_as_connection"))
+                                        .on_click(move |_, window, cx| {
+                                            cx.stop_propagation();
+                                            let connection = connection.clone();
+                                            save_parent.update(cx, |this, cx| {
+                                                this.show_save_temporary_connection_form(
+                                                    connection, window, cx,
+                                                );
+                                            });
+                                            window.close_dialog(cx);
+                                        }),
+                                    )
                                 }),
-                            )
-                        }),
-                ),
-        )
+                        ),
+                )
+            }
+        }
     }
 
     fn set_selected_index(
@@ -338,12 +498,24 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
             return;
         }
         if let Some(ix) = self.selected_index {
-            if let Some(connection) = self.filtered_items.get(ix.row).cloned() {
+            if let Some(entry) = self.filtered_entries.get(ix.row).cloned() {
                 self.opened = true;
                 let parent = self.parent.clone();
-                parent.update(cx, |this, cx| {
-                    this.open_connection_from_quick(&connection, window, cx);
-                });
+                match entry {
+                    QuickOpenEntry::LocalTerminal(terminal) => {
+                        #[cfg(feature = "shell")]
+                        parent.update(cx, |this, cx| {
+                            this.open_local_terminal_tab(Some(terminal.descriptor), window, cx);
+                        });
+                        #[cfg(not(feature = "shell"))]
+                        let _ = (parent, terminal);
+                    }
+                    QuickOpenEntry::Connection(connection) => {
+                        parent.update(cx, |this, cx| {
+                            this.open_connection_from_quick(&connection, window, cx);
+                        });
+                    }
+                }
                 window.close_dialog(cx);
             }
         }
@@ -590,5 +762,51 @@ mod tests {
             confirm.contains("self.opened = true"),
             "打开连接前要标记，后续 confirm 直接返回"
         );
+    }
+
+    #[cfg(feature = "shell")]
+    #[test]
+    fn quick_open_includes_local_terminals_and_wsl_distributions() {
+        use domain_api::WslDistributionInfo;
+        use one_core::settings::{
+            LocalTerminalCustomProfile, LocalTerminalProfileKind, LocalTerminalProfileSettings,
+        };
+
+        let settings = LocalTerminalProfileSettings {
+            kind: LocalTerminalProfileKind::PowerShell,
+            custom_profiles: vec![LocalTerminalCustomProfile {
+                id: "dev".to_string(),
+                name: "Dev Shell".to_string(),
+                command: "pwsh".to_string(),
+            }],
+            ..Default::default()
+        };
+        let wsl = vec![WslDistributionInfo {
+            name: "Ubuntu-24.04".into(),
+            is_default: true,
+        }];
+
+        let entries = build_local_terminal_entries(true, &settings, &wsl);
+        assert!(
+            entries.first().is_some_and(|first| first.is_default
+                && first.descriptor.kind == TerminalProfileKind::PowerShell),
+            "默认本地终端配置应排在最前面"
+        );
+        assert!(entries.iter().any(|entry| {
+            entry.descriptor.kind == TerminalProfileKind::Custom
+                && entry.descriptor.id.as_deref() == Some("dev")
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.descriptor.kind == TerminalProfileKind::Wsl
+                && entry.descriptor.id.as_deref() == Some("Ubuntu-24.04")
+        }));
+
+        let ubuntu = entries
+            .iter()
+            .find(|entry| entry.descriptor.id.as_deref() == Some("Ubuntu-24.04"))
+            .unwrap();
+        assert!(quick_open_matches_local_terminal(ubuntu, "ubuntu"));
+        assert!(quick_open_matches_local_terminal(ubuntu, "wsl"));
+        assert!(quick_open_matches_local_terminal(ubuntu, "本地终端"));
     }
 }

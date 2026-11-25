@@ -69,6 +69,10 @@ impl TerminalView {
         ))
     }
 
+    pub(crate) fn local_profile_title(&self) -> Option<String> {
+        self.local_profile_title.clone()
+    }
+
     pub(crate) fn duplicate_supported(&self, cx: &App) -> bool {
         terminal_tab_duplicate_supported(
             self.duplicate_source.as_ref(),
@@ -78,12 +82,13 @@ impl TerminalView {
 
     pub(crate) fn new_from_duplicate_source(
         source: TerminalDuplicateSource,
+        local_profile_title: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         match source {
             TerminalDuplicateSource::Local(config) => {
-                Self::new_with_index(config, None, window, cx)
+                Self::new_local_with_profile_title(config, local_profile_title, None, window, cx)
             }
             TerminalDuplicateSource::Launched {
                 config,
@@ -130,6 +135,20 @@ impl TerminalView {
 
     pub(crate) fn close_now(&mut self, cx: &mut Context<Self>) {
         self.close_terminal_now(cx);
+    }
+
+    /// 单分屏（未拆屏）工作区关闭时复用单终端的关闭确认逻辑与文案，
+    /// 避免在仅有一个本地终端时弹出“当前工作区包含 1 个终端分屏”的误导性提示。
+    pub(crate) fn try_close_single_pane(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<bool> {
+        if self.requires_close_confirmation(cx) {
+            return self.confirm_local_terminal_close(window, cx);
+        }
+        self.close_terminal_now(cx);
+        Task::ready(true)
     }
 
     pub(crate) fn workspace_sidebar_snapshot(&self, cx: &App) -> TerminalWorkspaceSidebarSnapshot {

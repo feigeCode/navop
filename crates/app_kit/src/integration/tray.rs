@@ -275,6 +275,14 @@ fn install_dispatcher(cx: &mut App) {
     .detach();
 }
 
+/// 外部桌面事件（如 Windows 系统通知点击）请求激活主窗口并切换到指定标签页。
+///
+/// 与托盘「会话」菜单项共用同一套安全队列（`COMMAND_TX` → 前台任务 → 原生
+/// `show_main_window` → `activate_tab`），避免在非 GPUI 线程直接触碰窗口。
+pub fn activate_session_from_external(id: String) {
+    dispatch(TrayCommand::ActivateSession { id });
+}
+
 /// 平台回调侧唯一的出口：只入队，不执行。
 fn dispatch(command: TrayCommand) {
     let Some(tx) = COMMAND_TX.get() else {

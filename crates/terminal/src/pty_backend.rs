@@ -82,6 +82,8 @@ pub enum TerminalEvent {
     CommandFinished { exit_code: i32 },
     /// 记录 shell 实际执行过的命令
     CommandRecorded(String),
+    /// 终端程序通过 OSC 9 / OSC 777 发出的桌面通知
+    Notification(crate::osc::TerminalNotification),
 }
 
 enum LocalPtyCommand {
@@ -180,6 +182,7 @@ fn terminal_event_from_osc_event(event: OscEvent) -> TerminalEvent {
         OscEvent::CommandFinished { exit_code } => TerminalEvent::CommandFinished { exit_code },
         OscEvent::WorkingDirChanged(reported) => TerminalEvent::WorkingDirChanged(reported),
         OscEvent::CommandRecorded(command) => TerminalEvent::CommandRecorded(command),
+        OscEvent::Notification(notification) => TerminalEvent::Notification(notification),
     }
 }
 
@@ -434,6 +437,9 @@ impl LocalPtyBackend {
         let stopped = Arc::new(AtomicBool::new(false));
         let shutdown_requested = Arc::new(AtomicBool::new(false));
         let child_exit_reported = event_proxy.child_exit_reported_handle();
+        #[cfg(target_os = "windows")]
+        let pty = crate::windows_conpty::spawn(&pty_options, window_size)?;
+        #[cfg(not(target_os = "windows"))]
         let pty = tty::new(&pty_options, window_size, 0)?;
         let pty = OscTrackingPty::new(
             pty,

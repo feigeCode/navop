@@ -1482,6 +1482,18 @@ impl SshSessionService {
             .map(|inner| SshSessionLease { inner })
     }
 
+    /// Retire the currently published or in-flight slot for `key`.
+    ///
+    /// Callers use this when a previously cached manager's config is no longer
+    /// valid for a subsequent connection attempt (for example after the user
+    /// confirms an unknown or changed SSH host key and needs the retry to use
+    /// the updated [`HostKeyVerifier`]). Existing leases keep their retired
+    /// manager alive; subsequent [`Self::acquire`] calls create a fresh manager
+    /// with the new `SshConnectConfig`.
+    pub fn retire(&self, key: &ConnectionKey) -> Option<Arc<SshSessionManager>> {
+        self.inner.registry.retire(key)
+    }
+
     /// Return the current credential-free service snapshot.
     #[must_use]
     pub fn snapshot(&self) -> SshSessionServiceSnapshot {
@@ -2969,5 +2981,51 @@ mod tests {
             "Drop must not launch or await transport I/O"
         );
         drop(lease);
+    }
+
+    #[tokio::test]
+    async fn service_retire_replaces_cached_manager_config_for_next_acquire() {
+        let service = SshSessionService::new();
+        let initial_config = test_config("retire-host-key.example");
+        let key = test_key(&initial_config, 1);
+
+        let initial_lease = service
+            .acquire(&key, initial_config.clone())
+            .await
+            .expect("initial lease should be created");
+        initial_lease.release();
+
+        // Simulate user confirming a changed host key: the ConnectionKey is
+        // unchanged, so retiring the old slot is required before retrying.
+        let mut updated_config = initial_config.clone();
+        let id = crate::HostKeyIdentity::new(
+            "retire-host-key.example",
+            22,
+            crate::HostKeyRoute::Direct,
+        );
+        let details = crate::HostKeyDetails {
+            algorithm: "ssh-ed25519".to_string(),
+            fingerprint: "SHA256:replacement".to_string(),
+        };
+        updated_config.host_key_verifier = updated_config
+            .host_key_verifier
+            .with_confirmed_changed_key(id.clone(), details, true);
+
+        assert!(service.retire(&key).is_some());
+
+        let retried_lease = service
+            .acquire(&key, updated_config)
+            .await
+            .expect("retried lease should be created with updated config");
+        let algorithms = retried_lease
+            .manager()
+            .config()
+            .host_key_verifier
+            .known_host_key_algorithms(&id)
+            .expect("known algorithms lookup should succeed");
+        assert!(
+            algorithms.iter().any(|algo| algo == "ssh-ed25519"),
+            "fresh manager must carry the confirmed replacement host key"
+        );
     }
 }

@@ -87,6 +87,8 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             .into_iter()
             .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, SendShiftTab, Some(TERMINAL_CONTEXT), cx)),
     );
+    #[cfg(not(target_os = "macos"))]
+    keybindings.push(terminal_ctrl_c_root_guard_keybinding(cx));
     keybindings.extend(
         shortcuts_for(cx, action_id::TERMINAL_COPY, &[TERMINAL_COPY_SHORTCUT])
             .into_iter()
@@ -259,6 +261,8 @@ pub(super) fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         Some(TERMINAL_CONTEXT),
         SendShiftTab,
     ));
+    #[cfg(not(target_os = "macos"))]
+    keybindings.push(terminal_ctrl_c_root_guard_keybinding(cx));
     keybindings.extend(rebind_keybindings(
         cx,
         action_id::TERMINAL_COPY,
@@ -371,6 +375,20 @@ pub(super) fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
 
 fn terminal_search_close_keybinding() -> KeyBinding {
     KeyBinding::new("escape", CloseTerminalSearch, Some(TERMINAL_SEARCH_CONTEXT))
+}
+
+/// 非 macOS 上 `gpui_component::Root` 把 `ctrl-c` 绑定为 `input::Copy`；若窗口其它 UI
+/// 区域留有未清空的 `TextSelection`，Root 会直接吞掉 `ctrl-c`，终端收不到 `\x03`。
+/// 这里在 `TerminalView` 上下文里显式用 `NoAction` 屏蔽 Root 的 `ctrl-c`（排在
+/// `TERMINAL_COPY` 绑定之前，这样用户若显式将 `terminal.copy` 设为 `ctrl-c` 仍可生效）。
+#[cfg(not(target_os = "macos"))]
+fn terminal_ctrl_c_root_guard_keybinding(cx: &App) -> KeyBinding {
+    one_core::keybindings::load_dynamic_keybinding(
+        "ctrl-c",
+        gpui::NoAction,
+        Some(TERMINAL_CONTEXT),
+        cx,
+    )
 }
 
 pub(super) fn terminal_paste_defaults() -> Vec<&'static str> {

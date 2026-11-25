@@ -226,7 +226,13 @@ impl HomePage {
                 AppSettings::global(cx).connection_sort_order,
             );
         }
-        groups.retain(|(_, _, connections)| !connections.is_empty());
+        // 空分组也要留在首页（#588）：新建分组后必须立刻看到同名分组，否则用户会
+        // 误判「创建分组没生效」。一旦有搜索、类型或分组筛选，空分组就不再占位，
+        // 否则每个分组都会顶着一个 0 结果的标题。
+        let filtered =
+            connections_are_filtered(query, &self.selected_filter, &self.filtered_workspace_ids);
+        groups
+            .retain(|(id, _, connections)| keep_group_row(*id, !connections.is_empty(), filtered));
         groups
     }
 
@@ -597,6 +603,23 @@ impl HomePage {
         }
         grid.into_any_element()
     }
+}
+
+/// 当前首页视图是否处于搜索、连接类型或分组筛选状态。
+fn connections_are_filtered(
+    query: &str,
+    filter: &ConnectionFilter,
+    workspace_ids: &HashSet<i64>,
+) -> bool {
+    !query.trim().is_empty() || filter != &ConnectionFilter::All || !workspace_ids.is_empty()
+}
+
+/// 首页分组是否参与渲染。
+///
+/// 命名分组即使一条连接都没有也要显示（#588）；「未分组」桶没有 id，只在确有未分组
+/// 连接时出现。处于筛选状态时空分组全部让位，避免刷出一屏 0 结果的分组标题。
+pub(super) fn keep_group_row(id: Option<i64>, has_connections: bool, filtered: bool) -> bool {
+    has_connections || (id.is_some() && !filtered)
 }
 
 /// 分组头数量徽标（demo：11px、muted、--hover 底、圆角 8px、tabular-nums）。

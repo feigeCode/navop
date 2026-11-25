@@ -71,7 +71,9 @@ impl HomePage {
 }
 
 /// 菜单项到领域意图的映射：内置 profile 只带 kind，自定义 profile 带稳定 id。
-fn launch_target_descriptor(target: &LocalTerminalLaunchTarget) -> TerminalProfileDescriptor {
+pub(crate) fn launch_target_descriptor(
+    target: &LocalTerminalLaunchTarget,
+) -> TerminalProfileDescriptor {
     match target {
         LocalTerminalLaunchTarget::Builtin(kind) => TerminalProfileDescriptor {
             kind: domain_terminal_kind(*kind),
@@ -129,7 +131,7 @@ fn append_wsl_distributions(
 }
 
 /// 发行版条目文案：默认发行版追加「默认」标记，便于对齐 MobaXterm 的辨识体验。
-fn wsl_distro_item_label(name: &str, is_default: bool) -> String {
+pub(crate) fn wsl_distro_item_label(name: &str, is_default: bool) -> String {
     if is_default {
         format!("{name} · {}", t!("Home.wsl_distributions_default"))
     } else {
