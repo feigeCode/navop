@@ -1,4 +1,5 @@
 use super::*;
+use crate::navigation_applications::NavigationApplication;
 use one_ui::IconSize;
 
 fn navigation_section_heading(title: String, count: usize, cx: &Context<HomePage>) -> AnyElement {
@@ -141,12 +142,17 @@ impl HomePage {
             }
         } else {
             body = body.child(self.render_navigation_home_heading(cx));
+            body = body.child(self.render_navigation_quick_actions(cx));
             if !sessions.is_empty() {
                 body = body.child(self.render_active_session_list(sessions, cx));
             }
             if AppSettings::global(cx).home_show_recent_connections {
                 body = body.child(self.render_compact_recent_connections(cx));
             }
+            if self.has_named_groups(cx) {
+                body = body.child(self.render_navigation_groups(cx));
+            }
+            body = body.child(self.render_navigation_tips(cx));
         }
         div()
             .id("home-navigation-content")
@@ -225,6 +231,127 @@ impl HomePage {
             .into_any_element()
     }
 
+    /// 主页首屏的快捷操作卡片：四个入口把空着的首屏填起来，
+    /// 也把最常用的动作（新建连接 / 快速 SSH / 笔记 / AI）提到一屏可见。
+    /// 主页首屏的快捷操作卡片：四个入口把空着的首屏填起来，
+    /// 也把最常用的动作（新建连接 / 快速 SSH / 笔记 / AI）提到一屏可见。
+    fn render_navigation_quick_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        h_flex()
+            .id("home-navigation-quick-actions")
+            .w_full()
+            .min_w_0()
+            .gap_3()
+            .child(self.quick_action_tile(
+                "home-quick-new-connection",
+                IconName::Plus,
+                t!("Home.quick_new_connection").to_string(),
+                t!("Home.quick_new_connection_hint").to_string(),
+                cx,
+                |home, _, window, cx| home.show_new_connection_dialog(None, window, cx),
+            ))
+            .child(self.quick_action_tile(
+                "home-quick-ssh",
+                IconName::SquareTerminal,
+                t!("Home.quick_ssh").to_string(),
+                t!("Home.quick_ssh_hint").to_string(),
+                cx,
+                |home, _, window, cx| {
+                    // 不打对话框：直接把搜索框预填成 ssh 开头并聚焦，
+                    // 用户接着敲 user@host 回车即可。
+                    home.search_input.update(cx, |input, cx| {
+                        input.set_value("ssh ", window, cx);
+                        input.focus(window, cx);
+                    });
+                },
+            ))
+            .child(self.quick_action_tile(
+                "home-quick-notes",
+                IconName::NotesLine,
+                t!("Home.quick_notes").to_string(),
+                t!("Home.quick_notes_hint").to_string(),
+                cx,
+                |home, _, window, cx| {
+                    home.activate_navigation_application(NavigationApplication::Notes, window, cx)
+                },
+            ))
+            .child(self.quick_action_tile(
+                "home-quick-ai-workbench",
+                IconName::AILine,
+                t!("Home.quick_ai_workbench").to_string(),
+                t!("Home.quick_ai_workbench_hint").to_string(),
+                cx,
+                |home, _, window, cx| {
+                    home.activate_navigation_application(
+                        NavigationApplication::AiWorkbench,
+                        window,
+                        cx,
+                    )
+                },
+            ))
+            .into_any_element()
+    }
+
+    fn quick_action_tile(
+        &self,
+        id: &'static str,
+        icon: IconName,
+        title: String,
+        hint: String,
+        cx: &mut Context<Self>,
+        on_click: impl Fn(&mut HomePage, &gpui::ClickEvent, &mut Window, &mut Context<HomePage>)
+        + 'static,
+    ) -> impl IntoElement {
+        let hover_bg = cx.theme().list_hover;
+        let border = cx.theme().border;
+        let surface = cx.theme().muted;
+        let inner_surface = cx.theme().background;
+        let muted_foreground = cx.theme().muted_foreground;
+        div()
+            .id(id)
+            .flex_1()
+            .min_w_0()
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(border)
+            .bg(surface)
+            .hover(move |style| style.bg(hover_bg))
+            .p_3()
+            .gap_2()
+            .cursor_pointer()
+            .on_click(cx.listener(move |home, event, window, cx| on_click(home, event, window, cx)))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(28.0))
+                            .rounded(px(7.0))
+                            .border_1()
+                            .border_color(border)
+                            .bg(inner_surface)
+                            .child(Icon::new(icon).with_size(IconSize::Small)),
+                    )
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(title),
+                            )
+                            .child(div().text_xs().text_color(muted_foreground).child(hint)),
+                    ),
+            )
+    }
+
     fn render_navigation_search_heading(&self, count: usize, cx: &Context<Self>) -> AnyElement {
         h_flex()
             .items_center()
@@ -298,7 +425,7 @@ impl HomePage {
     }
 
     fn render_compact_recent_connections(&self, cx: &mut Context<Self>) -> AnyElement {
-        let recent = recent::recent_connections(&self.connections, &self.selected_filter, "", 4);
+        let recent = recent::recent_connections(&self.connections, &self.selected_filter, "", 8);
         let mut rows = v_flex().w_full().gap_1();
         for conn in &recent {
             rows = rows.child(self.render_connection_list_item(
@@ -327,6 +454,152 @@ impl HomePage {
                 cx,
             ))
             .child(rows)
+            .into_any_element()
+    }
+
+    /// 有名字的分组才值得占首屏；「未分组」由最近连接兜底，不做成卡片。
+    fn has_named_groups(&self, cx: &App) -> bool {
+        self.home_groups("", cx)
+            .iter()
+            .any(|(id, _, _)| id.is_some())
+    }
+
+    /// 分组概览：一眼看到有哪几组、每组多少条，点一下就进连接管理并只显示这一组。
+    fn render_navigation_groups(&self, cx: &mut Context<Self>) -> AnyElement {
+        let groups = self
+            .home_groups("", cx)
+            .into_iter()
+            .filter_map(|(id, name, connections)| id.map(|id| (id, name, connections.len())))
+            .take(6)
+            .collect::<Vec<_>>();
+        if groups.is_empty() {
+            return gpui::Empty.into_any_element();
+        }
+        let border = cx.theme().border;
+        let surface = cx.theme().background;
+        let hover_bg = cx.theme().list_hover;
+        let muted_foreground = cx.theme().muted_foreground;
+        let mut row = h_flex().w_full().min_w_0().gap_3();
+        for (workspace_id, name, count) in groups {
+            row = row.child(
+                div()
+                    .id(("home-navigation-group", workspace_id as usize))
+                    .flex_1()
+                    .min_w_0()
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(border)
+                    .bg(surface)
+                    .hover(move |style| style.bg(hover_bg))
+                    .p_3()
+                    .gap_1()
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |home, _, _, cx| {
+                        home.filtered_workspace_ids.clear();
+                        home.filtered_workspace_ids.insert(workspace_id);
+                        home.navigation_connection_manager_open = true;
+                        cx.notify();
+                    }))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .min_w_0()
+                            .child(
+                                Icon::new(IconName::Folder)
+                                    .with_size(IconSize::Small)
+                                    .text_color(muted_foreground),
+                            )
+                            .child(div().min_w_0().flex_1().truncate().text_sm().child(name))
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_xs()
+                                    .text_color(muted_foreground)
+                                    .child(count.to_string()),
+                            ),
+                    ),
+            );
+        }
+        v_flex()
+            .id("home-navigation-groups")
+            .w_full()
+            .gap_2()
+            .child(navigation_section_heading(
+                t!("Home.groups_section").to_string(),
+                self.home_groups("", cx)
+                    .iter()
+                    .filter(|(id, _, _)| id.is_some())
+                    .count(),
+                cx,
+            ))
+            .child(row)
+            .into_any_element()
+    }
+
+    /// 首屏底部的用法提示：三条都是真实可用的入口，不写装饰性文案。
+    fn render_navigation_tips(&self, cx: &Context<Self>) -> AnyElement {
+        let quick_open = one_core::keybindings::shortcuts_for(
+            cx,
+            one_core::keybindings::action_id::HOME_QUICK_OPEN,
+            &[if cfg!(target_os = "macos") {
+                "cmd-o"
+            } else {
+                "alt-o"
+            }],
+        )
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "cmd-o".to_string());
+        let tips = [
+            (IconName::SquareTerminal, t!("Home.tip_ssh").to_string()),
+            (
+                IconName::Info,
+                t!("Home.tip_quick_open", shortcut = quick_open).to_string(),
+            ),
+            (IconName::Filter, t!("Home.tip_group_filter").to_string()),
+        ];
+        let surface = cx.theme().muted;
+        let border = cx.theme().border;
+        let muted_foreground = cx.theme().muted_foreground;
+        let mut row = h_flex().w_full().min_w_0().gap_3();
+        for (index, (icon, text)) in tips.into_iter().enumerate() {
+            row = row.child(
+                h_flex()
+                    .id(("home-navigation-tip", index))
+                    .flex_1()
+                    .min_w_0()
+                    .items_center()
+                    .gap_2()
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(border)
+                    .bg(surface)
+                    .p_3()
+                    .child(
+                        Icon::new(icon)
+                            .with_size(IconSize::Small)
+                            .text_color(muted_foreground),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(muted_foreground)
+                            .child(text),
+                    ),
+            );
+        }
+        v_flex()
+            .id("home-navigation-tips")
+            .w_full()
+            .gap_2()
+            .child(navigation_section_heading(
+                t!("Home.tips_title").to_string(),
+                0,
+                cx,
+            ))
+            .child(row)
             .into_any_element()
     }
 

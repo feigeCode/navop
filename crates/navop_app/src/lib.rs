@@ -368,11 +368,27 @@ fn report_single_instance_failure(message: &str) {
 ///
 /// 三个应用 crate 各自定义自己的 `Product`（身份、领域包、初始化），这里只负责
 /// 与产品无关的启动流程：环境文件、路径、单实例、窗口、平台集成。
+/// 把 panic 写进应用日志：macOS 的崩溃报告只有地址没有信息，鼠标事件里
+/// 逃出边界（`panic_cannot_unwind`）还会直接 abort，日志是唯一能拿到 panic
+/// 文本与调用栈的地方。默认 hook 仍然保留，终端里照样能看到原文。
+fn install_panic_logger() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(
+            target: "navop_app::panic",
+            "panic: {info}\nbacktrace:\n{}",
+            std::backtrace::Backtrace::force_capture()
+        );
+        default_hook(info);
+    }));
+}
+
 pub fn run_with<P>(product: P, version: &'static str)
 where
     P: domain_api::Product + 'static,
 {
     env_file::load_env_files();
+    install_panic_logger();
 
     // 身份必须先于一切按产品派生的行为（数据目录、密钥链、MCP 发现、更新 feed）
     // 确定；全量产品也走这条路径，避免维护两套启动顺序。

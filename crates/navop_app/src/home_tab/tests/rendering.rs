@@ -890,8 +890,10 @@ fn shell_resource_resize_gutter_matches_the_panel_surface() {
         app.contains(".placement(one_ui::resize_handle::HandlePlacement::Left)"),
         "外壳资源列的抓取区要贴在面板右缘，不再占一条 13px 的布局宽度"
     );
+    // 缩进会随外壳结构微调，比较时压掉空白，只认代码形状。
+    let compact = app.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        app.contains("gpui::div()\n                        .relative()"),
+        compact.contains("gpui::div() .relative() .flex_shrink_0() .h_full() .w(px(width)) .child(rendered) .child(resize)"),
         "面板与抓取区要放进同一个相对定位容器"
     );
     assert!(
@@ -949,4 +951,143 @@ fn 数据库类对象树由外壳托管并复用同一套折叠与底色() {
         !resource.contains(".border_r_1()"),
         "数据库面板右缘会和外层分隔线叠成双重接缝"
     );
+}
+
+/// 主页首屏只有「继续工作 + 最近连接」时会显得空，快捷操作卡片负责补第一屏，
+/// 四条入口都必须能真的把人送到对应位置，而不只是装饰。
+#[test]
+fn home_navigation_offers_quick_action_tiles() {
+    let content = include_str!("../content.rs");
+    assert!(content.contains("body = body.child(self.render_navigation_quick_actions(cx));"));
+    assert!(content.contains("fn render_navigation_quick_actions("));
+    assert!(content.contains(".id(\"home-navigation-quick-actions\")"));
+
+    for (id, icon) in [
+        ("home-quick-new-connection", "IconName::Plus"),
+        ("home-quick-ssh", "IconName::SquareTerminal"),
+        ("home-quick-notes", "IconName::NotesLine"),
+        ("home-quick-ai-workbench", "IconName::AILine"),
+    ] {
+        assert!(content.contains(id), "缺少快捷操作 {id}");
+        assert!(content.contains(icon), "缺少图标 {icon}");
+    }
+
+    // 新建连接走既有对话框；快速 SSH 直接预填搜索框；笔记与 AI 走应用导航。
+    assert!(content.contains("home.show_new_connection_dialog(None, window, cx)"));
+    assert!(content.contains("input.set_value(\"ssh \", window, cx);"));
+    assert!(content.contains("input.focus(window, cx);"));
+    assert!(content.contains("NavigationApplication::Notes"));
+    assert!(content.contains("NavigationApplication::AiWorkbench"));
+
+    // 文案走本地化键，不能在渲染代码里写死中文。
+    for key in [
+        "Home.quick_new_connection",
+        "Home.quick_new_connection_hint",
+        "Home.quick_ssh",
+        "Home.quick_ssh_hint",
+        "Home.quick_notes",
+        "Home.quick_notes_hint",
+        "Home.quick_ai_workbench",
+    ] {
+        assert!(content.contains(key), "缺少文案键 {key}");
+    }
+}
+
+/// 用户反馈首屏「还是太空」：最近连接放宽，再补分组概览与用法提示，
+/// 且这些区块都必须能点进真实入口，不能只是装饰。
+#[test]
+fn home_navigation_fills_the_first_screen_below_recent_connections() {
+    let content = include_str!("../content.rs");
+
+    // 最近连接从 4 条放宽到 8 条。
+    assert!(
+        content.contains(
+            "recent::recent_connections(&self.connections, &self.selected_filter, \"\", 8)"
+        )
+    );
+
+    // 分组概览：点一下带分组过滤进连接管理。
+    assert!(content.contains("if self.has_named_groups(cx) {"));
+    assert!(content.contains("fn render_navigation_groups("));
+    assert!(content.contains("home.filtered_workspace_ids.insert(workspace_id);"));
+    assert!(content.contains("home.navigation_connection_manager_open = true;"));
+    assert!(content.contains("\"home-navigation-groups\""));
+
+    // 用法提示：快捷键文案取自真实键位绑定，不写死。
+    assert!(content.contains("body = body.child(self.render_navigation_tips(cx));"));
+    assert!(content.contains("fn render_navigation_tips("));
+    assert!(content.contains("action_id::HOME_QUICK_OPEN"));
+    assert!(content.contains("\"home-navigation-tips\""));
+}
+
+/// 「浮动侧边栏」开关：打开后连接树浮在内容之上（不占宽度），
+/// 点内容区或打开连接后收起。新外壳曾经把这个开关的浮动语义丢了。
+#[gpui::test]
+fn floating_connection_tree_overlays_the_content(cx: &mut gpui::TestAppContext) {
+    let shell = include_str!("../../navop_app.rs");
+    assert!(
+        shell.contains("let floating_connection = resource == ResourceKind::Connections"),
+        "浮动开关不能只对主页布局生效，图标栏布局也要走同一条路径"
+    );
+    assert!(shell.contains("self.connection_sidebar.read(cx).is_auto_hide_tree()"));
+    assert!(
+        shell.contains("sidebar.render_floating_tree(px(navigation_width), window, cx)"),
+        "浮动连接树应由 render_floating_tree 画成圆角卡片"
+    );
+    assert!(
+        shell.contains("this.set_connection_sidebar_expanded(false, cx);"),
+        "点内容区应把浮动树收回"
+    );
+
+    let sidebar = include_str!("../../persistent_connection_sidebar/mod.rs");
+    assert!(
+        sidebar.contains("is_auto_hide_tree"),
+        "浮动开关必须仍由连接树状态驱动"
+    );
+    assert!(
+        sidebar.contains("left: Pixels,"),
+        "浮动卡片的位置由外壳传入，不能写死贴左边缘"
+    );
+    let _ = cx;
+}
+
+/// AI 工作台会话导航栏的开关：工具条里那个与标签栏同图标的按钮已经去掉，
+/// 标签栏开关在 AI 标签下改驱动工作台的会话导航栏，避免两个入口抢同一件事。
+#[gpui::test]
+fn ai_workbench_reuses_the_tab_bar_nav_toggle(cx: &mut gpui::TestAppContext) {
+    let shell = include_str!("../../navop_app.rs");
+    assert!(
+        shell.contains("active_key == Some(\"AiWorkbench\")"),
+        "只有 AI 工作台标签才把开关位转给工作台"
+    );
+    assert!(
+        shell.contains("tabs.set_workbench_nav_toggle(workbench_nav, cx);"),
+        "工作台折叠状态要下传给标签栏"
+    );
+    assert!(
+        shell.contains("TabContainerEvent::WorkbenchNavToggled { expanded } =>"),
+        "标签栏的点击要能回到工作台"
+    );
+    assert!(
+        shell.contains("ai.set_session_nav_collapsed(!expanded, cx)"),
+        "事件回来时要按目标状态设置而不是再翻一次"
+    );
+
+    let tabs = include_str!("../../../../core/src/tab_container.rs");
+    assert!(
+        tabs.contains("workbench_nav\n                    .or(home_menu_expanded)")
+            || tabs.contains("workbench_nav.or(home_menu_expanded)"),
+        "工作台导航栏优先表达开关状态"
+    );
+    assert!(
+        tabs.contains("pub fn set_workbench_nav_toggle"),
+        "要有下传入口"
+    );
+
+    let agent_view = include_str!("../../../../ai_chat_view/src/agent_view.rs");
+    assert!(
+        !agent_view.contains("workbench-toolbar-nav-toggle"),
+        "聊天工具条里的导航栏开关已移除，不再有重复入口"
+    );
+    let _ = cx;
 }

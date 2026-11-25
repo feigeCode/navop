@@ -298,6 +298,58 @@ Home:
     en: "Recent Connections"
     zh-CN: "最近连接"
     zh-HK: "最近連線"
+  tips_title:
+    en: "Tips"
+    zh-CN: "小技巧"
+    zh-HK: "小技巧"
+  tip_ssh:
+    en: "Type ssh user@host in search to connect straight away"
+    zh-CN: "搜索框输入 ssh user@host 可直达目标机器"
+    zh-HK: "搜尋框輸入 ssh user@host 可直達目標機器"
+  tip_quick_open:
+    en: "Press %{shortcut} to jump to any connection"
+    zh-CN: "按 %{shortcut} 可以快速跳到任意连接"
+    zh-HK: "按 %{shortcut} 可以快速跳到任意連線"
+  tip_group_filter:
+    en: "The filter in the toolbar narrows the list by group"
+    zh-CN: "右上角筛选器可按分组收窄列表"
+    zh-HK: "右上角篩選器可按分組收窄清單"
+  quick_actions:
+    en: "Quick actions"
+    zh-CN: "快捷操作"
+    zh-HK: "快捷操作"
+  quick_new_connection:
+    en: "New connection"
+    zh-CN: "新建连接"
+    zh-HK: "新建連線"
+  quick_new_connection_hint:
+    en: "SSH / database / RDP"
+    zh-CN: "SSH / 数据库 / RDP"
+    zh-HK: "SSH / 資料庫 / RDP"
+  quick_ssh:
+    en: "Quick SSH"
+    zh-CN: "快速 SSH"
+    zh-HK: "快速 SSH"
+  quick_ssh_hint:
+    en: "Type ssh user@host to connect"
+    zh-CN: "输入 ssh user@host 直接连接"
+    zh-HK: "輸入 ssh user@host 直接連線"
+  quick_notes:
+    en: "Open notes"
+    zh-CN: "打开笔记"
+    zh-HK: "開啟筆記"
+  quick_notes_hint:
+    en: "Docs and records"
+    zh-CN: "文档与记录"
+    zh-HK: "文件與記錄"
+  quick_ai_workbench:
+    en: "AI workbench"
+    zh-CN: "AI 工作台"
+    zh-HK: "AI 工作台"
+  quick_ai_workbench_hint:
+    en: "Let the assistant take it"
+    zh-CN: "让助手处理任务"
+    zh-HK: "讓助手處理任務"
   continue_working:
     en: "Continue working"
     zh-CN: "继续工作"
@@ -339,9 +391,9 @@ Home:
     zh-CN: "请在左侧资源栏浏览完整的连接树。"
     zh-HK: "請在左側資源欄瀏覽完整的連線樹。"
   global_search_placeholder:
-    en: "Search open sessions and connections…"
-    zh-CN: "搜索已打开的会话和连接…"
-    zh-HK: "搜尋已開啟的工作階段和連線…"
+    en: "Search sessions and connections, or type ssh user@host…"
+    zh-CN: "搜索会话、连接，或输入 ssh user@host 快速连接…"
+    zh-HK: "搜尋工作階段、連線，或輸入 ssh user@host 快速連線…"
   global_search_empty:
     en: "No matching open sessions or connections"
     zh-CN: "没有匹配的已打开会话或连接"

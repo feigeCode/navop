@@ -262,9 +262,13 @@ impl WorkbenchState {
         true
     }
 
+    /// 切换会话栏折叠状态，返回是否真的变了。
+    ///
+    /// 曾经这里返回的是「折叠后的值」：展开时返回 `false`，调用方的
+    /// `commit(changed)` 会当成「什么都没变」直接吞掉重绘，于是点开关只有
+    /// 收起有效、展开毫无反应。
     pub fn toggle_nav(&mut self) -> bool {
-        self.nav_collapsed = !self.nav_collapsed;
-        self.nav_collapsed
+        self.set_nav_collapsed(!self.nav_collapsed)
     }
 
     pub fn nav_width(&self) -> f32 {
@@ -1154,6 +1158,17 @@ mod tests {
         assert!(!state.set_nav_collapsed(true));
         assert!(state.nav_collapsed());
         assert!(state.set_nav_collapsed(false));
+        assert!(!state.nav_collapsed());
+    }
+
+    #[test]
+    fn toggling_nav_reports_every_flip() {
+        let mut state = WorkbenchState::new(WorkbenchPanelKind::Chat);
+
+        // 收起、展开都要报「变了」，否则调用方的 commit 会吞掉重绘。
+        assert!(state.toggle_nav());
+        assert!(state.nav_collapsed());
+        assert!(state.toggle_nav());
         assert!(!state.nav_collapsed());
     }
 

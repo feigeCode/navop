@@ -1010,15 +1010,14 @@ impl RuntimeBinding {
 
 /// 工作台外壳注入工具条的侧栏开关：状态读取与切换动作都由外壳提供。
 ///
-/// 图标状态在每次渲染时经 `nav_collapsed` / `right_open` 闭包实时求值，
-/// 动作闭包经外壳弱引用回调——外壳与面板互不强持有，销毁顺序无关。
-/// 面板会暂存注入值：内层视图是异步构建的，注入可能早于视图存在。
+/// 图标状态在每次渲染时经 `right_open` 闭包实时求值，动作闭包经外壳弱引用
+/// 回调——外壳与面板互不强持有，销毁顺序无关。面板会暂存注入值：内层视图是
+/// 异步构建的，注入可能早于视图存在。
+///
+/// 会话导航栏的开关不在这里：宿主外壳的标签栏已经提供同一个面板左缘开关，
+/// 工具条再放一个就是重复入口。
 #[derive(Clone)]
 pub struct WorkbenchSidebarToggles {
-    /// 会话导航栏是否处于收起态。
-    pub nav_collapsed: std::sync::Arc<dyn Fn(&gpui::App) -> bool + 'static>,
-    /// 切换会话导航栏。
-    pub toggle_nav: std::sync::Arc<dyn Fn(&mut gpui::Window, &mut gpui::App) + 'static>,
     /// 右侧标签组是否处于展开态（有标签且未被收起，放大视为展开）。
     pub right_open: std::sync::Arc<dyn Fn(&gpui::App) -> bool + 'static>,
     /// 切换右侧标签组。
@@ -7658,31 +7657,11 @@ impl AgentChatView {
             .flex_shrink_0()
             .child(search_button);
 
-        // 工作台模式：导航栏开关在 agent 切换器左侧，右侧标签组开关与搜索
-        // 同在 trailing；非工作台模式保持原样。
-        let (leading, trailing) = match &self.workbench_toggles {
+        // 工作台模式：会话导航栏的开关由宿主外壳的标签栏提供，聊天工具条里不再
+        // 重复放一个同图标按钮；右侧标签组开关与搜索同在 trailing。
+        let trailing = match &self.workbench_toggles {
             Some(toggles) => {
-                let nav_collapsed = (toggles.nav_collapsed)(cx);
-                let toggle_nav = toggles.toggle_nav.clone();
                 let toggle_right = toggles.toggle_right.clone();
-                let nav_toggle = IconButton::new(
-                    "workbench-toolbar-nav-toggle",
-                    if nav_collapsed {
-                        IconName::PanelLeftOpen
-                    } else {
-                        IconName::PanelLeftClose
-                    },
-                )
-                .role(IconButtonRole::Compact)
-                .tooltip(
-                    if nav_collapsed {
-                        t!("Workbench.expand_nav")
-                    } else {
-                        t!("Workbench.collapse_nav")
-                    }
-                    .to_string(),
-                )
-                .on_click(move |_, window, cx| (toggle_nav)(window, cx));
                 let right_open = (toggles.right_open)(cx);
                 let right_toggle = IconButton::new(
                     "workbench-toolbar-right-toggle",
@@ -7702,17 +7681,14 @@ impl AgentChatView {
                     .to_string(),
                 )
                 .on_click(move |_, window, cx| (toggle_right)(window, cx));
-                (
-                    Some(nav_toggle.into_any_element()),
-                    h_flex()
-                        .gap_1()
-                        .items_center()
-                        .child(search_entry)
-                        .child(right_toggle)
-                        .into_any_element(),
-                )
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(search_entry)
+                    .child(right_toggle)
+                    .into_any_element()
             }
-            None => (None, search_entry.into_any_element()),
+            None => search_entry.into_any_element(),
         };
 
         let mut header = PanelHeader::new("agent-chat-toolbar")
@@ -7722,9 +7698,6 @@ impl AgentChatView {
             .border_color(theme.border)
             .title(self.render_agent_switcher(cx))
             .trailing(trailing);
-        if let Some(leading) = leading {
-            header = header.leading(leading);
-        }
         header.into_any_element()
     }
 

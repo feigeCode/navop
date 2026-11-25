@@ -150,31 +150,11 @@ impl WorkbenchShell {
         // 独立顶栏。动作经外壳弱引用回调，状态由外壳实时提供。
         if let Some(source) = session_source.as_ref() {
             let shell = cx.entity().downgrade();
-            let shell_nav_state = shell.clone();
-            let shell_nav_action = shell.clone();
             let shell_right_state = shell.clone();
             let shell_right_action = shell.clone();
             source.update(cx, |panel, cx| {
                 panel.set_workbench_toggles(
                     crate::agent_view::WorkbenchSidebarToggles {
-                        nav_collapsed: std::sync::Arc::new(move |cx| {
-                            shell_nav_state
-                                .upgrade()
-                                .map(|shell| {
-                                    let shell = shell.read(cx);
-                                    if shell.external_session_nav {
-                                        false
-                                    } else {
-                                        shell.state().nav_collapsed()
-                                    }
-                                })
-                                .unwrap_or(true)
-                        }),
-                        toggle_nav: std::sync::Arc::new(move |window, cx| {
-                            if let Some(shell) = shell_nav_action.upgrade() {
-                                shell.update(cx, |shell, cx| shell.toggle_session_nav(window, cx));
-                            }
-                        }),
                         right_open: std::sync::Arc::new(move |cx| {
                             shell_right_state
                                 .upgrade()
@@ -621,7 +601,29 @@ impl WorkbenchShell {
         self.commit(changed, cx);
     }
 
+    /// 会话导航栏当前的折叠状态；外部托管时导航栏不在工作台里，恒为展开。
+    pub fn session_nav_collapsed(&self) -> bool {
+        !self.external_session_nav && self.state.nav_collapsed()
+    }
+
+    /// 按宿主外壳的开关状态设置会话导航栏折叠，返回是否真的变了。
+    pub fn set_session_nav_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        if self.external_session_nav {
+            return;
+        }
+        let changed = self.state.set_nav_collapsed(collapsed);
+        self.commit(changed, cx);
+    }
+
     pub fn toggle_session_nav(&mut self, window: &gpui::Window, cx: &mut Context<Self>) {
+        tracing::info!(
+            target: "navop_app::ai_nav",
+            external = self.external_session_nav,
+            has_handler = self.external_session_nav_toggle.is_some(),
+            has_nav = self.has_nav(),
+            collapsed = self.state.nav_collapsed(),
+            "切换 AI 会话侧栏"
+        );
         if self.external_session_nav {
             if let Some(handler) = &self.external_session_nav_toggle {
                 handler(window, cx);
@@ -852,6 +854,53 @@ mod tests {
                 shell.update(cx, |shell, cx| shell.materialize_visible_panel(window, cx));
                 assert_eq!(1, builds.load(Ordering::Relaxed), "重复渲染不应重复建视图");
 
+                shell
+            })
+            .expect("window opens");
+        });
+    }
+
+    #[gpui::test]
+    fn session_nav_toggle_hands_off_to_the_host_when_external(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(gpui_component::Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let chat = cx.new(|_| DummyPanel);
+                let shell = cx.new(|cx| {
+                    WorkbenchShell::new(
+                        config(vec![WorkbenchPanelEntry::new(
+                            WorkbenchPanelKind::Chat,
+                            chat,
+                        )]),
+                        window,
+                        cx,
+                    )
+                });
+
+                // 宿主接管会话栏时，开关只转手给宿主，不动自己的状态。
+                let toggles = Arc::new(AtomicUsize::new(0));
+                let counter = toggles.clone();
+                shell.update(cx, |shell, cx| {
+                    shell.set_external_session_nav_toggle_handler(Some(std::rc::Rc::new(
+                        move |_: &gpui::Window, _: &mut gpui::App| {
+                            counter.fetch_add(1, Ordering::Relaxed);
+                        },
+                    )));
+                    shell.set_external_session_nav(true, cx);
+                    shell.toggle_session_nav(window, cx);
+                });
+                assert_eq!(1, toggles.load(Ordering::Relaxed));
+                assert!(!shell.read(cx).state().nav_collapsed());
+
+                // 没人接管时开关回到本地：折叠、再展开。
+                shell.update(cx, |shell, cx| {
+                    shell.set_external_session_nav(false, cx);
+                    shell.toggle_session_nav(window, cx);
+                });
+                assert!(shell.read(cx).state().nav_collapsed());
+                shell.update(cx, |shell, cx| shell.toggle_session_nav(window, cx));
+                assert!(!shell.read(cx).state().nav_collapsed());
                 shell
             })
             .expect("window opens");

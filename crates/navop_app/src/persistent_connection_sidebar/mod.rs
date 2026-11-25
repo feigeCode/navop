@@ -213,11 +213,11 @@ impl gpui::Render for PersistentConnectionSidebar {
 impl PersistentConnectionSidebar {
     /// Render the connection tree as a floating card that overlays the main
     /// content instead of occupying flex space, so expanding it no longer
-    /// squeezes the terminal. The caller (NavopApp) positions it at the
-    /// left window edge, below the tab bar, and collapses it when the
-    /// terminal regains focus.
+    /// squeezes the terminal. 调用方（外壳）用 `left` 把它摆到应用菜单右缘，
+    /// 并负责在点击内容区或打开连接后收起。
     pub(crate) fn render_floating_tree(
         &mut self,
+        left: Pixels,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -242,7 +242,7 @@ impl PersistentConnectionSidebar {
                 .absolute()
                 .top(top)
                 .bottom_0()
-                .left_0()
+                .left(left)
                 .w(self.tree_width + pad)
                 // 浮动侧边栏覆盖在内容区之上：occlude 让命中测试在侧边栏处终止，
                 // 避免滚轮/鼠标事件穿透到下方的 tab 内容区（否则终端等会跟着滚动）。

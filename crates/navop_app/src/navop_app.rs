@@ -1831,6 +1831,25 @@ impl NavopApp {
                         });
                     });
                 }
+                TabContainerEvent::WorkbenchNavToggled { expanded } => {
+                    let expanded = *expanded;
+                    cx.defer(move |cx| {
+                        app.update(cx, |app, cx| {
+                            let content = app
+                                .tab_container
+                                .read(cx)
+                                .active_content_snapshot()
+                                .map(|content| content.view());
+                            if let Some(content) = content {
+                                if let Ok(ai) = content.downcast::<ai_chat_view::WorkbenchShell>() {
+                                    ai.update(cx, |ai, cx| {
+                                        ai.set_session_nav_collapsed(!expanded, cx)
+                                    });
+                                }
+                            }
+                        });
+                    });
+                }
                 TabContainerEvent::HomeMenuToggled { expanded } => {
                     let expanded = *expanded;
                     let home_page = cx
@@ -1888,14 +1907,11 @@ impl NavopApp {
         })
         .detach();
         // 标签集合/激活态变化 → 重建托盘「会话」菜单。菜单展开与否不可观测，只能推送。
-        cx.subscribe(
-            &tab_container,
-            |_this, _, event: &TabContainerEvent, cx| {
-                if !matches!(event, TabContainerEvent::TabAttention { .. }) {
-                    cx.defer(|cx| crate::system_tray::sync_sessions_from(cx));
-                }
-            },
-        )
+        cx.subscribe(&tab_container, |_this, _, event: &TabContainerEvent, cx| {
+            if !matches!(event, TabContainerEvent::TabAttention { .. }) {
+                cx.defer(|cx| crate::system_tray::sync_sessions_from(cx));
+            }
+        })
         .detach();
         if let Some(active_pinned_index) = layout.active_pinned_index {
             let tabs = tab_container.clone();
@@ -3410,6 +3426,22 @@ impl Render for NavopApp {
                 width: persisted_resource_width,
             },
         );
+        // 「浮动侧边栏」开关：连接树浮在内容之上、不占布局宽度；点内容区或
+        // 打开连接后自动收起。其它资源仍是停靠列，浮动与否取决于宽度预算。
+        // 两种外壳布局都支持浮动：图标栏布局同样的位置也在 workspace 左缘，
+        // 只是左偏移换成了 52px 的图标栏，卡片位置由 navigation_width 统一给出。
+        let floating_connection = resource == ResourceKind::Connections
+            && self.connection_sidebar.read(cx).is_auto_hide_tree()
+            && plan.visibility == MountVisibility::Visible;
+        let plan = if floating_connection {
+            crate::resource_mount::ResourceMountPlan {
+                visibility: MountVisibility::Overlay,
+                slot: crate::resource_mount::MountSlot::Overlay,
+                ..plan
+            }
+        } else {
+            plan
+        };
         let resource_visible = plan.visibility == MountVisibility::Visible
             || (plan.visibility == MountVisibility::Overlay && !self.resource_overlay_dismissed);
         // 业务页的宿主模式要在外壳读取 sidebar_contributions 之前确定，
@@ -3428,42 +3460,51 @@ impl Render for NavopApp {
             tabs.set_inactive_tab_hover_color(cx.theme().background, cx);
             tabs.set_inactive_tab_border_color(cx.theme().border, cx);
         });
-        let mut resource_element = plan.width.and_then(|width| {
-            let rendered = resource_visible
-                .then(|| self.render_application_resource(resource, px(width), window, cx))
-                .flatten()?;
-            if plan.width.is_some() {
-                let app = cx.entity();
-                // 拖动条压在面板右缘上（不占布局宽度）：面板和内容直接相接，
-                // 分隔线落在面板边框这一像素上，不会在两者之间露出一条缝。
-                let resize = one_ui::resize_handle::resize_handle::<
-                    one_ui::resize_handle::ResizePanel,
-                    Self,
-                >(
-                    crate::resource_mount::stable_width_key(layout, resource),
-                    gpui::Axis::Horizontal,
-                )
-                .placement(one_ui::resize_handle::HandlePlacement::Left)
-                .idle_line_color(gpui::transparent_black())
-                .on_resize(move |position, _, cx| {
-                    app.update(cx, |app, cx| {
-                        app.resize_application_resource(resource, position, gpui::px(width), cx);
-                    });
-                });
-                Some(
-                    gpui::div()
-                        .relative()
-                        .flex_shrink_0()
-                        .h_full()
-                        .w(px(width))
-                        .child(rendered)
-                        .child(resize)
-                        .into_any_element(),
-                )
-            } else {
-                Some(rendered)
-            }
-        });
+        let mut resource_element = (!floating_connection)
+            .then(|| {
+                plan.width.and_then(|width| {
+                    let rendered = resource_visible
+                        .then(|| self.render_application_resource(resource, px(width), window, cx))
+                        .flatten()?;
+                    if plan.width.is_some() {
+                        let app = cx.entity();
+                        // 拖动条压在面板右缘上（不占布局宽度）：面板和内容直接相接，
+                        // 分隔线落在面板边框这一像素上，不会在两者之间露出一条缝。
+                        let resize = one_ui::resize_handle::resize_handle::<
+                            one_ui::resize_handle::ResizePanel,
+                            Self,
+                        >(
+                            crate::resource_mount::stable_width_key(layout, resource),
+                            gpui::Axis::Horizontal,
+                        )
+                        .placement(one_ui::resize_handle::HandlePlacement::Left)
+                        .idle_line_color(gpui::transparent_black())
+                        .on_resize(move |position, _, cx| {
+                            app.update(cx, |app, cx| {
+                                app.resize_application_resource(
+                                    resource,
+                                    position,
+                                    gpui::px(width),
+                                    cx,
+                                );
+                            });
+                        });
+                        Some(
+                            gpui::div()
+                                .relative()
+                                .flex_shrink_0()
+                                .h_full()
+                                .w(px(width))
+                                .child(rendered)
+                                .child(resize)
+                                .into_any_element(),
+                        )
+                    } else {
+                        Some(rendered)
+                    }
+                })
+            })
+            .flatten();
         // 按钮是否可用只看资源和宿主，不看当前是否展开；折叠后仍能再次展开。
         let has_resource = matches!(
             plan.visibility,
@@ -3479,10 +3520,29 @@ impl Render for NavopApp {
                 .map(|home| !home.home_page.read(cx).home_sidebar_collapsed())
         })
         .flatten();
+        // AI 工作台标签下，同一个开关位改驱动工作台自己的会话导航栏；
+        // 外部托管（经典图标布局）时导航栏在外壳里，仍走资源栏通道。
+        let workbench_nav = (layout == AppLayout::HomeNavigation
+            && active_key == Some("AiWorkbench")
+            && !self.external_primary_sidebar(cx))
+        .then(|| {
+            self.tab_container
+                .read(cx)
+                .active_content_snapshot()
+                .and_then(|content| {
+                    content
+                        .view()
+                        .downcast::<ai_chat_view::WorkbenchShell>()
+                        .ok()
+                        .map(|ai| !ai.read(cx).session_nav_collapsed())
+                })
+        })
+        .flatten();
         self.tab_container.update(cx, |tabs, cx| {
             tabs.set_resource_sidebar_toggle_visible(has_resource, cx);
             tabs.set_navigation_sidebar_toggle(has_resource.then_some(resource_visible), cx);
             tabs.set_home_menu_toggle(home_menu_expanded, cx);
+            tabs.set_workbench_nav_toggle(workbench_nav, cx);
         });
         // 同一 TabContainer 只保留一份；外壳分别调用其 Tab 栏与内容 renderer。
         // 不把整个容器放进上下两个位置，避免重复 Tab 栏和重复内容。
@@ -3520,7 +3580,14 @@ impl Render for NavopApp {
                         cx.try_global::<GlobalNavopApp>().map(|global| {
                             let app = global.app.clone();
                             std::rc::Rc::new(move |_: &gpui::Window, cx: &mut gpui::App| {
-                                app.update(cx, |app, cx| app.toggle_application_resource(cx));
+                                // 折叠动作会把「外部侧栏」状态转回当前内容视图本身；
+                                // 在视图自己的更新栈里同步做这件事，等于重入更新同一个
+                                // 实体，gpui 会直接 panic（鼠标抬起事件里还会 abort）。
+                                // 推迟到本次事件处理结束之后再改。
+                                let app = app.clone();
+                                cx.defer(move |cx| {
+                                    app.update(cx, |app, cx| app.toggle_application_resource(cx));
+                                });
                             })
                                 as std::rc::Rc<dyn Fn(&gpui::Window, &mut gpui::App)>
                         }),
@@ -3543,7 +3610,14 @@ impl Render for NavopApp {
                         cx.try_global::<GlobalNavopApp>().map(|global| {
                             let app = global.app.clone();
                             std::rc::Rc::new(move |_: &gpui::Window, cx: &mut gpui::App| {
-                                app.update(cx, |app, cx| app.toggle_application_resource(cx));
+                                // 折叠动作会把「外部侧栏」状态转回当前内容视图本身；
+                                // 在视图自己的更新栈里同步做这件事，等于重入更新同一个
+                                // 实体，gpui 会直接 panic（鼠标抬起事件里还会 abort）。
+                                // 推迟到本次事件处理结束之后再改。
+                                let app = app.clone();
+                                cx.defer(move |cx| {
+                                    app.update(cx, |app, cx| app.toggle_application_resource(cx));
+                                });
                             })
                                 as std::rc::Rc<dyn Fn(&gpui::Window, &mut gpui::App)>
                         }),
@@ -3570,7 +3644,15 @@ impl Render for NavopApp {
             )
         });
         let overlay = (plan.visibility == MountVisibility::Overlay)
-            .then(|| resource_element.take())
+            .then(|| {
+                if floating_connection {
+                    Some(self.connection_sidebar.update(cx, |sidebar, cx| {
+                        sidebar.render_floating_tree(px(navigation_width), window, cx)
+                    }))
+                } else {
+                    resource_element.take()
+                }
+            })
             .flatten();
         let overlay_left = px(navigation_width);
         let (global_rail, home_menu) = if layout == AppLayout::GlobalNavigation {
@@ -3653,6 +3735,24 @@ impl Render for NavopApp {
             )
             .children(full_width_tab_bar)
             .when_some(overlay, |this, resource| {
+                if floating_connection {
+                    // 浮动的连接树：遮罩只盖内容区，点一下就把树收回去；
+                    // 树本身是圆角卡片（见 render_floating_tree），不吃遮罩点击。
+                    return this
+                        .child(
+                            div()
+                                .id("resource-overlay-backdrop")
+                                .absolute()
+                                .top(one_ui::theme_geometry().layout.tab_bar)
+                                .bottom_0()
+                                .right_0()
+                                .left(px(navigation_width))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.set_connection_sidebar_expanded(false, cx);
+                                })),
+                        )
+                        .child(resource);
+                }
                 this.child(
                     div()
                         .id("resource-overlay-backdrop")

@@ -418,6 +418,8 @@ pub enum TabContainerEvent {
     NavigationSidebarToggled { expanded: bool },
     /// 主页应用菜单的折叠状态被标签栏里的开关切换。
     HomeMenuToggled { expanded: bool },
+    /// AI 工作台会话导航栏的折叠状态被标签栏里的开关切换。
+    WorkbenchNavToggled { expanded: bool },
     /// A tab was created by duplicating another tab. Emitted after the copy is
     /// inserted so the host can attach content-specific event handling.
     TabDuplicated { id: String },
@@ -1307,6 +1309,8 @@ pub struct TabContainer {
     navigation_sidebar_expanded: Option<bool>,
     /// 主页应用菜单是否展开；`Some` 时复用资源栏开关位渲染菜单开关。
     home_menu_expanded: Option<bool>,
+    /// AI 工作台会话导航栏是否展开；`Some` 时同一个开关位转去驱动工作台。
+    workbench_nav: Option<bool>,
     resource_sidebar_toggle_visible: Option<bool>,
     reserve_navigation_sidebar_toggle: bool,
     home_active: Option<bool>,
@@ -1382,6 +1386,7 @@ impl TabContainer {
             top_padding: None,
             navigation_sidebar_expanded: None,
             home_menu_expanded: None,
+            workbench_nav: None,
             resource_sidebar_toggle_visible: None,
             reserve_navigation_sidebar_toggle: false,
             home_active: None,
@@ -1616,6 +1621,14 @@ impl TabContainer {
     pub fn set_home_menu_toggle(&mut self, expanded: Option<bool>, cx: &mut Context<Self>) {
         if self.home_menu_expanded != expanded {
             self.home_menu_expanded = expanded;
+            cx.notify();
+        }
+    }
+
+    /// AI 工作台标签下，标签栏开关用来收起/展开工作台自己的会话导航栏。
+    pub fn set_workbench_nav_toggle(&mut self, expanded: Option<bool>, cx: &mut Context<Self>) {
+        if self.workbench_nav != expanded {
+            self.workbench_nav = expanded;
             cx.notify();
         }
     }
@@ -4487,6 +4500,7 @@ impl TabContainer {
         let pinned_tab_count = self.pinned_tabs.len();
         let navigation_sidebar_expanded = self.navigation_sidebar_expanded;
         let home_menu_expanded = self.home_menu_expanded;
+        let workbench_nav = self.workbench_nav;
         let home_active = self.home_active;
         let on_home = self.on_home.clone();
         let titlebar_platform = self.titlebar_platform();
@@ -4567,10 +4581,12 @@ impl TabContainer {
             .when(
                 self.reserve_navigation_sidebar_toggle
                     || navigation_sidebar_expanded.is_some()
-                    || home_menu_expanded.is_some(),
+                    || home_menu_expanded.is_some()
+                    || workbench_nav.is_some(),
                 |this| {
                 // 资源栏与主页应用菜单共用这个开关位：有主页菜单状态时优先表达菜单。
-                let expanded = home_menu_expanded
+                let expanded = workbench_nav
+                    .or(home_menu_expanded)
                     .or(navigation_sidebar_expanded)
                     .unwrap_or_default();
                 this.child(
@@ -4579,7 +4595,9 @@ impl TabContainer {
                         .debug_selector(|| "navigation-sidebar-toggle".to_owned())
                         // Keep the button's measured width when Home hides the control.
                         .when(
-                            navigation_sidebar_expanded.is_none() && home_menu_expanded.is_none(),
+                            navigation_sidebar_expanded.is_none()
+                                && home_menu_expanded.is_none()
+                                && workbench_nav.is_none(),
                             |this| this.invisible(),
                         )
                         .flex_shrink_0()
@@ -4604,7 +4622,13 @@ impl TabContainer {
                                     t!("Sidebar.show_navigation").to_string()
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(expanded) = this.home_menu_expanded {
+                                    if let Some(expanded) = this.workbench_nav {
+                                        let expanded = !expanded;
+                                        this.workbench_nav = Some(expanded);
+                                        cx.emit(TabContainerEvent::WorkbenchNavToggled {
+                                            expanded,
+                                        });
+                                    } else if let Some(expanded) = this.home_menu_expanded {
                                         let expanded = !expanded;
                                         this.home_menu_expanded = Some(expanded);
                                         cx.emit(TabContainerEvent::HomeMenuToggled { expanded });
@@ -6511,6 +6535,7 @@ mod tests {
                         TabContainerEvent::LayoutChanged => "layout".to_string(),
                         TabContainerEvent::NavigationSidebarToggled { .. }
                         | TabContainerEvent::HomeMenuToggled { .. }
+                        | TabContainerEvent::WorkbenchNavToggled { .. }
                         | TabContainerEvent::TabDuplicated { .. }
                         | TabContainerEvent::TabAttention { .. } => return,
                     };

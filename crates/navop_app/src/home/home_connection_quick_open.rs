@@ -117,7 +117,11 @@ fn collect_local_terminal_entries(cx: &App) -> Vec<QuickOpenLocalTerminalEntry> 
         .shell_extras()
         .and_then(|extras| extras.wsl_distributions(cx))
         .unwrap_or_default();
-    build_local_terminal_entries(cfg!(target_os = "windows"), &profile_settings, &wsl_distributions)
+    build_local_terminal_entries(
+        cfg!(target_os = "windows"),
+        &profile_settings,
+        &wsl_distributions,
+    )
 }
 
 #[cfg(not(feature = "shell"))]
@@ -403,7 +407,8 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
             QuickOpenEntry::Connection(connection) => {
                 let name = connection.name.clone();
                 let icon = {
-                    let extension_catalog = crate::connection_visuals::extension_catalog_from_cx(cx);
+                    let extension_catalog =
+                        crate::connection_visuals::extension_catalog_from_cx(cx);
                     stored_connection_icon_with_catalog(
                         &connection,
                         ConnectionVisualSize::Tree,
@@ -445,11 +450,11 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
                                         .child(SharedString::from(
-                                            crate::connection_visuals::connection_type_display_label(
-                                                &connection,
-                                                cx,
-                                            ),
-                                        )),
+                                        crate::connection_visuals::connection_type_display_label(
+                                            &connection,
+                                            cx,
+                                        ),
+                                    )),
                                 )
                                 .when_some(temporary_connection, |this, connection| {
                                     this.child(
@@ -461,16 +466,18 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
                                         )
                                         .role(IconButtonRole::Compact)
                                         .tooltip(t!("Home.save_as_connection"))
-                                        .on_click(move |_, window, cx| {
-                                            cx.stop_propagation();
-                                            let connection = connection.clone();
-                                            save_parent.update(cx, |this, cx| {
-                                                this.show_save_temporary_connection_form(
-                                                    connection, window, cx,
-                                                );
-                                            });
-                                            window.close_dialog(cx);
-                                        }),
+                                        .on_click(
+                                            move |_, window, cx| {
+                                                cx.stop_propagation();
+                                                let connection = connection.clone();
+                                                save_parent.update(cx, |this, cx| {
+                                                    this.show_save_temporary_connection_form(
+                                                        connection, window, cx,
+                                                    );
+                                                });
+                                                window.close_dialog(cx);
+                                            },
+                                        ),
                                     )
                                 }),
                         ),
