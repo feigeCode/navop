@@ -1,13 +1,31 @@
 # 仅在交互式 shell 中生效，避免污染 rsync/scp 等非交互通道
 [[ $- != *i* ]] && return
-[[ -n "${_ONETCLI_SHELL_INTEGRATED:-}" ]] && return
-export _ONETCLI_SHELL_INTEGRATED=1
+
+# 幂等守卫必须同时检查 pane 和当前 shell 的 hook 函数：
+# tmux server 会把启动它的 shell 的 _ONETCLI_SHELL_INTEGRATED 继承给所有 pane；
+# 只检查环境变量会让 pane 内 shell 跳过安装。反过来，同一 pane 内执行 exec
+# bash 后函数已经丢失，只检查 marker 又会错误跳过安装。
+_onetcli_guard_key="${TMUX_PANE:-}"
+_onetcli_hook_present=0
+if typeset -f __onetcli_precmd_common >/dev/null 2>&1; then
+    _onetcli_hook_present=1
+fi
+if [[ "${_ONETCLI_SHELL_INTEGRATED:-}" == "$_onetcli_guard_key" &&
+      "$_onetcli_hook_present" == "1" ]]; then
+    unset _onetcli_guard_key _onetcli_hook_present
+    return
+fi
+export _ONETCLI_SHELL_INTEGRATED="$_onetcli_guard_key"
+unset _onetcli_guard_key _onetcli_hook_present
+
+# __ONETCLI_BODY_START__
 
 __onetcli_emit_osc() {
     printf '\033]%s\007' "$1"
 }
 
 __onetcli_prompt_start() {
+    __onetcli_emit_osc "1337;NavopTty=$(tty 2>/dev/null)"
     __onetcli_emit_osc '133;A'
 }
 

@@ -35,7 +35,7 @@ impl TerminalWorkspace {
         let split_supported = self
             .panes
             .get(&pane_id)
-            .is_some_and(|pane| pane.read(cx).duplicate_supported(cx));
+            .is_some_and(|pane| pane.read(cx).workspace_split_supported(cx));
         let pane = self.panes.get(&pane_id).cloned();
         let recording_visible = pane
             .as_ref()

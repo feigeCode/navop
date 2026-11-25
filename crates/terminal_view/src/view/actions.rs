@@ -5,6 +5,7 @@ actions!(
     [
         SendTab,
         SendShiftTab,
+        SendCtrlB,
         Copy,
         Paste,
         SelectAll,

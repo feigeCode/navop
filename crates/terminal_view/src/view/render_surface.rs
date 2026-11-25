@@ -95,6 +95,7 @@ impl TerminalView {
             .key_context(TERMINAL_CONTEXT)
             .on_action(cx.listener(Self::send_tab))
             .on_action(cx.listener(Self::send_shift_tab))
+            .on_action(cx.listener(Self::send_ctrl_b))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::select_all))

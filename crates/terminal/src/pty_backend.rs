@@ -82,6 +82,27 @@ pub enum TerminalEvent {
     CommandFinished { exit_code: i32 },
     /// 记录 shell 实际执行过的命令
     CommandRecorded(String),
+    /// 交互 PTY 的设备路径；tmux client 探测通过 tty 精确匹配。
+    NavopTty(String),
+    /// tmux 控制通道已完成初始快照。
+    TmuxAttached {
+        state: crate::tmux::TmuxSessionState,
+        generation: u64,
+    },
+    /// tmux 状态发生变化。
+    TmuxChanged {
+        state: crate::tmux::TmuxSessionState,
+        generation: u64,
+    },
+    /// tmux 控制通道断开。
+    TmuxDetached { reason: String, generation: u64 },
+    /// tmux 控制 handle 已建立，模型层负责保存并注册 MCP。
+    TmuxControllerReady {
+        controller: crate::tmux::TmuxControllerHandle,
+        generation: u64,
+    },
+    /// 一轮 tmux client 探测结束，没有找到匹配会话。
+    TmuxProbeFinished { generation: u64 },
     /// 终端程序通过 OSC 9 / OSC 777 发出的桌面通知
     Notification(crate::osc::TerminalNotification),
 }
@@ -182,6 +203,7 @@ fn terminal_event_from_osc_event(event: OscEvent) -> TerminalEvent {
         OscEvent::CommandFinished { exit_code } => TerminalEvent::CommandFinished { exit_code },
         OscEvent::WorkingDirChanged(reported) => TerminalEvent::WorkingDirChanged(reported),
         OscEvent::CommandRecorded(command) => TerminalEvent::CommandRecorded(command),
+        OscEvent::NavopTty(tty) => TerminalEvent::NavopTty(tty),
         OscEvent::Notification(notification) => TerminalEvent::Notification(notification),
     }
 }

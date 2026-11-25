@@ -32,6 +32,18 @@ fn scroll_actions_are_registered_and_bound_in_terminal_context() {
 }
 
 #[test]
+fn ctrl_b_is_routed_to_terminal_as_tmux_prefix() {
+    let surface = include_str!("../render_surface.rs");
+    let bindings = include_str!("../keybindings.rs");
+    let tool_dock = include_str!("../tool_dock.rs");
+
+    assert!(surface.contains(".on_action(cx.listener(Self::send_ctrl_b))"));
+    assert_eq!(2, bindings.matches("SendCtrlB,").count());
+    assert!(bindings.contains("action_id::TERMINAL_SEND_CTRL_B"));
+    assert!(tool_dock.contains("self.write_to_pty(b\"\\x02\".to_vec(), cx);"));
+}
+
+#[test]
 fn scroll_keys_yield_to_alt_screen_programs() {
     let source = include_str!("../scroll_keys.rs");
     let body = source

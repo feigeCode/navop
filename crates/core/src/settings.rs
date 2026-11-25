@@ -1570,6 +1570,12 @@ pub struct AppSettings {
     /// 没有记录的面板保持默认右侧。
     #[serde(default)]
     pub terminal_tool_panel_placements: BTreeMap<String, SidebarPlacement>,
+    /// 是否启用 tmux 控制通道集成；受连接的禁用 Shell Integration 设置约束。
+    #[serde(default = "default_true")]
+    pub terminal_tmux_integration: bool,
+    /// 自定义 tmux socket 路径；空值表示使用 tmux 默认 socket。
+    #[serde(default)]
+    pub terminal_tmux_socket: String,
     #[serde(default)]
     pub local_terminal_profile: LocalTerminalProfileSettings,
     #[serde(default)]
@@ -2082,6 +2088,8 @@ impl Default for AppSettings {
             terminal_desktop_notification_duration: TerminalDesktopNotificationDuration::default(),
             terminal_desktop_notification_sound: default_true(),
             terminal_tool_panel_placements: BTreeMap::new(),
+            terminal_tmux_integration: true,
+            terminal_tmux_socket: String::new(),
             local_terminal_profile: LocalTerminalProfileSettings::default(),
             log_file_path: String::new(),
             log_level: LogLevel::default(),
