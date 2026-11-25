@@ -61,6 +61,7 @@ impl PersistentConnectionSidebar {
     }
 
     /// 外壳资源栏拖动只改内存宽度；拖动结束时统一保存，避免每个 mouse move 写文件。
+    #[cfg(feature = "shell")]
     pub(crate) fn set_application_resource_width(&mut self, width: Pixels) {
         self.tree_width = width;
     }

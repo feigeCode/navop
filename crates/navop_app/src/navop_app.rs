@@ -1529,10 +1529,12 @@ pub struct NavopApp {
     _appearance_subscription: gpui::Subscription,
     _settings_subscription: gpui::Subscription,
     resource_overlay_dismissed: bool,
+    #[cfg(feature = "shell")]
     resource_resize_drag: Option<crate::resource_mount::ResourceResizeDrag>,
     /// 拖动中的资源栏宽度（键为 `stable_width_key`）。外壳每帧都从设置求解布局宽度，
     /// 而设置落盘有防抖，所以拖动期间必须用这份会话内覆盖值，面板才会跟手。
     resource_width_drag: Option<(String, f32)>,
+    #[cfg(feature = "shell")]
     resource_width_persist_task: Option<Task<()>>,
 }
 
@@ -1964,8 +1966,10 @@ impl NavopApp {
             _appearance_subscription: appearance_subscription,
             _settings_subscription: settings_subscription,
             resource_overlay_dismissed: false,
+            #[cfg(feature = "shell")]
             resource_resize_drag: None,
             resource_width_drag: None,
+            #[cfg(feature = "shell")]
             resource_width_persist_task: None,
         }
     }
