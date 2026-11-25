@@ -267,6 +267,86 @@ Settings:
       en: Suggest previous commands while typing in the terminal.
       zh-CN: 输入命令时显示历史命令建议。
       zh-HK: 輸入指令時顯示歷史指令建議。
+    desktop_notification_group:
+      en: System Notifications
+      zh-CN: 系统通知
+      zh-HK: 系統通知
+    desktop_notification_mode:
+      en: System Notification Trigger
+      zh-CN: 系统通知时机
+      zh-HK: 系統通知時機
+    desktop_notification_mode_description:
+      en: Choose when terminal notifications (OSC 9 / OSC 777, such as CLI approval or completion alerts) show a system notification.
+      zh-CN: 选择终端通知（OSC 9 / OSC 777，如 CLI 审批与任务完成提示）弹出系统通知的时机。
+      zh-HK: 選擇終端通知（OSC 9 / OSC 777，如 CLI 審批與任務完成提示）彈出系統通知的時機。
+    desktop_notification_unfocused_or_inactive_tab:
+      en: When unfocused or in another tab
+      zh-CN: 窗口未聚焦或非当前标签页时通知
+      zh-HK: 視窗未聚焦或非目前標籤頁時通知
+    desktop_notification_unfocused_window_only:
+      en: Only when window is unfocused
+      zh-CN: 仅窗口未聚焦时通知
+      zh-HK: 僅視窗未聚焦時通知
+    desktop_notification_always:
+      en: Always notify
+      zh-CN: 总是通知
+      zh-HK: 總是通知
+    desktop_notification_off:
+      en: Off
+      zh-CN: 关闭系统通知
+      zh-HK: 關閉系統通知
+    desktop_notification_duration:
+      en: Notification Duration
+      zh-CN: 通知停留时长
+      zh-HK: 通知停留時長
+    desktop_notification_duration_description:
+      en: Choose how long the notification stays on screen (Windows and Linux); macOS decides the duration itself.
+      zh-CN: 选择系统通知在屏幕上的停留时长（Windows 与 Linux 生效；macOS 由系统决定）。
+      zh-HK: 選擇系統通知在螢幕上的停留時長（Windows 與 Linux 生效；macOS 由系統決定）。
+    desktop_notification_duration_long:
+      en: Long (~25s)
+      zh-CN: 较长停留（约 25 秒）
+      zh-HK: 較長停留（約 25 秒）
+    desktop_notification_duration_short:
+      en: Short (~5s)
+      zh-CN: 短暂提示（约 5 秒）
+      zh-HK: 短暫提示（約 5 秒）
+    desktop_notification_sound:
+      en: Notification Sound
+      zh-CN: 通知提示音
+      zh-HK: 通知提示音
+    desktop_notification_sound_description:
+      en: Play the system notification sound (Windows and macOS); on Linux the notification daemon decides.
+      zh-CN: 弹出系统通知时播放系统提示音（Windows 与 macOS 生效；Linux 由通知守护程序决定）。
+      zh-HK: 彈出系統通知時播放系統提示音（Windows 與 macOS 生效；Linux 由通知守護程序決定）。
+    desktop_notification_test:
+      en: Test Notification
+      zh-CN: 测试系统通知
+      zh-HK: 測試系統通知
+    desktop_notification_test_description:
+      en: Send a sample system notification right away to verify notification permission, focus mode, duration, and sound.
+      zh-CN: 立即发送一条示例系统通知，用于验证系统通知权限、专注模式、停留时长与提示音。
+      zh-HK: 立即傳送一條範例系統通知，用於驗證系統通知權限、專注模式、停留時長與提示音。
+    desktop_notification_test_button:
+      en: Send Test Notification
+      zh-CN: 发送测试通知
+      zh-HK: 傳送測試通知
+    desktop_notification_codex_tip_title:
+      en: "Tip: Using Codex CLI?"
+      zh-CN: "提示：在终端中使用 Codex CLI？"
+      zh-HK: "提示：在終端中使用 Codex CLI？"
+    desktop_notification_codex_tip_desc:
+      en: "Codex CLI needs OSC 9 notifications enabled in ~/.codex/config.toml to trigger terminal alerts:"
+      zh-CN: "Codex CLI 需要在 ~/.codex/config.toml 中启用 OSC 9 通知，才能触发标签页提醒与系统通知："
+      zh-HK: "Codex CLI 需要在 ~/.codex/config.toml 中啟用 OSC 9 通知，才能觸發標籤頁提醒與系統通知："
+    desktop_notification_codex_tip_copy:
+      en: Copy Config
+      zh-CN: 复制配置
+      zh-HK: 複製設定
+    desktop_notification_codex_tip_tooltip:
+      en: "Copy the Codex [tui] notification snippet to clipboard"
+      zh-CN: "复制 Codex [tui] 通知配置片段到剪贴板"
+      zh-HK: "複製 Codex [tui] 通知設定片段到剪貼簿"
 
     appearance_group:
       en: Appearance

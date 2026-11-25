@@ -41,6 +41,7 @@ use terminal::terminal::{ConnectionState, TerminalConnectionKind, TerminalModelE
 mod capabilities;
 mod connection_status;
 mod core;
+mod ctrl_c;
 mod ctrl_d;
 mod history_availability;
 mod history_interaction;

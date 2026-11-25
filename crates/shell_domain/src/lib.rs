@@ -290,8 +290,11 @@ impl TabOpener for TerminalTabOpener {
             return false;
         };
         let settings = AppSettings::global(cx);
-        let config = match profile.as_ref() {
-            None => local_config_from_settings(settings, None),
+        let (config, profile_title) = match profile.as_ref() {
+            None => (
+                local_config_from_settings(settings, None),
+                local_terminal_profile_title_from_settings(settings),
+            ),
             Some(descriptor) => match descriptor.kind {
                 domain_api::TerminalProfileKind::Custom => {
                     let custom = descriptor.id.as_deref().and_then(|id| {
@@ -305,23 +308,30 @@ impl TabOpener for TerminalTabOpener {
                         home.notify(NotifyLevel::Error, "自定义本地终端配置不存在", window, cx);
                         return false;
                     };
-                    terminal::local_config_from_custom_profile(custom, None)
+                    let title = (!custom.name.trim().is_empty()).then(|| custom.name.trim().to_string());
+                    (terminal::local_config_from_custom_profile(custom, None), title)
                 }
                 domain_api::TerminalProfileKind::Wsl => match descriptor.id.as_deref() {
-                    Some(distro) if cfg!(target_os = "windows") => {
-                        terminal::local_config_for_wsl_distro(distro)
-                    }
-                    _ => local_config_from_settings_with_profile(
-                        settings,
-                        local_profile_kind(descriptor.kind),
-                        None,
+                    Some(distro) if cfg!(target_os = "windows") => (
+                        terminal::local_config_for_wsl_distro(distro),
+                        Some(distro.trim().to_string()).filter(|s| !s.is_empty()),
+                    ),
+                    _ => (
+                        local_config_from_settings_with_profile(
+                            settings,
+                            local_profile_kind(descriptor.kind),
+                            None,
+                        ),
+                        local_terminal_kind_title(local_profile_kind(descriptor.kind)),
                     ),
                 },
-                kind => local_config_from_settings_with_profile(
-                    settings,
-                    local_profile_kind(kind),
-                    None,
-                ),
+                kind => {
+                    let local_kind = local_profile_kind(kind);
+                    (
+                        local_config_from_settings_with_profile(settings, local_kind, None),
+                        local_terminal_kind_title(local_kind),
+                    )
+                }
             },
         };
         let config = match config {
@@ -341,10 +351,46 @@ impl TabOpener for TerminalTabOpener {
             .map(|duration| duration.as_millis())
             .unwrap_or(0);
         let tab_id = format!("terminal-{timestamp}");
-        let tab_index = home.next_tab_index("Terminal", cx);
-        let view = cx.new(|cx| TerminalWorkspace::new_with_index(config, tab_index, window, cx));
+        let base_title = profile_title.as_deref().unwrap_or("Terminal");
+        let tab_index = home.next_tab_index(base_title, cx);
+        let view = cx.new(|cx| {
+            TerminalWorkspace::new_local_with_profile_title(
+                config,
+                profile_title,
+                tab_index,
+                window,
+                cx,
+            )
+        });
         let item = TabItem::from_dyn(tab_id, "home", Arc::new(view));
         home.open_tab_with_focus(item, window, cx)
+    }
+}
+
+fn local_terminal_profile_title_from_settings(settings: &AppSettings) -> Option<String> {
+    match settings.local_terminal_profile.kind {
+        one_core::settings::LocalTerminalProfileKind::Custom => settings
+            .local_terminal_profile
+            .selected_custom_profile()
+            .map(|profile| profile.name.trim().to_string())
+            .filter(|name| !name.is_empty()),
+        kind => local_terminal_kind_title(kind),
+    }
+}
+
+fn local_terminal_kind_title(kind: one_core::settings::LocalTerminalProfileKind) -> Option<String> {
+    use one_core::settings::LocalTerminalProfileKind;
+    match kind {
+        LocalTerminalProfileKind::System => None,
+        LocalTerminalProfileKind::PowerShell => Some("PowerShell".to_string()),
+        LocalTerminalProfileKind::Cmd => Some("CMD".to_string()),
+        LocalTerminalProfileKind::Wsl => Some("WSL".to_string()),
+        LocalTerminalProfileKind::GitBash => Some("Git Bash".to_string()),
+        LocalTerminalProfileKind::Zsh => Some("Zsh".to_string()),
+        LocalTerminalProfileKind::Bash => Some("Bash".to_string()),
+        LocalTerminalProfileKind::Fish => Some("Fish".to_string()),
+        LocalTerminalProfileKind::Nushell => Some("Nushell".to_string()),
+        LocalTerminalProfileKind::Custom => None,
     }
 }
 

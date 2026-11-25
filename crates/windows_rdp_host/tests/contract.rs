@@ -3217,3 +3217,24 @@ fn policy_section_sources_are_registered_in_the_windows_build() {
         ],
     );
 }
+
+#[test]
+fn native_host_consumes_setcursor_before_it_can_reach_gpui() {
+    let path = &format!("{HOST_CRATE}/native/active_x_host.cpp");
+    assert_tokens_in_scope(
+        path,
+        "LRESULT CALLBACK native_host_window_procedure(",
+        "\n}\n\nDWORD ensure_native_host_window_class",
+        &[
+            "if (message == WM_SETCURSOR)",
+            "const HWND cursor_window = reinterpret_cast<HWND>(wparam);",
+            "if (cursor_window != nullptr && cursor_window != window &&",
+            "IsChild(window, cursor_window))",
+            "if (GetCursor() != nullptr)",
+            "return TRUE;",
+            "SetCursor(LoadCursorW(nullptr, IDC_ARROW));",
+            "return TRUE;",
+            "return DefWindowProcW(window, message, wparam, lparam);",
+        ],
+    );
+}

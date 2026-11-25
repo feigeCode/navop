@@ -684,6 +684,43 @@ fn home_groups_keep_the_unassigned_bucket_under_a_workspace_filter() {
     );
 }
 
+/// 空分组必须留在首页（#588）。
+///
+/// 用户新建分组后，首页要立刻出现这个分组，否则会误判「创建分组没生效」；只有「未分组」
+/// 桶在没有连接时不占位，处于筛选状态时空分组也整体让位。
+#[test]
+fn home_groups_keep_empty_named_workspaces_visible() {
+    use super::super::content::keep_group_row;
+
+    assert!(
+        keep_group_row(Some(7), false, false),
+        "未筛选时空分组必须渲染"
+    );
+    assert!(
+        !keep_group_row(None, false, false),
+        "空「未分组」桶不该占位"
+    );
+    assert!(
+        !keep_group_row(Some(7), false, true),
+        "筛选状态下空分组让位，避免刷出一屏 0 结果的分组标题"
+    );
+    assert!(
+        keep_group_row(Some(7), true, true),
+        "有连接的分组不因筛选被隐藏"
+    );
+
+    let content = include_str!("../content.rs");
+    let home_groups = content
+        .split("fn home_groups(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n    fn ").next())
+        .expect("home_groups 实现");
+    assert!(
+        home_groups.contains("keep_group_row("),
+        "home_groups 必须用 keep_group_row 判定分组可见性，否则空分组又会被丢掉"
+    );
+}
+
 /// 分组右键菜单必须能改父级：没有这个入口，子分组永远回不到顶层。
 #[test]
 fn workspace_context_menu_offers_move_to_parent() {
@@ -784,6 +821,12 @@ fn host_metrics_are_wired_only_to_the_list_view() {
     assert!(
         host_metrics.contains("accessibility_label(accessibility_label)"),
         "进度条必须为辅助技术提供带标签与数值的完整描述"
+    );
+    assert!(
+        host_metrics.contains("HOST_METRIC_BAR_WIDTH_REMS")
+            && host_metrics.contains("HOST_NETWORK_TRACK_WIDTH_REMS")
+            && !host_metrics.contains("v_flex()"),
+        "资源条必须单行紧凑：比例条与上下行网速都并排展示，不再纵向堆叠撑高连接行"
     );
     assert!(
         host_metrics.contains("render_host_network_track")

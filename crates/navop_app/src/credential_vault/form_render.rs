@@ -158,54 +158,93 @@ impl CredentialForm {
             .child(self.render_forward_to_agent_setting(cx))
     }
 
-    /// 「生成密钥」入口：按所选算法生成密钥对，私钥填进表单、公钥复制到剪贴板。
+    /// 「生成密钥」入口：按所选算法生成密钥对，私钥填进表单、公钥复制到剪贴板并留在下方展示。
     fn render_generate_ssh_key(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        h_flex()
+        v_flex()
             .w_full()
-            .items_center()
-            .justify_between()
-            .gap_4()
+            .gap_2()
             .rounded_md()
             .border_1()
             .border_color(cx.theme().border)
             .p_3()
             .child(
-                v_flex()
-                    .min_w_0()
-                    .gap_1()
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
                     .child(
-                        div()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .child(t!("CredentialForm.generate_key").to_string()),
+                        v_flex()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child(t!("CredentialForm.generate_key").to_string()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(
+                                        t!("CredentialForm.generate_key_description").to_string(),
+                                    ),
+                            ),
                     )
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t!("CredentialForm.generate_key_description").to_string()),
+                        h_flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap_2()
+                            .child(Select::new(&self.algorithm_select).small())
+                            .child(
+                                Button::new("credential-generate-key")
+                                    .small()
+                                    .outline()
+                                    .disabled(self.generating_key)
+                                    .label(if self.generating_key {
+                                        t!("CredentialForm.generate_key_running").to_string()
+                                    } else {
+                                        t!("CredentialForm.generate_key_action").to_string()
+                                    })
+                                    .on_click(cx.listener(|form, _, window, cx| {
+                                        form.generate_key(window, cx);
+                                    })),
+                            ),
                     ),
             )
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_2()
-                    .child(Select::new(&self.algorithm_select).small())
-                    .child(
-                        Button::new("credential-generate-key")
-                            .small()
-                            .outline()
-                            .disabled(self.generating_key)
-                            .label(if self.generating_key {
-                                t!("CredentialForm.generate_key_running").to_string()
-                            } else {
-                                t!("CredentialForm.generate_key_action").to_string()
-                            })
-                            .on_click(cx.listener(|form, _, window, cx| {
-                                form.generate_key(window, cx);
-                            })),
-                    ),
-            )
+            .when_some(self.generated_public_key.clone(), |this, public_key| {
+                this.child(
+                    v_flex()
+                        .w_full()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("CredentialForm.generate_key_public_key").to_string()),
+                        )
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .items_start()
+                                .gap_2()
+                                .child(div().flex_1().min_w_0().text_xs().child(public_key))
+                                .child(
+                                    Button::new("credential-generate-key-copy-public")
+                                        .small()
+                                        .outline()
+                                        .label(
+                                            t!("CredentialForm.generate_key_copy_public_key")
+                                                .to_string(),
+                                        )
+                                        .on_click(cx.listener(|form, _, _, cx| {
+                                            form.copy_generated_public_key(cx);
+                                        })),
+                                ),
+                        ),
+                )
+            })
     }
 
     fn render_forward_to_agent_setting(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -463,6 +502,12 @@ mod tests {
         );
         assert!(form.contains("CredentialForm.generate_key_success"));
         assert!(form.contains("CredentialForm.generate_key_failed"));
+        // 生成后的公钥要留在表单里可见（#558），不能只落在剪贴板。
+        assert!(form.contains("pub(super) generated_public_key: Option<String>"));
+        assert!(form.contains("self.generated_public_key = Some(key.public_key_openssh.clone())"));
+        assert!(source.contains("credential-generate-key-copy-public"));
+        assert!(source.contains("CredentialForm.generate_key_copy_public_key"));
+        assert!(form.contains("pub(super) fn copy_generated_public_key"));
     }
 
     #[test]

@@ -228,6 +228,8 @@ pub struct TerminalView {
     session_log_name: Option<SharedString>,
     /// 本地终端工作目录
     local_working_dir: Option<PathBuf>,
+    /// 本地终端的简洁配置名（如 PowerShell / CMD / Ubuntu / 自定义配置名）。
+    local_profile_title: Option<String>,
     /// 光标闪烁管理器
     blink_manager: Entity<BlinkCursor>,
     /// 侧边栏
@@ -297,6 +299,8 @@ pub struct TerminalView {
     selection_autoscroll_display_offset: Option<usize>,
     selection_autoscroll_task: Option<Task<()>>,
     focus_handle: FocusHandle,
+    /// 最近一次向终端上报的 DECSET 1004（`FOCUS_IN_OUT`）焦点状态，用于边沿去重。
+    last_reported_terminal_focus: Option<bool>,
     /// Present only when the developer performance diagnostics switch was
     /// enabled when this terminal was created.
     performance_metrics: Option<Arc<terminal::TerminalPerformanceMetrics>>,

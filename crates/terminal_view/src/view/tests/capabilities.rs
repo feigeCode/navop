@@ -1111,3 +1111,24 @@ fn sidebar_panel_placements_persist_through_settings() {
         "别的终端标签改了停靠位置后，本标签要跟着设置复位"
     );
 }
+
+#[test]
+fn terminal_printable_keys_are_consumed_before_the_platform_text_system() {
+    let source = include_str!("../text_input.rs");
+    let handler = function_region(source, "pub(super) fn handle_key_event(", "\n    }\n}");
+
+    let direct = handler
+        .find("crate::keys::direct_input_text(&event.keystroke)")
+        .expect("终端必须在 keydown 中识别可打印字符，避免长按进入 macOS 文本输入系统");
+    let commit = handler
+        .find("self.commit_text(text, cx)")
+        .expect("可打印字符应复用 commit_text 写入 PTY");
+    let stop = handler
+        .find("cx.stop_propagation()")
+        .expect("可打印字符被消费后必须停止传播，否则 macOS 仍会弹出重音候选框");
+
+    assert!(
+        direct < commit && commit < stop,
+        "可打印字符必须先用 commit_text 写入 PTY，再调用 stop_propagation"
+    );
+}

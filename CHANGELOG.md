@@ -4,6 +4,62 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.24.1] - 2026-11-25
+
+#### 更新内容
+
+- 新增「监控」页：为已保存的 SSH 主机建立长连接采样，集中查看 CPU、内存、磁盘分区与网络实时状态，提供资源卡片、趋势图与 5 / 15 / 30 秒刷新间隔；支持搜索主机、重新连接并刷新全部监控，需要时自动应答 keyboard-interactive / TOTP 多轮认证。
+- 终端支持 OSC 9 / OSC 777 通知：CLI 的「需要审批」「已完成」提醒会以标签页提示点呈现，可选择系统通知时机（窗口未聚焦或非当前标签页 / 仅窗口未聚焦 / 总是 / 关闭）、停留时长与提示音，设置页提供「测试系统通知」。
+- 终端系统通知扩展到 macOS 与 Linux：macOS 走系统通知中心并支持提示音，Linux 走 freedesktop D-Bus 通知且点击可跳回触发通知的标签页；设置项按平台能力显示（停留时长 Windows / Linux、提示音 Windows / macOS、点击回跳 Windows / Linux）。
+- 本地终端体验优化：标签标题改为简洁名称（PowerShell、CMD、WSL、Git Bash、Zsh、Bash 等或自定义配置名），悬停显示完整标题与当前工作目录；「快速打开」同时列出本地终端配置与连接并支持搜索；单分屏关闭复用单终端的确认文案。
+- 终端按 xterm DECSET 1004 协议上报焦点变化，全屏 TUI 应用可以感知面板与窗口的焦点切换。
+
+#### 修复与优化
+
+- 首页卡片/列表布局不再丢弃空分组，新建分组后立刻可见；「未分组」桶仍只在确有未分组连接时出现，搜索与筛选下空分组会自动让位。
+- 首页连接列表把 CPU、内存、磁盘压成一行细比例条，上下行网速合并为一行，展示资源的行高从约 80px 降到约 56px，与普通连接行基本齐平。
+- 修复「加载模型」必须先勾选模型的死循环：新建提供商时即使未选模型也能拉取模型列表，保存时仍要求至少选择一个模型。
+- 修复设置页切页或切回主标签后丢失滚动位置与当前选中页的问题。
+- 修复终端侧边栏扩展面板打开后点击同边其它扩展无法切换，以及与内建面板「每边一个」互斥失效的问题。
+- 修复可复用弹窗标题栏被整高视图顶出裁切，Windows 自绘的最小化 / 最大化 / 关闭按钮不再显示不全。
+- 修复主机指纹变更后重试仍复用共享会话池旧槽位、导致重连失败的问题。
+- 修复非 macOS 下终端 Ctrl+C 可能被外层复制动作吞掉：有选区时复制并清选区，无选区时正常发送中断信号，Ctrl+Shift+C 始终只复制。
+- 修复终端长按可打印键弹出 macOS 重音候选框，长按重复输入不再被打断。
+- 修复表设计器只回填表注释的问题：新增列默认继承表的字符集与排序规则，ADD COLUMN 会显式带上 CHARACTER SET / COLLATE。
+- 修复 Windows 终端弹出控制台窗口、以及误加载外部 conpty.dll 导致的闪窗。
+- 修复高 DPI（如 175%）下 Windows 原生 RDP 会话光标来回闪烁、难以拖动调整窗口大小的问题。
+- 修复终端文本中的 URL 与 UNC 路径被 FilePathAddon 当作本地文件探测的问题，避免多余的文件路径解析与跳转。
+- 修复固定首页标签悬停时弹出空白 tooltip。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.24.1) 下载桌面端安装包。
+
+---
+
+#### What's New
+
+- New Monitor page: long-lived sampling sessions for saved SSH hosts show live CPU, memory, disk partitions and network status through resource cards and trend charts at 5 / 15 / 30 second intervals. Search hosts, reconnect and refresh every monitor, and answer keyboard-interactive / TOTP multi-round authentication automatically when needed.
+- Terminal OSC 9 / OSC 777 notifications: approvals and completion alerts from CLI tools appear as a tab indicator. Choose when system notifications fire (unfocused window or another tab / unfocused window only / always / off), plus duration and sound, with a test button in Settings.
+- System notifications now cover macOS and Linux: macOS uses the notification center with sound support, Linux uses freedesktop D-Bus notifications and clicking one returns to its tab. Options follow each platform's capabilities (duration on Windows / Linux, sound on Windows / macOS, click-to-open on Windows / Linux).
+- Local terminal improvements: tab titles use concise names (PowerShell, CMD, WSL, Git Bash, Zsh, Bash and custom profiles) and show the full title plus working directory on hover. Quick Open lists local terminal profiles alongside connections with search, and closing a single split uses the single-terminal confirmation text.
+- The terminal reports focus changes per xterm DECSET 1004, so full-screen TUI apps can tell when the panel or window gains or loses focus.
+
+#### Fixes and Improvements
+
+- Home card and list layouts no longer drop empty groups, so a new group appears immediately. The ungrouped bucket still only shows when it has connections, and empty groups step aside while searching or filtering.
+- Home connection rows collapse CPU, memory and disk into single-line bars and merge up/down network speed into one row, cutting resource rows from about 80px to about 56px so they match regular rows.
+- Fixed the "Load models" dead loop that required a model to be selected first: a new provider can fetch its model list before any model is checked, while saving still requires at least one.
+- Fixed the settings page losing its scroll position and selected page after switching pages or returning to the main tab.
+- Fixed terminal sidebar extension panels not switching when clicking another extension on the same side, and fixed the one-panel-per-side exclusion with built-in panels.
+- Fixed reusable popup title bars being pushed out and clipped by full-height content, which hid the Windows-drawn minimize, maximize and close buttons.
+- Fixed reconnects after a host key change reusing a stale shared-session slot and failing.
+- Fixed Ctrl+C on non-macOS terminals being swallowed by the outer copy action: it copies and clears the selection when one exists, sends an interrupt otherwise, and Ctrl+Shift+C always only copies.
+- Fixed long-pressing printable keys on macOS opening the accent popup instead of repeating input in the terminal.
+- Fixed the table designer only restoring the table comment: new columns now inherit the table's character set and collation, and ADD COLUMN emits CHARACTER SET / COLLATE explicitly.
+- Fixed Windows terminals flashing a console window and accidentally loading an external conpty.dll.
+- Fixed cursor flicker and resize grip problems in native Windows RDP sessions at high DPI such as 175%.
+- Fixed URLs and UNC paths in terminal text being probed as local files by FilePathAddon, avoiding needless file path resolution and navigation.
+- Fixed the pinned home tab showing an empty tooltip on hover.
+
 ## [v0.24.0] - 2026-11-22
 
 #### 更新内容

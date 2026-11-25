@@ -47,6 +47,8 @@ pub(crate) struct CredentialForm {
     pub(super) algorithm_select: Entity<SelectState<Vec<String>>>,
     /// 后台正在生成密钥：期间禁用按钮，避免重复生成把表单覆盖掉。
     pub(super) generating_key: bool,
+    /// 最近一次生成的 OpenSSH 公钥：留在表单里展示，避免只复制到剪贴板后找不回来（#558）。
+    pub(super) generated_public_key: Option<String>,
     /// 文件选择器挑中的私钥路径，等下一次渲染再写进输入框（写输入态需要 Window）。
     pending_private_key_path: Option<String>,
 }
@@ -91,6 +93,7 @@ impl CredentialForm {
                 self.private_key_content_input.update(cx, |state, cx| {
                     state.set_value(key.private_key_openssh.clone(), window, cx);
                 });
+                self.generated_public_key = Some(key.public_key_openssh.clone());
                 cx.write_to_clipboard(ClipboardItem::new_string(key.public_key_openssh));
                 window.push_notification(
                     Notification::success(
@@ -115,6 +118,13 @@ impl CredentialForm {
             }
         }
         cx.notify();
+    }
+
+    /// 重新复制刚生成的公钥：生成时虽然已自动复制，但用户可能先复制了别的内容。
+    pub(super) fn copy_generated_public_key(&mut self, cx: &mut Context<Self>) {
+        if let Some(public_key) = self.generated_public_key.clone() {
+            cx.write_to_clipboard(ClipboardItem::new_string(public_key));
+        }
     }
 
     /// 下拉框当前选中项对应的算法；越界时回退到默认的 Ed25519。
@@ -323,6 +333,7 @@ impl CredentialForm {
             forward_to_agent,
             algorithm_select,
             generating_key: false,
+            generated_public_key: None,
             pending_private_key_path: None,
         }
     }

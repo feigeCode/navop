@@ -9,6 +9,8 @@ pub(super) struct TerminalViewInit {
     pub(super) connection_icon: Option<Icon>,
     pub(super) sync_path_enabled: bool,
     pub(super) local_working_dir: Option<PathBuf>,
+    /// 本地终端的简洁配置名（如 PowerShell / CMD / Ubuntu / 自定义配置名）。
+    pub(super) local_profile_title: Option<String>,
     /// 本地终端文件树的来源；WSL 会话指向发行版文件系统（`\\wsl$\<发行版>`），
     /// 容器 exec 会话指向容器文件系统（经 `docker exec` 浏览）。
     pub(super) workspace_source: Option<LocalWorkspaceSource>,

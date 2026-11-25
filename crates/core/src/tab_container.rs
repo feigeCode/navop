@@ -189,6 +189,12 @@ fn status_badge(id: String, icon: IconName, tooltip_text: String) -> AnyElement 
         .into_any_element()
 }
 
+/// 只有存在标题时才渲染标题 tooltip：无标题标签（如固定首页标签，标题为空串）
+/// 悬停时不应弹出空白提示；重命名期间由输入框接管，同样不显示。
+fn tab_shows_title_tooltip(is_renaming: bool, title: &str) -> bool {
+    !is_renaming && !title.trim().is_empty()
+}
+
 /// 标签栏放不下时，非活动标签按 flex 收缩到 `TAB_MIN_WIDTH`（类似 SecureCRT）；
 /// 活动标签与正在重命名的标签始终保持完整宽度。
 fn tab_keeps_full_width(is_active: bool, is_renaming: bool) -> bool {
@@ -259,6 +265,105 @@ pub(crate) fn sidebar_panel_blocks_exclusive_target(
         && sidebar_panel_uses_exclusive_slot(chrome)
 }
 
+/// 终端或子视图上报的需要用户关注的通知语义类别。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabAttentionKind {
+    /// 需要用户审批、确认或输入（例如 CLI 工具的 `Needs approval`）。
+    Approval,
+    /// 任务或回合已完成（例如 `Agent finished` / `Task complete`）。
+    Completed,
+    /// 其他通用提醒（例如未知正文的 OSC 9/777 或终端响铃 BEL）。
+    Info,
+}
+
+/// 挂载在标签页上的待查看通知。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TabAttention {
+    pub kind: TabAttentionKind,
+    pub title: Option<SharedString>,
+    pub message: SharedString,
+}
+
+impl TabAttention {
+    /// 从终端通知文本推导语义类别（审批/输入 vs 已完成 vs 通用）。
+    ///
+    /// 注意优先判断明确的“已完成”信号（例如 `"Agent finished"`、`"Task complete"`、
+    /// `"Done — waiting for your input"` 或含 `"completed"` 的消息），避免像
+    /// `"Task complete, waiting for next input"` / `"Finished, ready for input"` 这类
+    /// 带有 `waiting for` / `input` 尾缀的完成通知被误归类为 `Approval`。
+    /// 明确的审批/权限请求（`approval` / `approve` / `permission` / `confirm` /
+    /// `question` / `审批` / `授权` / `权限` / `确认`）始终归为 `Approval`。
+    pub fn classify(title: Option<&str>, body: &str) -> TabAttentionKind {
+        let combined = match title {
+            Some(title) if !title.trim().is_empty() => {
+                format!("{} {}", title.trim(), body.trim()).to_ascii_lowercase()
+            }
+            _ => body.trim().to_ascii_lowercase(),
+        };
+
+        let is_explicit_approval = combined.contains("approval")
+            || combined.contains("approve")
+            || combined.contains("permission")
+            || combined.contains("confirm")
+            || combined.contains("question")
+            || combined.contains("审批")
+            || combined.contains("授权")
+            || combined.contains("权限")
+            || combined.contains("确认");
+
+        if is_explicit_approval {
+            return TabAttentionKind::Approval;
+        }
+
+        let is_completed = combined.contains("finished")
+            || combined.contains("complete")
+            || combined.contains("done")
+            || combined.contains("succeeded")
+            || combined.contains("ready")
+            || combined.contains("已完成")
+            || combined.contains("完成");
+
+        if is_completed {
+            return TabAttentionKind::Completed;
+        }
+
+        let is_waiting_input = combined.contains("needs your")
+            || combined.contains("need your")
+            || combined.contains("waiting for")
+            || combined.contains("input")
+            || combined.contains("等待输入")
+            || combined.contains("等待你的");
+
+        if is_waiting_input {
+            TabAttentionKind::Approval
+        } else {
+            TabAttentionKind::Info
+        }
+    }
+
+    pub fn from_notification(title: Option<String>, body: String) -> Self {
+        let title = title
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let body = body.trim().to_string();
+        let kind = Self::classify(title.as_deref(), &body);
+        Self {
+            kind,
+            title: title.map(SharedString::from),
+            message: SharedString::from(body),
+        }
+    }
+
+    /// 供标签页悬停 tooltip 展示的摘要文本。
+    pub fn tooltip_summary(&self) -> String {
+        match (&self.title, self.message.as_ref()) {
+            (Some(title), message) if !message.is_empty() => format!("{title}: {message}"),
+            (Some(title), _) => title.to_string(),
+            (None, message) => message.to_string(),
+        }
+    }
+}
+
 /// Events emitted by TabContent
 #[derive(Clone)]
 pub enum TabContentEvent {
@@ -266,6 +371,8 @@ pub enum TabContentEvent {
     StateChanged,
     /// Tab content changed while it may be inactive.
     ContentChanged,
+    /// Tab emitted an explicit user-facing attention notification (e.g. OSC 9 / 777 / BEL).
+    Attention(TabAttention),
     /// Update the source identifier used to associate this content with its owner.
     SourceChanged { from: SharedString },
     /// Ask the owning container to close this content through its normal
@@ -280,6 +387,10 @@ impl std::fmt::Debug for TabContentEvent {
         match self {
             Self::StateChanged => formatter.write_str("StateChanged"),
             Self::ContentChanged => formatter.write_str("ContentChanged"),
+            Self::Attention(attention) => formatter
+                .debug_tuple("Attention")
+                .field(attention)
+                .finish(),
             Self::SourceChanged { from } => formatter
                 .debug_struct("SourceChanged")
                 .field("from", from)
@@ -310,6 +421,14 @@ pub enum TabContainerEvent {
     /// A tab was created by duplicating another tab. Emitted after the copy is
     /// inserted so the host can attach content-specific event handling.
     TabDuplicated { id: String },
+    /// A tab emitted an attention notification; host can bridge it to OS notifications.
+    TabAttention {
+        tab_id: String,
+        tab_title: SharedString,
+        tab_is_active: bool,
+        window_is_active: bool,
+        attention: TabAttention,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -452,6 +571,12 @@ pub trait TabContent: EventEmitter<TabContentEvent> + Render + Focusable {
 
     /// Get the tab title
     fn title(&self, cx: &App) -> SharedString;
+
+    /// Optional detailed text shown on tab hover (for example a local terminal's
+    /// full shell title or current working directory when the tab title is kept concise).
+    fn title_tooltip(&self, cx: &App) -> Option<SharedString> {
+        None
+    }
 
     /// Get optional icon for the tab
     fn icon(&self, cx: &App) -> Option<Icon> {
@@ -605,6 +730,9 @@ pub trait TabContentView: 'static + Send + Sync {
     fn content_key(&self, cx: &App) -> &'static str;
     fn content_id(&self, cx: &App) -> EntityId;
     fn title(&self, cx: &App) -> SharedString;
+    fn title_tooltip(&self, cx: &App) -> Option<SharedString> {
+        None
+    }
     fn icon(&self, cx: &App) -> Option<Icon>;
     fn closeable(&self, cx: &App) -> bool;
     fn can_rename(&self, cx: &App) -> bool;
@@ -674,6 +802,10 @@ impl<T: TabContent> TabContentView for Entity<T> {
 
     fn title(&self, cx: &App) -> SharedString {
         self.read(cx).title(cx)
+    }
+
+    fn title_tooltip(&self, cx: &App) -> Option<SharedString> {
+        self.read(cx).title_tooltip(cx)
     }
 
     fn icon(&self, cx: &App) -> Option<Icon> {
@@ -904,6 +1036,21 @@ impl TabItem {
                 .map(String::as_str),
             self.content().title(cx),
         )
+    }
+
+    pub fn title_tooltip(&self, cx: &App) -> SharedString {
+        let display_title = self.title(cx);
+        let Some(detail) = self.content().title_tooltip(cx) else {
+            return display_title;
+        };
+        let detail = detail.trim();
+        if detail.is_empty() || detail == display_title.trim() {
+            return display_title;
+        }
+        if display_title.trim().is_empty() {
+            return SharedString::from(detail.to_string());
+        }
+        SharedString::from(format!("{display_title}\n{detail}"))
     }
 
     fn set_title_override(&mut self, title: &str) -> bool {
@@ -1173,6 +1320,7 @@ pub struct TabContainer {
     tab_bar_scroll_handle: ScrollHandle,
     closing_tabs: HashSet<SharedString>,
     activity_tabs: HashSet<String>,
+    attention_tabs: HashMap<String, TabAttention>,
     tab_content_subscriptions: Vec<Subscription>,
     renaming_tab_id: Option<SharedString>,
     rename_input: Option<Entity<InputState>>,
@@ -1245,6 +1393,7 @@ impl TabContainer {
             tab_bar_scroll_handle: ScrollHandle::new(),
             closing_tabs: HashSet::new(),
             activity_tabs: HashSet::new(),
+            attention_tabs: HashMap::new(),
             tab_content_subscriptions: Vec::new(),
             renaming_tab_id: None,
             rename_input: None,
@@ -1844,6 +1993,9 @@ impl TabContainer {
                     cx.notify();
                 }
             }
+            TabContentEvent::Attention(attention) => {
+                self.handle_content_attention(content_id, attention.clone(), window, cx);
+            }
             TabContentEvent::SourceChanged { from } => {
                 if self.update_content_source(content_id, from.clone(), cx) {
                     cx.emit(TabContainerEvent::LayoutChanged);
@@ -1889,6 +2041,43 @@ impl TabContainer {
         let tab_id = self.tabs[index].id().to_string();
         let tab_is_active = self.regular_tab_is_active(index);
         mark_tab_activity(&mut self.activity_tabs, &tab_id, tab_is_active)
+    }
+
+    fn handle_content_attention(
+        &mut self,
+        content_id: EntityId,
+        attention: TabAttention,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.content().content_id(cx) == content_id)
+        else {
+            return;
+        };
+        let tab_id = self.tabs[index].id().to_string();
+        let tab_title = self.tabs[index].title(cx);
+        let tab_is_active = self.regular_tab_is_active(index);
+        let window_is_active = window.is_window_active();
+
+        if !tab_is_active {
+            self.attention_tabs.insert(tab_id.clone(), attention.clone());
+            cx.notify();
+        }
+
+        cx.emit(TabContainerEvent::TabAttention {
+            tab_id,
+            tab_title,
+            tab_is_active,
+            window_is_active,
+            attention,
+        });
+    }
+
+    pub fn tab_attention(&self, tab_id: &str) -> Option<&TabAttention> {
+        self.attention_tabs.get(tab_id)
     }
 
     fn regular_tab_is_active(&self, index: usize) -> bool {
@@ -2131,6 +2320,7 @@ impl TabContainer {
             self.tabs.remove(index);
             self.closing_tabs.remove(&removed_tab_id);
             clear_tab_activity(&mut self.activity_tabs, removed_tab_id.as_ref());
+            self.attention_tabs.remove(removed_tab_id.as_ref());
 
             let mut activated_regular = None;
             if self.tabs.is_empty() {
@@ -2162,6 +2352,7 @@ impl TabContainer {
                 new_tab.content().focus_handle(cx).focus(window, cx);
                 let new_tab_id = new_tab.id().to_string();
                 clear_tab_activity(&mut self.activity_tabs, &new_tab_id);
+                self.attention_tabs.remove(&new_tab_id);
                 activated_regular = Some((self.active_index, new_tab_id));
             }
 
@@ -2675,6 +2866,7 @@ impl TabContainer {
             new_tab.content().focus_handle(cx).focus(window, cx);
             let tab_id = new_tab.id().to_string();
             clear_tab_activity(&mut self.activity_tabs, &tab_id);
+            self.attention_tabs.remove(&tab_id);
 
             cx.emit(TabContainerEvent::TabActivated { index, id: tab_id });
             if switching_content {
@@ -2962,6 +3154,7 @@ impl TabContainer {
     ) {
         self.tabs.clear();
         self.activity_tabs.clear();
+        self.attention_tabs.clear();
 
         for tab_state in &state.tabs {
             if let Some(content) = registry.build(tab_state, window, cx) {
@@ -3039,6 +3232,7 @@ impl TabContainer {
         let was_active = self.regular_tab_is_active(index);
         let tab = self.tabs.remove(index);
         clear_tab_activity(&mut self.activity_tabs, tab.id().as_ref());
+        self.attention_tabs.remove(tab.id().as_ref());
 
         if self.tabs.is_empty() {
             self.active_index = 0;
@@ -4279,9 +4473,13 @@ impl TabContainer {
             .unwrap_or(theme.muted_foreground);
         let close_btn_hover_color = theme.secondary_hover;
         let activity_color = theme.success;
+        let attention_approval_color = theme.warning;
+        let attention_completed_color = theme.success;
+        let attention_info_color = theme.info;
+        // 外壳可以覆盖非活动页签描边；没覆盖时沿用主题边框的淡描边。
         let inactive_tab_border_color = self
             .inactive_tab_border_color
-            .unwrap_or(gpui::transparent_black());
+            .unwrap_or(border_color.opacity(0.65));
         let active_tab_border_color = border_color;
         let drag_border_color = theme.drag_border;
         let active_index = self.active_index;
@@ -4452,6 +4650,7 @@ impl TabContainer {
                     .enumerate()
                     .map(|(pinned_index, pinned)| {
                         let pinned_title = pinned.title(cx);
+                        let show_title_tooltip = tab_shows_title_tooltip(false, &pinned_title);
                         let tooltip_title = pinned_title.clone();
                         let pinned_icon = pinned.content().icon(cx);
                         let pinned_connection_status = pinned.content().connection_status(cx);
@@ -4488,8 +4687,10 @@ impl TabContainer {
                                     .bg(inactive_tab_color)
                             })
                             .cursor_pointer()
-                            .tooltip(move |window, cx| {
-                                Tooltip::new(tooltip_title.clone()).build(window, cx)
+                            .when(show_title_tooltip, |el| {
+                                el.tooltip(move |window, cx| {
+                                    Tooltip::new(tooltip_title.clone()).build(window, cx)
+                                })
                             })
                             .on_click(move |_, window, cx| {
                                 view_for_pinned.update(cx, |this, cx| {
@@ -4578,8 +4779,13 @@ impl TabContainer {
                         let title_clone = title.clone();
                         let tab_max_width = self.get_tab_max_width(tab, cx);
                         let tab_id = tab.id();
+                        let tab_attention = if is_active {
+                            None
+                        } else {
+                            self.attention_tabs.get(tab_id.as_ref()).cloned()
+                        };
                         let has_activity =
-                            !is_active && self.activity_tabs.contains(tab_id.as_ref());
+                            !is_active && tab_attention.is_none() && self.activity_tabs.contains(tab_id.as_ref());
                         let display_number =
                             tab_display_number(ActiveTabSlot::Regular(idx), pinned_tab_count);
                         let rename_input_for_tab = self
@@ -4589,8 +4795,24 @@ impl TabContainer {
                             .and_then(|_| self.rename_input.clone());
                         let (tab_min_width, tab_max_width) =
                             tab_width_bounds(tab_max_width, rename_input_for_tab.is_some());
-                        let show_title_tooltip = rename_input_for_tab.is_none() && !title.is_empty();
-                        let tooltip_title = title.clone();
+                        let tooltip_base = tab.title_tooltip(cx);
+                        let tooltip_text: SharedString = match &tab_attention {
+                            Some(attention) => {
+                                let summary = attention.tooltip_summary();
+                                if summary.is_empty() {
+                                    tooltip_base.clone()
+                                } else if tooltip_base.trim().is_empty() {
+                                    SharedString::from(summary)
+                                } else {
+                                    SharedString::from(format!("{tooltip_base}\n{summary}"))
+                                }
+                            }
+                            None => tooltip_base,
+                        };
+                        let show_title_tooltip = tab_shows_title_tooltip(
+                            rename_input_for_tab.is_some(),
+                            &tooltip_text,
+                        );
                         let keep_full_width = tab_keeps_full_width(
                             is_active,
                             rename_input_for_tab.is_some(),
@@ -4628,8 +4850,25 @@ impl TabContainer {
                             })
                             .when(show_title_tooltip, |el| {
                                 el.tooltip(move |window, cx| {
-                                    Tooltip::new(tooltip_title.clone()).build(window, cx)
+                                    Tooltip::new(tooltip_text.clone()).build(window, cx)
                                 })
+                            })
+                            .when_some(tab_attention, |el, attention| {
+                                let dot_color = match attention.kind {
+                                    TabAttentionKind::Approval => attention_approval_color,
+                                    TabAttentionKind::Completed => attention_completed_color,
+                                    TabAttentionKind::Info => attention_info_color,
+                                };
+                                el.child(
+                                    div()
+                                        .id(SharedString::from(format!("tab-attention-{idx}")))
+                                        .absolute()
+                                        .top(px(4.0))
+                                        .left(px(5.0))
+                                        .size(px(8.0))
+                                        .rounded_full()
+                                        .bg(dot_color),
+                                )
                             })
                             .when(has_activity, |el| {
                                 el.child(
@@ -5964,8 +6203,36 @@ mod tests {
     #[test]
     fn tab_titles_expose_full_text_on_hover() {
         let source = include_str!("tab_container.rs");
-        let tooltip_builder = ["Tool", "tip::new(tool", "tip_title.clone())"].concat();
-        assert!(source.matches(&tooltip_builder).count() >= 2);
+        let implementation = source.split("mod tests").next().unwrap();
+        let pinned_tooltip_builder = ["Tool", "tip::new(tool", "tip_title.clone())"].concat();
+        let regular_tooltip_builder = ["Tool", "tip::new(tool", "tip_text.clone())"].concat();
+        assert!(implementation.contains(&pinned_tooltip_builder));
+        assert!(implementation.contains(&regular_tooltip_builder));
+    }
+
+    #[test]
+    fn tabs_without_titles_skip_title_tooltips() {
+        // 固定首页标签的标题是空串（只显示编号与图标），悬停时不能弹出空白 tooltip。
+        assert!(!tab_shows_title_tooltip(false, ""));
+        assert!(!tab_shows_title_tooltip(false, "   "));
+        assert!(tab_shows_title_tooltip(false, "主页"));
+        // 重命名期间由输入框接管，也不显示标题 tooltip。
+        assert!(!tab_shows_title_tooltip(true, "主页"));
+
+        let source = include_str!("tab_container.rs");
+        let implementation = source.split("mod tests").next().unwrap();
+        // 固定标签与普通标签两条渲染路径都必须按“有标题”判断是否挂 tooltip。
+        assert!(implementation.contains("tab_shows_title_tooltip(false, &pinned_title)"));
+        assert!(
+            implementation.contains("tab_shows_title_tooltip(\n")
+                && implementation.contains("rename_input_for_tab.is_some(),")
+                && implementation.contains("&tooltip_text,")
+        );
+        assert_eq!(
+            implementation.matches("tab_shows_title_tooltip(").count(),
+            3,
+            "one definition + two render call sites"
+        );
     }
 
     #[test]
@@ -6244,7 +6511,8 @@ mod tests {
                         TabContainerEvent::LayoutChanged => "layout".to_string(),
                         TabContainerEvent::NavigationSidebarToggled { .. }
                         | TabContainerEvent::HomeMenuToggled { .. }
-                        | TabContainerEvent::TabDuplicated { .. } => return,
+                        | TabContainerEvent::TabDuplicated { .. }
+                        | TabContainerEvent::TabAttention { .. } => return,
                     };
                     events_for_subscription
                         .lock()

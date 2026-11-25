@@ -49,8 +49,25 @@ impl TerminalWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_local_with_profile_title(config, None, tab_index, window, cx)
+    }
+
+    pub fn new_local_with_profile_title(
+        config: LocalConfig,
+        profile_title: Option<String>,
+        tab_index: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let main = cx.new(|cx| {
-            TerminalView::new_with_index(config, tab_index, window, cx).with_workspace_pane()
+            TerminalView::new_local_with_profile_title(
+                config,
+                profile_title,
+                tab_index,
+                window,
+                cx,
+            )
+            .with_workspace_pane()
         });
         Self::from_pane(main, window, cx)
     }

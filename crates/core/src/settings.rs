@@ -1302,6 +1302,68 @@ impl TabDoubleClickAction {
     }
 }
 
+/// 终端桌面通知（OSC 9 / OSC 777，如 CLI 工具的审批与完成提示）的系统弹窗策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalDesktopNotificationMode {
+    /// 仅当 Navop 窗口不在前台，或通知来自非当前活动标签页时弹出系统通知（默认）。
+    #[default]
+    UnfocusedOrInactiveTab,
+    /// 仅当 Navop 主窗口不在前台（失焦 / 最小化 / 隐藏到托盘）时弹出系统通知。
+    UnfocusedWindowOnly,
+    /// 总是弹出系统通知（即使当前正在查看该标签页）。
+    Always,
+    /// 关闭系统桌面通知（仅保留标签页状态点与悬停详情）。
+    Off,
+}
+
+impl TerminalDesktopNotificationMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::UnfocusedOrInactiveTab => "unfocused_or_inactive_tab",
+            Self::UnfocusedWindowOnly => "unfocused_window_only",
+            Self::Always => "always",
+            Self::Off => "off",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "unfocused_window_only" => Self::UnfocusedWindowOnly,
+            "always" => Self::Always,
+            "off" => Self::Off,
+            _ => Self::UnfocusedOrInactiveTab,
+        }
+    }
+}
+
+/// 终端桌面通知在系统提示框中的停留时长。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalDesktopNotificationDuration {
+    /// 较长停留（约 25 秒，对应 Windows Toast `duration="long"`，默认）。
+    #[default]
+    Long,
+    /// 短暂提示（约 5 秒，对应 Windows Toast `duration="short"`）。
+    Short,
+}
+
+impl TerminalDesktopNotificationDuration {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Long => "long",
+            Self::Short => "short",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "short" => Self::Short,
+            _ => Self::Long,
+        }
+    }
+}
+
 /// 更新通道：稳定版 / 测试版（Beta）。
 ///
 /// 通道只决定「去哪份更新清单里找新版本」，安装包本身仍是同一套。稳定通道读
@@ -1549,6 +1611,15 @@ pub struct AppSettings {
     /// 终端左边距展示行号
     #[serde(default)]
     pub terminal_show_line_numbers: bool,
+    /// 终端桌面通知（OSC 9 / OSC 777）的系统弹窗触发策略
+    #[serde(default)]
+    pub terminal_desktop_notification_mode: TerminalDesktopNotificationMode,
+    /// 终端桌面通知的停留时长（较长停留 / 短暂提示）
+    #[serde(default)]
+    pub terminal_desktop_notification_duration: TerminalDesktopNotificationDuration,
+    /// 终端桌面通知弹出时是否播放系统提示音
+    #[serde(default = "default_true")]
+    pub terminal_desktop_notification_sound: bool,
     /// 终端侧栏各工具面板的停靠位置。
     ///
     /// 键是 `SidebarPanel::local_id()`（如 `terminal.ai-chat`），值是左 / 右 / 底。
@@ -2073,6 +2144,9 @@ impl Default for AppSettings {
             terminal_selection_highlight: default_true(),
             terminal_show_timestamps: false,
             terminal_show_line_numbers: false,
+            terminal_desktop_notification_mode: TerminalDesktopNotificationMode::default(),
+            terminal_desktop_notification_duration: TerminalDesktopNotificationDuration::default(),
+            terminal_desktop_notification_sound: default_true(),
             terminal_tool_panel_placements: BTreeMap::new(),
             local_terminal_profile: LocalTerminalProfileSettings::default(),
             log_file_path: String::new(),
@@ -2766,7 +2840,8 @@ mod tests {
         MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, MarkdownDefaultViewMode, MasterKeyStorage,
         McpPermissionMode, McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode,
         SidebarPlacement, SqlFormatSettings, SqlIndentStyle, SqlKeywordCase, StartupDefaultPage,
-        SyncProvider, TabDoubleClickAction, TableViewMode, UpdateChannel, UpdateMirror,
+        SyncProvider, TabDoubleClickAction, TableViewMode, TerminalDesktopNotificationDuration,
+        TerminalDesktopNotificationMode, UpdateChannel, UpdateMirror,
         default_grid_font_fallback_families, default_grid_monospace_font_family,
         grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
         migrate_layout_settings, monospace_font_options,
@@ -4693,6 +4768,88 @@ mod tests {
             .expect("旧版设置应能反序列化");
 
         assert_eq!(DEFAULT_TERMINAL_THEME, settings.terminal_theme);
+    }
+
+    #[test]
+    fn terminal_desktop_notification_mode_defaults_round_trips_and_falls_back() {
+        assert_eq!(
+            TerminalDesktopNotificationMode::UnfocusedOrInactiveTab,
+            AppSettings::default().terminal_desktop_notification_mode
+        );
+        let legacy: AppSettings = serde_json::from_value(serde_json::json!({"locale": "zh-CN"}))
+            .expect("旧版设置应能反序列化");
+        assert_eq!(
+            TerminalDesktopNotificationMode::UnfocusedOrInactiveTab,
+            legacy.terminal_desktop_notification_mode
+        );
+
+        for mode in [
+            TerminalDesktopNotificationMode::UnfocusedOrInactiveTab,
+            TerminalDesktopNotificationMode::UnfocusedWindowOnly,
+            TerminalDesktopNotificationMode::Always,
+            TerminalDesktopNotificationMode::Off,
+        ] {
+            let settings = AppSettings {
+                terminal_desktop_notification_mode: mode,
+                ..AppSettings::default()
+            };
+            let json = serde_json::to_string(&settings).expect("应序列化终端桌面通知策略");
+            let restored: AppSettings =
+                serde_json::from_str(&json).expect("应反序列化终端桌面通知策略");
+            assert_eq!(mode, restored.terminal_desktop_notification_mode);
+            assert_eq!(
+                mode,
+                TerminalDesktopNotificationMode::from_str(mode.as_str())
+            );
+        }
+
+        assert_eq!(
+            TerminalDesktopNotificationMode::UnfocusedOrInactiveTab,
+            TerminalDesktopNotificationMode::from_str("unknown_mode")
+        );
+    }
+
+    #[test]
+    fn terminal_desktop_notification_duration_and_sound_defaults_round_trip() {
+        let defaults = AppSettings::default();
+        assert_eq!(
+            TerminalDesktopNotificationDuration::Long,
+            defaults.terminal_desktop_notification_duration
+        );
+        assert!(defaults.terminal_desktop_notification_sound);
+
+        let legacy: AppSettings = serde_json::from_value(serde_json::json!({"locale": "zh-CN"}))
+            .expect("旧版设置应能反序列化");
+        assert_eq!(
+            TerminalDesktopNotificationDuration::Long,
+            legacy.terminal_desktop_notification_duration
+        );
+        assert!(legacy.terminal_desktop_notification_sound);
+
+        for (duration, sound) in [
+            (TerminalDesktopNotificationDuration::Long, true),
+            (TerminalDesktopNotificationDuration::Short, false),
+        ] {
+            let settings = AppSettings {
+                terminal_desktop_notification_duration: duration,
+                terminal_desktop_notification_sound: sound,
+                ..AppSettings::default()
+            };
+            let json = serde_json::to_string(&settings).expect("应序列化终端桌面通知时长与声音设置");
+            let restored: AppSettings =
+                serde_json::from_str(&json).expect("应反序列化终端桌面通知时长与声音设置");
+            assert_eq!(duration, restored.terminal_desktop_notification_duration);
+            assert_eq!(sound, restored.terminal_desktop_notification_sound);
+            assert_eq!(
+                duration,
+                TerminalDesktopNotificationDuration::from_str(duration.as_str())
+            );
+        }
+
+        assert_eq!(
+            TerminalDesktopNotificationDuration::Long,
+            TerminalDesktopNotificationDuration::from_str("unknown_duration")
+        );
     }
 
     #[test]

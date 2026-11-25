@@ -64,3 +64,45 @@ fn tab_content_event_exposes_close_request_contract() {
         format!("{:?}", TabContentEvent::CloseRequested)
     );
 }
+
+#[test]
+fn tab_attention_classifies_approval_completed_and_info() {
+    use crate::tab_container::{TabAttention, TabAttentionKind};
+
+    let approval = TabAttention::from_notification(None, "Needs approval".to_string());
+    assert_eq!(TabAttentionKind::Approval, approval.kind);
+    assert_eq!("Needs approval", approval.tooltip_summary());
+
+    let completed = TabAttention::from_notification(
+        Some("Antigravity".to_string()),
+        "Agent finished".to_string(),
+    );
+    assert_eq!(TabAttentionKind::Completed, completed.kind);
+    assert_eq!("Antigravity: Agent finished", completed.tooltip_summary());
+
+    // 完成提示附带“等待输入”尾缀时仍应归类为 Completed，而非误判成 Approval
+    let completed_waiting = TabAttention::from_notification(
+        None,
+        "Task complete — waiting for your input".to_string(),
+    );
+    assert_eq!(TabAttentionKind::Completed, completed_waiting.kind);
+
+    let ready_input = TabAttention::from_notification(
+        None,
+        "Response finished, ready for input".to_string(),
+    );
+    assert_eq!(TabAttentionKind::Completed, ready_input.kind);
+
+    // 明确的权限/审批请求即使包含其他词，也应归类为 Approval
+    let explicit_permission = TabAttention::from_notification(
+        None,
+        "Permission required to complete action".to_string(),
+    );
+    assert_eq!(TabAttentionKind::Approval, explicit_permission.kind);
+
+    let info = TabAttention::from_notification(None, "Build log ready?".to_string());
+    assert_eq!(TabAttentionKind::Completed, info.kind);
+
+    let generic = TabAttention::from_notification(None, "Hello from CLI".to_string());
+    assert_eq!(TabAttentionKind::Info, generic.kind);
+}

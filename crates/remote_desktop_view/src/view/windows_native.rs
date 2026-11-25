@@ -15,6 +15,12 @@ pub(super) struct Win32ClientPhysicalBounds {
     pub(super) height: i32,
 }
 
+/// Converts logical GPUI bounds into the canonical physical geometry of the
+/// native child and its RDP framebuffer.
+///
+/// Non-zero dimensions go through the same integer sizing policy as the
+/// session display settings. Zero-sized bounds stay zero so they continue to
+/// mean "hide the native child".
 pub(super) fn logical_bounds_to_physical(
     bounds: Bounds<Pixels>,
     parent_client_origin: Point<Pixels>,
@@ -32,12 +38,24 @@ pub(super) fn logical_bounds_to_physical(
         return None;
     }
 
-    Some(Win32ClientPhysicalBounds {
+    let mut physical = Win32ClientPhysicalBounds {
         x: scale_physical(origin_x, scale_factor)?,
         y: scale_physical(origin_y, scale_factor)?,
         width: scale_physical(width, scale_factor)?,
         height: scale_physical(height, scale_factor)?,
-    })
+    };
+    if physical.width > 0 && physical.height > 0 {
+        // The ActiveX child and the RDP framebuffer must use exactly the same
+        // integer dimensions. Otherwise mstscax proportionally scales the
+        // whole session bitmap (pointer included) whenever the two differ,
+        // which is especially visible at fractional host scaling such as
+        // 175%. Reuse the session sizing policy instead of rounding the child
+        // dimensions independently.
+        let (width, height) = super::resize::resize_dimensions(bounds, scale_factor)?;
+        physical.width = i32::from(width);
+        physical.height = i32::from(height);
+    }
+    Some(physical)
 }
 
 fn pixels_to_f64(value: Pixels) -> f64 {
@@ -1910,5 +1928,32 @@ mod tests {
 
         assert_eq!(None, logical_bounds_to_physical(logical, origin, 0.0));
         assert_eq!(None, logical_bounds_to_physical(logical, origin, f32::NAN));
+    }
+
+    #[test]
+    fn child_geometry_matches_session_geometry_at_fractional_scale() {
+        let logical = Bounds::new(point(px(0.0), px(0.0)), size(px(250.0), px(180.0)));
+        let origin = point(px(0.0), px(0.0));
+        for (scale_factor, expected_width) in
+            [(1.0, 250), (1.25, 312), (1.5, 374), (1.75, 438), (2.0, 500)]
+        {
+            let physical = logical_bounds_to_physical(logical, origin, scale_factor)
+                .expect("valid native child geometry");
+            let session = super::super::resize::resize_dimensions(logical, scale_factor)
+                .expect("valid session geometry");
+
+            assert_eq!(
+                (
+                    u16::try_from(physical.width).unwrap(),
+                    u16::try_from(physical.height).unwrap()
+                ),
+                session,
+                "the child client area and desktop must match at {scale_factor}x"
+            );
+            assert_eq!(
+                expected_width, physical.width,
+                "the RDP desktop width must stay even at {scale_factor}x"
+            );
+        }
     }
 }

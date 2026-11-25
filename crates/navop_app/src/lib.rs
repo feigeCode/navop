@@ -43,6 +43,8 @@ mod license;
 mod local_terminal_profiles;
 mod master_key_dialogs;
 mod master_key_flow;
+#[cfg(feature = "shell")]
+mod monitor_tab;
 mod navigation_applications;
 mod navop_app;
 mod persistent_connection_sidebar;

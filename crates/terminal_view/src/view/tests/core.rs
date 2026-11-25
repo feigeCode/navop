@@ -435,6 +435,60 @@ fn recording_playback_tab_title_is_visibly_read_only_playback() {
 }
 
 #[test]
+fn concise_local_terminal_title_strips_windows_executable_paths() {
+    use super::super::tab_content::{concise_local_terminal_title, local_terminal_tooltip};
+
+    assert_eq!(
+        "PowerShell",
+        concise_local_terminal_title(
+            None,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            None
+        )
+    );
+    assert_eq!(
+        "PowerShell",
+        concise_local_terminal_title(None, r"C:\Program Files\PowerShell\7\pwsh.exe", None)
+    );
+    assert_eq!(
+        "CMD",
+        concise_local_terminal_title(None, r"C:\Windows\System32\cmd.exe", None)
+    );
+    assert_eq!(
+        "Git Bash",
+        concise_local_terminal_title(None, r"C:\Program Files\Git\bin\bash.exe", None)
+    );
+    assert_eq!(
+        "Ubuntu-24.04",
+        concise_local_terminal_title(Some("Ubuntu-24.04"), r"C:\Windows\System32\wsl.exe", None)
+    );
+    assert_eq!(
+        "OpenCode",
+        concise_local_terminal_title(Some("OpenCode"), r"C:\Tools\opencode.exe", None)
+    );
+    assert_eq!(
+        "vim main.rs",
+        concise_local_terminal_title(None, "vim main.rs", Some("/bin/zsh"))
+    );
+    assert_eq!(
+        "Zsh",
+        concise_local_terminal_title(None, "", Some("/bin/zsh"))
+    );
+
+    let tooltip = local_terminal_tooltip(
+        "PowerShell",
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        Some(r"C:\Users\demo\workspace\navop"),
+    )
+    .expect("tooltip should include full title and cwd");
+    assert_eq!(
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\nC:\\Users\\demo\\workspace\\navop",
+        tooltip.as_ref()
+    );
+    assert!(local_terminal_tooltip("PowerShell", "PowerShell", None).is_none());
+}
+
+#[test]
 fn remote_clipboard_image_path_uses_tmp_prefix_and_format_extension() {
     let path = remote_clipboard_image_path(ImageFormat::Png, 1_720_000_000_123);
 
@@ -531,4 +585,38 @@ fn clipboard_image_upload_intercepts_ssh_tui_modes() {
             mode
         ));
     }
+}
+
+#[test]
+fn terminal_focus_report_emits_csi_i_and_o_only_when_focus_in_out_enabled() {
+    use super::super::initialization::terminal_focus_report_sequence;
+
+    assert_eq!(
+        terminal_focus_report_sequence(TermMode::empty(), None, true),
+        None
+    );
+    assert_eq!(
+        terminal_focus_report_sequence(TermMode::empty(), None, false),
+        None
+    );
+    assert_eq!(
+        terminal_focus_report_sequence(TermMode::FOCUS_IN_OUT, None, true),
+        Some(b"\x1b[I".as_slice())
+    );
+    assert_eq!(
+        terminal_focus_report_sequence(TermMode::FOCUS_IN_OUT, Some(true), true),
+        None
+    );
+    assert_eq!(
+        terminal_focus_report_sequence(TermMode::FOCUS_IN_OUT, Some(true), false),
+        Some(b"\x1b[O".as_slice())
+    );
+    assert_eq!(
+        terminal_focus_report_sequence(TermMode::FOCUS_IN_OUT, Some(false), false),
+        None
+    );
+    assert_eq!(
+        terminal_focus_report_sequence(TermMode::FOCUS_IN_OUT, Some(false), true),
+        Some(b"\x1b[I".as_slice())
+    );
 }

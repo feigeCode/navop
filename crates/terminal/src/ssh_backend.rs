@@ -1458,6 +1458,9 @@ impl SshBackend {
                         OscEvent::CommandRecorded(command) => {
                             let _ = event_tx.send(TerminalEvent::CommandRecorded(command.clone()));
                         }
+                        OscEvent::Notification(notification) => {
+                            let _ = event_tx.send(TerminalEvent::Notification(notification.clone()));
+                        }
                     }
                 }
 

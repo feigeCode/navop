@@ -53,6 +53,26 @@ LRESULT CALLBACK native_host_window_procedure(
     UINT message,
     WPARAM wparam,
     LPARAM lparam) noexcept {
+    if (message == WM_SETCURSOR) {
+        // WM_SETCURSOR is delivered to the child under the pointer first and
+        // may then be forwarded through this ATL host to the STATIC overlay and
+        // finally to GPUI. GPUI answers it by setting its own arrow, which
+        // overwrites the resize cursor mstscax selected for the remote window
+        // border. Stop that forwarding here, while this window is the cursor
+        // owner boundary.
+        const HWND cursor_window = reinterpret_cast<HWND>(wparam);
+        if (cursor_window != nullptr && cursor_window != window &&
+            IsChild(window, cursor_window)) {
+            // mstscax sets the remote cursor before forwarding the message. If
+            // the child did not set one, GetCursor() is null and we provide the
+            // local arrow instead of leaving a stale cursor on screen.
+            if (GetCursor() != nullptr) {
+                return TRUE;
+            }
+        }
+        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+        return TRUE;
+    }
     return DefWindowProcW(window, message, wparam, lparam);
 }
 

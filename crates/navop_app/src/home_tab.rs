@@ -320,6 +320,8 @@ mod keybindings;
 mod lifecycle;
 #[cfg(feature = "shell")]
 mod local_terminal;
+#[cfg(feature = "shell")]
+pub(crate) use local_terminal::{launch_target_descriptor, wsl_distro_item_label};
 mod navigation;
 mod recent;
 mod render;
