@@ -25,7 +25,7 @@ impl HomePage {
         let connections = self.connections.clone();
         let list = cx.new(|cx| {
             let mut delegate = ConnectionQuickOpenDelegate::new(parent);
-            delegate.update_items(&connections);
+            delegate.update_items(&connections, cx);
             ListState::new(delegate, window, cx).searchable(true)
         });
 

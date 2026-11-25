@@ -23,8 +23,10 @@ impl TerminalWorkspace {
         let Some(source) = source_pane.read(cx).duplicate_source_snapshot(cx) else {
             return false;
         };
+        let profile_title = source_pane.read(cx).local_profile_title();
         let pane = cx.new(|cx| {
-            TerminalView::new_from_duplicate_source(source, window, cx).with_workspace_pane()
+            TerminalView::new_from_duplicate_source(source, profile_title, window, cx)
+                .with_workspace_pane()
         });
         self.insert_pane(
             target,

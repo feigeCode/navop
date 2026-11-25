@@ -106,6 +106,13 @@ impl TerminalView {
             TerminalModelEvent::Bell => {
                 // 可选：播放声音或闪烁标签
             }
+            TerminalModelEvent::Notification(notification) => {
+                let attention = one_core::tab_container::TabAttention::from_notification(
+                    notification.title.clone(),
+                    notification.body.clone(),
+                );
+                cx.emit(TabContentEvent::Attention(attention));
+            }
             TerminalModelEvent::ChildExit(_) => {
                 cx.notify();
             }

@@ -29,6 +29,10 @@ impl TabContent for TerminalWorkspace {
         self.active_pane().read(cx).title(cx)
     }
 
+    fn title_tooltip(&self, cx: &App) -> Option<SharedString> {
+        self.active_pane().read(cx).title_tooltip(cx)
+    }
+
     fn icon(&self, cx: &App) -> Option<Icon> {
         self.active_pane().read(cx).icon(cx)
     }
@@ -79,9 +83,11 @@ impl TabContent for TerminalWorkspace {
             return None;
         }
         let source = self.active_pane().read(cx).duplicate_source_snapshot(cx)?;
+        let profile_title = self.active_pane().read(cx).local_profile_title();
         let duplicate = cx.new(|cx| {
             let main = cx.new(|cx| {
-                TerminalView::new_from_duplicate_source(source, window, cx).with_workspace_pane()
+                TerminalView::new_from_duplicate_source(source, profile_title, window, cx)
+                    .with_workspace_pane()
             });
             Self::from_pane(main, window, cx)
         });
@@ -94,6 +100,10 @@ impl TabContent for TerminalWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
+        if self.panes.len() == 1 {
+            let pane = self.active_pane();
+            return pane.update(cx, |pane, cx| pane.try_close_single_pane(window, cx));
+        }
         if self
             .panes
             .values()
@@ -174,5 +184,12 @@ mod tests {
         assert!(source.contains("TerminalWorkspaceEvent::OpenSftp(connection)"));
         assert!(source.contains("fn can_disconnect(&self, cx: &App) -> bool"));
         assert!(source.contains("pane.disconnect_terminal(cx)"));
+    }
+
+    #[test]
+    fn single_pane_workspace_delegates_close_confirmation_to_pane() {
+        let source = include_str!("tab_content.rs");
+        assert!(source.contains("if self.panes.len() == 1"));
+        assert!(source.contains("pane.try_close_single_pane(window, cx)"));
     }
 }

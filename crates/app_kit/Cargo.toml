@@ -46,12 +46,16 @@ tray-icon = { version = "0.25", default-features = false }
 tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
 x11rb = "0.13"
 
-# Windows 单实例与自更新安装：沿用全量产品的实现（tokio 异步 I/O、zip 解包、Shell 通知）。
+# Windows 单实例、桌面通知与自更新安装：沿用全量产品的实现（tokio 异步 I/O、zip 解包、Shell / WinRT Toast 通知）。
 [target.'cfg(target_os = "windows")'.dependencies]
 tokio = { workspace = true, features = ["io-util", "net"] }
 windows = { version = "0.62", features = [
+    "Data_Xml_Dom",
+    "Foundation",
+    "UI_Notifications",
     "Win32_Foundation",
     "Win32_Security_Credentials",
+    "Win32_System_Registry",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
