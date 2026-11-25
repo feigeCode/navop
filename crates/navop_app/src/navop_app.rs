@@ -12,7 +12,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext, Context, Entity, ExternalPaths, InteractiveElement, IntoElement, KeyBinding,
     Keystroke, ParentElement, Render, StatefulInteractiveElement as _, Styled, Task, Window,
-    actions, div,
+    actions, div, px,
 };
 use gpui_component::{
     WindowExt,
@@ -365,9 +365,6 @@ fn initial_content_layout() -> InitialContentLayout {
         active_pinned_index: Some(0),
     }
 }
-
-#[cfg(target_os = "macos")]
-use gpui::px;
 
 use gpui_component::ActiveTheme;
 use gpui_component::dock::ToggleZoom;
