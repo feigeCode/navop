@@ -41,7 +41,8 @@ use crate::extension_menu::{
     DbTreeExtensionMenuRegistry, GlobalDbTreeExtensionActionHandler,
 };
 use crate::search_shortcut::{
-    DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, focus_search_input,
+    DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, RefreshDatabasePanel,
+    focus_search_input,
 };
 use crate::table_copy_menu::append_table_copy_items;
 use db::{
@@ -773,6 +774,22 @@ impl DbTreeView {
         ) {
             cx.emit(DbTreeViewEvent::CreateNewQuery { node_id });
         }
+    }
+
+    fn on_action_refresh_database_panel(
+        &mut self,
+        _: &RefreshDatabasePanel,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(node_id) = self
+            .selected_node_id
+            .clone()
+            .or_else(|| self.selected_or_first_node_id())
+        else {
+            return;
+        };
+        self.refresh_tree(node_id, cx);
     }
 
     /// 将 ContextMenuItem 渲染到 PopupMenu
@@ -2848,6 +2865,7 @@ impl Render for DbTreeView {
             .key_context(DB_SEARCH_CONTEXT)
             .on_action(cx.listener(Self::on_action_focus_search))
             .on_action(cx.listener(Self::on_action_open_selected_table_query))
+            .on_action(cx.listener(Self::on_action_refresh_database_panel))
             .bg(cx.theme().sidebar)
             .child({
                 let view_for_collapse = cx.entity();

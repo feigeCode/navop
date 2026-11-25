@@ -30,7 +30,7 @@ use tracing::{error, log::trace};
 use crate::import_export::table_export_view::DataExportView;
 use crate::search_shortcut::{
     DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, OpenTableDesigner,
-    focus_search_input,
+    RefreshDatabasePanel, SaveDatabaseChanges, focus_search_input,
 };
 use crate::sidebar::execution_history::ExecutionContext;
 use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
@@ -3285,6 +3285,24 @@ impl DataGrid {
         cx.emit(DataGridEvent::OpenTableQueryRequested);
     }
 
+    fn on_action_refresh_database_panel(
+        &mut self,
+        _: &RefreshDatabasePanel,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.handle_refresh(cx);
+    }
+
+    fn on_action_save_database_changes(
+        &mut self,
+        _: &SaveDatabaseChanges,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.save_changes(window, cx);
+    }
+
     fn handle_toolbar_refresh(
         &mut self,
         _: &ClickEvent,
@@ -5141,6 +5159,10 @@ impl Render for DataGrid {
                     })
                     .on_action(cx.listener(Self::on_action_open_table_designer))
                     .on_action(cx.listener(Self::on_action_open_table_query))
+                    .on_action(cx.listener(Self::on_action_refresh_database_panel))
+                    .when(self.config.editable, |this| {
+                        this.on_action(cx.listener(Self::on_action_save_database_changes))
+                    })
                     .key_context(DB_SEARCH_CONTEXT)
             })
             .size_full()

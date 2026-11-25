@@ -1,4 +1,7 @@
-use crate::search_shortcut::{DB_SEARCH_CONTEXT, FocusSearchInput, focus_search_input};
+use crate::search_shortcut::{
+    DB_SEARCH_CONTEXT, FocusSearchInput, RefreshDatabasePanel, SaveDatabaseChanges,
+    focus_search_input,
+};
 use futures::channel::oneshot;
 use gpui::prelude::*;
 use gpui::{
@@ -483,6 +486,24 @@ impl StructureLoadState {
 }
 
 impl TableDesigner {
+    fn on_action_refresh_database_panel(
+        &mut self,
+        _: &RefreshDatabasePanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.refresh_structure(window, cx);
+    }
+
+    fn on_action_save_database_changes(
+        &mut self,
+        _: &SaveDatabaseChanges,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.save(window, cx);
+    }
+
     pub fn new(
         title: impl Into<SharedString>,
         config: TableDesignerConfig,
@@ -1973,6 +1994,10 @@ impl Render for TableDesigner {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
+            .track_focus(&self.focus_handle)
+            .key_context(DB_SEARCH_CONTEXT)
+            .on_action(cx.listener(Self::on_action_refresh_database_panel))
+            .on_action(cx.listener(Self::on_action_save_database_changes))
             .child(self.render_toolbar(cx))
             .child(self.render_tabs(cx))
             .child(div().flex_1().w_full().overflow_hidden().child(
