@@ -62,7 +62,6 @@ impl PersistentConnectionSidebar {
     ) -> AnyElement {
         let palette = self.palette(cx);
         let rows = self.tree_rows(cx);
-        let inset_connection_list = self.home_navigation_layout || self.home_embedded;
         v_flex()
             .relative()
             .debug_selector(|| "persistent-connection-resource".to_owned())
@@ -73,8 +72,9 @@ impl PersistentConnectionSidebar {
             .flex_shrink_0()
             .bg(palette.background)
             .text_color(palette.foreground)
-            // 列表仍是独立内容层；用低对比边线与应用菜单区分，不用厚重边框。
-            .when(inset_connection_list, |tree| {
+            // 外壳托管时左侧就是应用菜单，两者同属一个壳，再画分隔线会在壳中间留一道
+            // 接缝；只有嵌进内容画布的树才用左边线与画布分区。
+            .when(self.home_embedded && !self.home_navigation_layout, |tree| {
                 tree.border_l_1().border_color(palette.border)
             })
             // 嵌入主页时隐藏树头部：页面标题行已提供计数与分组菜单，避免重复。

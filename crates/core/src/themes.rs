@@ -357,9 +357,10 @@ mod tests {
         });
     }
 
-    /// 外壳三处（侧边栏 / Tab 栏 / 标题栏）必须同色 —— 这是产品对 Navop 主题的
-    /// 硬性要求，浅色与深色都要成立；同时保持「内容 > 画布 > 外壳」的三级表面，
-    /// 否则侧边栏会和画布糊成一片（深色下 active tab 也会消失）。
+    /// 外壳三处（应用菜单/Tab 栏/标题栏）必须同色 —— 这是产品对 Navop 主题的
+    /// 硬性要求，浅色与深色都要成立；同时保持
+    /// 「内容 > 画布 > 资源面板 > 外壳」的层次，否则面板会和画布糊成一片
+    /// （深色下 active tab 也会消失）。
     #[gpui::test]
     fn navop_surfaces_share_one_shell_and_keep_three_step_depth(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
@@ -375,12 +376,18 @@ mod tests {
 
                 let theme = gpui_component::Theme::global(cx);
                 assert_eq!(
-                    theme.sidebar, theme.tab_bar,
-                    "{mode}: 侧边栏与 Tab 栏必须同色"
-                );
-                assert_eq!(
                     theme.tab_bar, theme.title_bar,
                     "{mode}: 标题栏必须与外壳同色"
+                );
+                assert_eq!(
+                    theme.tab_bar, theme.status_bar,
+                    "{mode}: 状态栏必须与外壳同色"
+                );
+                // 连接/数据库等资源面板比外壳亮一档：两者同色时左侧图标栏和面板
+                // 会糊成一块灰，用户分不出边界。
+                assert_ne!(
+                    theme.sidebar, theme.tab_bar,
+                    "{mode}: 资源面板必须与外壳区分开"
                 );
 
                 let luminance = |color: gpui::Hsla| {
@@ -400,10 +407,22 @@ mod tests {
                     luminance(theme.background) > luminance(theme.muted),
                     "{mode}: 内容表面必须亮于内容画布"
                 );
+                // 浅色是「外壳 < 面板 < 画布 < 内容」，深色反过来是
+                // 「外壳 < 画布 < 面板 < 内容」：只要求面板与画布都夹在外壳和内容之间，
+                // 且两者互不相同，层次就不会糊。
+                let shell = luminance(theme.tab_bar);
+                let panel = luminance(theme.sidebar);
+                let canvas = luminance(theme.muted);
+                let content = luminance(theme.background);
                 assert!(
-                    luminance(theme.muted) > luminance(theme.tab_bar),
-                    "{mode}: 内容画布必须亮于外壳"
+                    panel > shell && canvas > shell,
+                    "{mode}: 资源面板与内容画布都必须亮于外壳"
                 );
+                assert!(
+                    content > panel && content > canvas,
+                    "{mode}: 内容表面必须最亮"
+                );
+                assert_ne!(panel, canvas, "{mode}: 资源面板与内容画布必须区分开");
             }
         });
     }

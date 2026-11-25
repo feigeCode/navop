@@ -323,6 +323,11 @@ fn the_inline_handle_has_a_stable_drag_origin(cx: &mut TestAppContext) {
     assert_eq!(band.left(), panel.right(), "inline 手柄必须落在面板右侧");
     assert_eq!(band.size.width, px(13.));
     assert_eq!(band.size.height, panel.size.height);
+    // 内联手柄的分隔线要落在内容真正开始的位置（抓取区外侧边），
+    // 不能停在抓取区正中，否则看起来就是偏了。
+    let line = cx.debug_bounds(LINE_SELECTOR).expect("分隔线");
+    assert_eq!(line.right(), band.right(), "inline 分隔线要贴住内容起点");
+    assert_eq!(line.size.width, px(1.));
     cx.update(|_, cx| {
         host.update(cx, |host, _| host.width = px(PANEL_WIDTH));
     });

@@ -305,6 +305,8 @@ pub enum TabContainerEvent {
     TabClosed { id: String },
     /// The application navigation sidebar visibility was toggled.
     NavigationSidebarToggled { expanded: bool },
+    /// 主页应用菜单的折叠状态被标签栏里的开关切换。
+    HomeMenuToggled { expanded: bool },
     /// A tab was created by duplicating another tab. Emitted after the copy is
     /// inserted so the host can attach content-specific event handling.
     TabDuplicated { id: String },
@@ -1150,11 +1152,14 @@ pub struct TabContainer {
     active_tab_bg_color: Option<gpui::Hsla>,
     inactive_tab_hover_color: Option<gpui::Hsla>,
     inactive_tab_bg_color: Option<gpui::Hsla>,
+    inactive_tab_border_color: Option<gpui::Hsla>,
     tab_text_color: Option<gpui::Hsla>,
     tab_close_button_color: Option<gpui::Hsla>,
     left_padding: Option<gpui::Pixels>,
     top_padding: Option<gpui::Pixels>,
     navigation_sidebar_expanded: Option<bool>,
+    /// 主页应用菜单是否展开；`Some` 时复用资源栏开关位渲染菜单开关。
+    home_menu_expanded: Option<bool>,
     resource_sidebar_toggle_visible: Option<bool>,
     reserve_navigation_sidebar_toggle: bool,
     home_active: Option<bool>,
@@ -1222,11 +1227,13 @@ impl TabContainer {
             active_tab_bg_color: None,
             inactive_tab_hover_color: None,
             inactive_tab_bg_color: None,
+            inactive_tab_border_color: None,
             tab_text_color: None,
             tab_close_button_color: None,
             left_padding: None,
             top_padding: None,
             navigation_sidebar_expanded: None,
+            home_menu_expanded: None,
             resource_sidebar_toggle_visible: None,
             reserve_navigation_sidebar_toggle: false,
             home_active: None,
@@ -1451,6 +1458,15 @@ impl TabContainer {
     ) {
         if self.navigation_sidebar_expanded != expanded {
             self.navigation_sidebar_expanded = expanded;
+            cx.notify();
+        }
+    }
+
+    /// 主页布局下应用菜单的展开状态：`Some` 时在资源栏开关位上显示菜单开关。
+    /// 折叠后仍要能再次展开，所以 `Some(false)` 与 `None`（不显示）必须区分。
+    pub fn set_home_menu_toggle(&mut self, expanded: Option<bool>, cx: &mut Context<Self>) {
+        if self.home_menu_expanded != expanded {
+            self.home_menu_expanded = expanded;
             cx.notify();
         }
     }
@@ -1731,6 +1747,28 @@ impl TabContainer {
         cx: &mut Context<Self>,
     ) {
         self.active_tab_bg_color = color.into();
+        cx.notify();
+    }
+
+    /// 非活动 Tab 的底色：默认透明，Tab 会和 Tab 栏糊在一起，
+    /// 外壳需要给它们一层浅色胶囊底来区分。
+    pub fn set_inactive_tab_bg_color(
+        &mut self,
+        color: impl Into<Option<gpui::Hsla>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.inactive_tab_bg_color = color.into();
+        cx.notify();
+    }
+
+    /// 非活动 Tab 的描边：外壳用一条与 Tab 栏同族的细线把每个 Tab 勾出来，
+    /// 单靠底色在深色主题下仍然偏弱。
+    pub fn set_inactive_tab_border_color(
+        &mut self,
+        color: impl Into<Option<gpui::Hsla>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.inactive_tab_border_color = color.into();
         cx.notify();
     }
 
@@ -4241,13 +4279,16 @@ impl TabContainer {
             .unwrap_or(theme.muted_foreground);
         let close_btn_hover_color = theme.secondary_hover;
         let activity_color = theme.success;
-        let inactive_tab_border_color = gpui::transparent_black();
+        let inactive_tab_border_color = self
+            .inactive_tab_border_color
+            .unwrap_or(gpui::transparent_black());
         let active_tab_border_color = border_color;
         let drag_border_color = theme.drag_border;
         let active_index = self.active_index;
         let mut left_padding = self.left_padding.unwrap_or(px(8.0));
         let pinned_tab_count = self.pinned_tabs.len();
         let navigation_sidebar_expanded = self.navigation_sidebar_expanded;
+        let home_menu_expanded = self.home_menu_expanded;
         let home_active = self.home_active;
         let on_home = self.on_home.clone();
         let titlebar_platform = self.titlebar_platform();
@@ -4325,14 +4366,24 @@ impl TabContainer {
             .bg(bg_color)
             .items_center()
             .child(left_window_drag_region)
-            .when(self.reserve_navigation_sidebar_toggle || navigation_sidebar_expanded.is_some(), |this| {
-                let expanded = navigation_sidebar_expanded.unwrap_or_default();
+            .when(
+                self.reserve_navigation_sidebar_toggle
+                    || navigation_sidebar_expanded.is_some()
+                    || home_menu_expanded.is_some(),
+                |this| {
+                // 资源栏与主页应用菜单共用这个开关位：有主页菜单状态时优先表达菜单。
+                let expanded = home_menu_expanded
+                    .or(navigation_sidebar_expanded)
+                    .unwrap_or_default();
                 this.child(
                     div()
                         .id("navigation-sidebar-toggle-boundary")
                         .debug_selector(|| "navigation-sidebar-toggle".to_owned())
                         // Keep the button's measured width when Home hides the control.
-                        .when(navigation_sidebar_expanded.is_none(), |this| this.invisible())
+                        .when(
+                            navigation_sidebar_expanded.is_none() && home_menu_expanded.is_none(),
+                            |this| this.invisible(),
+                        )
                         .flex_shrink_0()
                         .h_full()
                         .flex()
@@ -4355,11 +4406,19 @@ impl TabContainer {
                                     t!("Sidebar.show_navigation").to_string()
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    let expanded =
-                                        !this.navigation_sidebar_expanded.unwrap_or_default();
-                                    this.navigation_sidebar_expanded = Some(expanded);
-                                    cx.emit(TabContainerEvent::NavigationSidebarToggled {
-                                        expanded});
+                                    if let Some(expanded) = this.home_menu_expanded {
+                                        let expanded = !expanded;
+                                        this.home_menu_expanded = Some(expanded);
+                                        cx.emit(TabContainerEvent::HomeMenuToggled { expanded });
+                                    } else {
+                                        let expanded = !this
+                                            .navigation_sidebar_expanded
+                                            .unwrap_or_default();
+                                        this.navigation_sidebar_expanded = Some(expanded);
+                                        cx.emit(TabContainerEvent::NavigationSidebarToggled {
+                                            expanded,
+                                        });
+                                    }
                                     cx.notify();
                                 })),
                         ),
@@ -5776,6 +5835,37 @@ mod tests {
     }
 
     #[gpui::test]
+    fn home_menu_toggle_shares_the_navigation_toggle_slot(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+                // 没有主页时开关位留给资源栏，不显示菜单开关。
+                assert_eq!(None, container.read(cx).home_menu_expanded);
+
+                container.update(cx, |container, cx| {
+                    container.set_home_menu_toggle(Some(false), cx);
+                });
+                assert_eq!(Some(false), container.read(cx).home_menu_expanded);
+
+                // 折叠后仍要能再次展开：Some(false) 与 None 必须区分。
+                container.update(cx, |container, cx| {
+                    container.set_home_menu_toggle(Some(true), cx);
+                });
+                assert_eq!(Some(true), container.read(cx).home_menu_expanded);
+
+                container.update(cx, |container, cx| {
+                    container.set_home_menu_toggle(None, cx);
+                });
+                assert_eq!(None, container.read(cx).home_menu_expanded);
+                container
+            })
+            .expect("window opens");
+        });
+    }
+
+    #[gpui::test]
     fn home_button_state_can_be_configured_updated_and_removed(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
@@ -6153,6 +6243,7 @@ mod tests {
                         }
                         TabContainerEvent::LayoutChanged => "layout".to_string(),
                         TabContainerEvent::NavigationSidebarToggled { .. }
+                        | TabContainerEvent::HomeMenuToggled { .. }
                         | TabContainerEvent::TabDuplicated { .. } => return,
                     };
                     events_for_subscription

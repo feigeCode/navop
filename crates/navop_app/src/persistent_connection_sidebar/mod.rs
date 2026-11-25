@@ -49,20 +49,31 @@ impl SidebarPalette {
     fn app(sidebar: &PersistentConnectionSidebar, cx: &gpui::App) -> Self {
         use gpui_component::ActiveTheme as _;
 
-        // 连接列表使用独立内容表面，不与 Tab/应用菜单混成同一色块。
-        let background = if sidebar.home_navigation_layout || sidebar.home_embedded {
+        let dark_mode = cx.theme().is_dark();
+        // 外壳托管的连接列表面板比图标栏/Tab 栏（外壳 token）亮一档：
+        // 和右边白色内容拉开层次，又不至于和左侧 52px 图标栏糊成同一块灰。
+        let background = if sidebar.home_navigation_layout {
+            cx.theme().sidebar
+        } else if sidebar.home_embedded {
+            // 嵌入主页内容里的树仍是内容表面，跟随主页画布。
             crate::chrome_palette::chrome_palette(cx).content
         } else {
             cx.theme().sidebar
         };
         Self {
             background,
-            rail_background: shade(background, cx.theme().is_dark()),
+            rail_background: shade(background, dark_mode),
             foreground: cx.theme().sidebar_foreground,
             // sidebar_accent 已变为主页导航选中浅蓝；连接树行的 hover/徽标底保持中性，
             // 不随主页侧栏主题补丁变色（refinement §5.3）。
             muted: cx.theme().muted,
-            hover: cx.theme().list_hover,
+            // 行悬停落在面板底色上：外壳灰下内容表面的中性 hover 几乎看不出来，
+            // 所以壳里改用「贴着底色抬一层」的色调。
+            hover: if sidebar.home_navigation_layout {
+                hover_tint(background, dark_mode)
+            } else {
+                cx.theme().list_hover
+            },
             selected: cx.theme().list_active,
             selected_border: cx.theme().list_active_border,
             muted_foreground: cx.theme().muted_foreground,
@@ -99,6 +110,18 @@ fn shade(color: Hsla, dark_mode: bool) -> Hsla {
         color.s,
         (color.l + amount).clamp(0.0, 1.0),
         color.a,
+    )
+}
+
+/// 行悬停底色：贴着面板底色抬一层——浅色壳上加深、深色壳上提亮。
+/// 内容表面的中性 `list_hover` 落在外壳灰上几乎看不出变化，需要单独推导。
+fn hover_tint(background: Hsla, dark_mode: bool) -> Hsla {
+    let amount = if dark_mode { 0.035 } else { -0.028 };
+    hsla(
+        background.h,
+        background.s,
+        (background.l + amount).clamp(0.0, 1.0),
+        background.a,
     )
 }
 
@@ -404,12 +427,18 @@ mod tests {
         let tree = include_str!("tree.rs");
         let tree_implementation = tree.split("#[cfg(test)]").next().unwrap();
 
-        // 连接列表和 Tab 栏共享外壳内容色，深色下必须比菜单和常驻栏更亮。
-        assert!(implementation.contains("sidebar.home_navigation_layout || sidebar.home_embedded"));
+        // 外壳托管的连接列表面板比壳亮一档（sidebar token），右侧内容才保持白底；
+        // 嵌入主页内容里的树才跟随内容表面。
+        assert!(implementation.contains("if sidebar.home_navigation_layout {"));
+        assert!(implementation.contains("cx.theme().sidebar"));
         assert!(implementation.contains("crate::chrome_palette::chrome_palette(cx).content"));
         assert!(implementation.contains("SidebarPalette::app(self, cx)"));
+        // 外壳灰上的行悬停要贴着底色抬一层，内容表面的 list_hover 在这里看不见。
+        assert!(implementation.contains("hover_tint(background, dark_mode)"));
         assert!(!tree_implementation.contains(".border_r_1()"));
         assert!(!tree_implementation.contains(".border_b_1()"));
+        // 外壳托管时左侧是应用菜单、同属一个壳，不画内部接缝；嵌进画布的树才用左边线。
+        assert!(tree_implementation.contains("self.home_embedded && !self.home_navigation_layout"));
         assert!(tree_implementation.contains("tree.border_l_1().border_color(palette.border)"));
     }
 

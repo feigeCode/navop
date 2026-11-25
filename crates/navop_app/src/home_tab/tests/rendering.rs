@@ -501,7 +501,10 @@ fn feedback_preserves_native_home_and_settings_sidebars() {
     assert!(app.contains(".when(layout == AppLayout::HomeNavigation, |menu| menu.h_full())"));
     assert!(app.contains(".when_some(home_menu, |host, menu| host.child(menu))"));
     let resource_mount = include_str!("../../resource_mount.rs");
-    assert!(resource_mount.contains("&& active.is_ssh_workspace"));
+    assert!(
+        resource_mount
+            .contains("ResourceKind::Connections => active.is_ssh_workspace && !active.is_local")
+    );
     assert!(app.contains("if plan.width.is_some() {"));
     assert!(app.contains("tabs.set_tab_bar_bg_color(chrome_palette.tab_bar, cx)"));
     assert!(app.contains("tabs.set_active_tab_bg_color(chrome_palette.content, cx)"));
@@ -803,5 +806,104 @@ fn host_metrics_are_wired_only_to_the_list_view() {
     assert!(
         host_metrics.contains("refresh_host_metrics(cx)"),
         "一个探测槽释放后必须继续排队剩余连接"
+    );
+}
+
+#[test]
+fn home_menu_toggle_reuses_the_tab_bar_toggle_slot() {
+    let app = include_str!("../../navop_app.rs");
+    let tabs = include_str!("../../../../core/src/tab_container.rs");
+
+    assert!(
+        app.contains("tabs.set_home_menu_toggle(home_menu_expanded, cx)"),
+        "主页标签要把标签栏那个开关位交给应用菜单"
+    );
+    assert!(
+        app.contains("TabContainerEvent::HomeMenuToggled { expanded }"),
+        "标签栏开关的点击要回到应用层去折叠/展开应用菜单"
+    );
+    assert!(
+        app.contains("home.set_sidebar_expanded(expanded, cx)"),
+        "事件回传后按目标状态落地，不能自己再取反一次"
+    );
+    assert!(
+        tabs.contains("home_menu_expanded") && tabs.contains("TabContainerEvent::HomeMenuToggled"),
+        "开关仍由 TabContainer 统一渲染在红绿灯右侧、Home 按钮左侧"
+    );
+    assert!(
+        !app.contains("home-navigation-sidebar-toggle")
+            && !include_str!("../toolbar.rs").contains("home-toolbar-sidebar-toggle"),
+        "开关只保留标签栏一处，避让带和工具栏都不再重复"
+    );
+}
+
+/// 外壳托管资源面板时，拖动条要压在面板右缘上（不占布局宽度、不留缝），
+/// 面板底色也不能被终端主题的侧栏色顶掉，否则又和图标栏、标签栏不一致。
+#[test]
+fn shell_resource_resize_gutter_matches_the_panel_surface() {
+    let app = include_str!("../../navop_app.rs");
+
+    assert!(
+        app.contains(".placement(one_ui::resize_handle::HandlePlacement::Left)"),
+        "外壳资源列的抓取区要贴在面板右缘，不再占一条 13px 的布局宽度"
+    );
+    assert!(
+        app.contains("gpui::div()\n                        .relative()"),
+        "面板与抓取区要放进同一个相对定位容器"
+    );
+    assert!(
+        !app.contains("column_background"),
+        "抓取区不再单独铺底：它压在面板边框上，面板和内容直接相接"
+    );
+
+    let sync = app
+        .split("fn sync_connection_sidebar_theme(")
+        .nth(1)
+        .expect("连接面板主题同步");
+    assert!(
+        sync.contains("if AppSettings::global(cx).app_layout == AppLayout::HomeNavigation {"),
+        "应用菜单布局下连接面板属于外壳，不跟终端主题换色"
+    );
+    assert!(sync.contains("sidebar.set_terminal_palette(None, cx)"));
+}
+
+#[test]
+fn 数据库类对象树由外壳托管并复用同一套折叠与底色() {
+    let app = include_str!("../../navop_app.rs");
+
+    // 宿主模式每帧先同步，数据库页不能自己再画一份内嵌树。
+    assert!(
+        app.contains("let external = self.external_primary_sidebar(cx);"),
+        "外壳要按资源算宿主模式，而不是只看布局"
+    );
+    assert!(
+        app.contains("tabs.set_external_primary_sidebar(external, cx)"),
+        "读 sidebar_contributions 之前必须先切宿主模式"
+    );
+    let helper = app
+        .split("fn hosts_database_tree(&self, cx: &App) -> bool {")
+        .nth(1)
+        .expect("数据库树宿主判定");
+    assert!(helper.contains(
+        "ResourceKind::DbObjects | ResourceKind::RedisKeys | ResourceKind::MongoCollections"
+    ));
+
+    // 折叠只让外壳不画，不能把宿主切回业务内部，否则折叠后树又冒出来。
+    let toggle = app
+        .split("pub(crate) fn toggle_application_resource(")
+        .nth(1)
+        .expect("资源栏开关");
+    assert!(toggle.contains("let external = self.external_primary_sidebar(cx);"));
+    assert!(!toggle.contains("external && expanded"));
+
+    // 面板右缘不再自己描边，底色与连接面板一致；抓取区也跟着铺面板底色。
+    let resource = app
+        .split("ResourceKind::DbObjects | ResourceKind::RedisKeys | ResourceKind::MongoCollections => {")
+        .nth(1)
+        .expect("数据库资源容器");
+    assert!(resource.contains(".bg(cx.theme().sidebar)"));
+    assert!(
+        !resource.contains(".border_r_1()"),
+        "数据库面板右缘会和外层分隔线叠成双重接缝"
     );
 }

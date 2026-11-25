@@ -1309,7 +1309,10 @@ impl MongoTreeView {
             .py_1()
             .cursor_pointer()
             .when(is_selected, |this| this.bg(cx.theme().list_active))
-            .when(!is_selected, |this| this.text_color(cx.theme().foreground))
+            .when(!is_selected, |this| {
+                this.text_color(cx.theme().foreground)
+                    .hover(|style| style.bg(cx.theme().foreground.opacity(0.06)))
+            })
             .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
                 if event.click_count == 2 {
                     view_for_double_click.update(cx, |view, cx| {
@@ -1688,5 +1691,14 @@ mod tests {
 
         assert_eq!(selected_node.as_deref(), Some("mongo-2"));
         assert_eq!(context_menu_node_id, None);
+    }
+
+    #[test]
+    fn 侧栏行悬停在外壳灰面板上可见() {
+        let source = include_str!("mongo_tree_view.rs");
+        assert!(
+            source.contains("this.text_color(cx.theme().foreground)\n                    .hover(|style| style.bg(cx.theme().foreground.opacity(0.06)))"),
+            "Mongo 树行原本没有悬停反馈，面板灰上必须用前景色叠层"
+        );
     }
 }

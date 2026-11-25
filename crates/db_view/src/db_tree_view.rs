@@ -3078,7 +3078,8 @@ impl DbTreeView {
         let selection_bg = cx.theme().sidebar_accent;
         let selection_bar_color = cx.theme().blue;
         let selection_text_color = cx.theme().sidebar_accent_foreground;
-        let hover_bg = cx.theme().secondary;
+        // 行悬停用前景色叠一层黑/白：面板是外壳灰时 list_hover 几乎看不出来。
+        let hover_bg = cx.theme().foreground.opacity(0.06);
         let folder_text_color = cx.theme().muted_foreground;
         let foreground_color = cx.theme().sidebar_foreground;
         let tree = one_ui::theme_geometry().tree;
@@ -4416,6 +4417,15 @@ mod tests {
         assert_eq!(
             vec!["conn-1", "db-app", "tables-folder", "node-users"],
             flat_entry_ids(&view, visual)
+        );
+    }
+
+    #[test]
+    fn 行悬停在外壳灰面板上仍可辨认() {
+        let source = include_str!("db_tree_view.rs");
+        assert!(
+            source.contains("let hover_bg = cx.theme().foreground.opacity(0.06);"),
+            "数据库树挂在外壳灰面板上，行悬停不能再用接近底色的 secondary"
         );
     }
 }

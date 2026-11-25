@@ -1533,6 +1533,9 @@ pub struct NavopApp {
     _settings_subscription: gpui::Subscription,
     resource_overlay_dismissed: bool,
     resource_resize_drag: Option<crate::resource_mount::ResourceResizeDrag>,
+    /// 拖动中的资源栏宽度（键为 `stable_width_key`）。外壳每帧都从设置求解布局宽度，
+    /// 而设置落盘有防抖，所以拖动期间必须用这份会话内覆盖值，面板才会跟手。
+    resource_width_drag: Option<(String, f32)>,
     resource_width_persist_task: Option<Task<()>>,
 }
 
@@ -1681,13 +1684,13 @@ impl NavopApp {
             }
             ResourceKind::DbObjects | ResourceKind::RedisKeys | ResourceKind::MongoCollections => {
                 let view = self.tab_container.read(cx).application_resource_view(cx)?;
+                // 面板右缘不再自己描边：分隔线由外壳的拖动条画在内容起点，
+                // 否则灰底上会多出一道和连接面板不一致的接缝。
                 Some(
                     div()
                         .w(width)
                         .h_full()
                         .min_w_0()
-                        .border_r_1()
-                        .border_color(cx.theme().border)
                         .bg(cx.theme().sidebar)
                         .child(view)
                         .into_any_element(),
@@ -1828,6 +1831,19 @@ impl NavopApp {
                         });
                     });
                 }
+                TabContainerEvent::HomeMenuToggled { expanded } => {
+                    let expanded = *expanded;
+                    let home_page = cx
+                        .try_global::<GlobalHomePage>()
+                        .map(|home| home.home_page.clone());
+                    if let Some(home_page) = home_page {
+                        cx.defer(move |cx| {
+                            home_page.update(cx, |home, cx| {
+                                home.set_sidebar_expanded(expanded, cx);
+                            });
+                        });
+                    }
+                }
                 TabContainerEvent::TabActivated { .. } => {
                     cx.defer(move |cx| {
                         app.update(cx, |app, cx| {
@@ -1914,6 +1930,7 @@ impl NavopApp {
             _settings_subscription: settings_subscription,
             resource_overlay_dismissed: false,
             resource_resize_drag: None,
+            resource_width_drag: None,
             resource_width_persist_task: None,
         }
     }
@@ -1928,23 +1945,37 @@ impl NavopApp {
         self.persist_connection_sidebar_expanded(expanded, cx);
     }
 
+    /// 数据库类标签的左侧对象树也由外壳托管；它的宿主与连接树的折叠状态无关，
+    /// 折叠只让外壳不画，业务页不能因此再切回内部树。
+    fn hosts_database_tree(&self, cx: &App) -> bool {
+        matches!(
+            self.active_resource(cx).0,
+            ResourceKind::DbObjects | ResourceKind::RedisKeys | ResourceKind::MongoCollections
+        )
+    }
+
+    fn external_primary_sidebar(&self, cx: &App) -> bool {
+        AppSettings::global(cx).app_layout == AppLayout::GlobalNavigation
+            || self.hosts_database_tree(cx)
+    }
+
     pub(crate) fn toggle_application_resource(&mut self, cx: &mut Context<Self>) {
         let expanded = !self.connection_sidebar.read(cx).is_expanded();
         if expanded {
             self.resource_overlay_dismissed = false;
         }
-        let external = AppSettings::global(cx).app_layout == AppLayout::GlobalNavigation;
+        let external = self.external_primary_sidebar(cx);
         self.tab_container.update(cx, |tabs, cx| {
-            tabs.prepare_external_primary_sidebar(external && expanded, cx)
+            tabs.prepare_external_primary_sidebar(external, cx)
         });
         self.set_connection_sidebar_expanded(expanded, cx);
     }
 
     fn persist_connection_sidebar_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
-        let external = AppSettings::global(cx).app_layout == AppLayout::GlobalNavigation;
+        let external = self.external_primary_sidebar(cx);
         self.tab_container.update(cx, |tabs, cx| {
-            tabs.prepare_external_primary_sidebar(external && expanded, cx);
-            tabs.set_external_primary_sidebar(external && expanded, cx);
+            tabs.prepare_external_primary_sidebar(external, cx);
+            tabs.set_external_primary_sidebar(external, cx);
         });
         if AppSettings::try_update_and_save(cx, |settings| {
             settings.connection_sidebar_expanded = expanded;
@@ -1961,19 +1992,45 @@ impl NavopApp {
         cx.notify();
     }
 
+    /// 拖动资源栏：`position` 为光标位置，`initial` 是按下时的面板宽度。
+    /// 拖动中只更新会话内覆盖值（外壳每帧据此求解宽度），松手才写设置并防抖落盘，
+    /// 否则宽度要等 180ms 的保存防抖生效，面板就像「不会跟着动」。
     #[cfg(feature = "shell")]
     fn resize_application_resource(
         &mut self,
         kind: ResourceKind,
-        width: gpui::Pixels,
+        position: Option<gpui::Point<gpui::Pixels>>,
+        initial: gpui::Pixels,
         cx: &mut Context<Self>,
     ) {
+        let Some(width) = crate::resource_mount::update_resource_resize_drag(
+            &mut self.resource_resize_drag,
+            position,
+            initial,
+        ) else {
+            self.finish_application_resource_resize(kind, cx);
+            return;
+        };
         let width = crate::resource_mount::sanitize_resource_width(kind, f32::from(width));
         if kind == ResourceKind::Connections {
             self.connection_sidebar.update(cx, |tree, _| {
                 tree.set_application_resource_width(gpui::px(width))
             });
         }
+        let key = crate::resource_mount::stable_width_key(AppSettings::global(cx).app_layout, kind);
+        self.resource_width_drag = Some((key, width));
+        cx.notify();
+    }
+
+    /// 松手后把拖动中的宽度写进设置（内存立即生效、磁盘保存防抖），再撤掉覆盖值。
+    #[cfg(feature = "shell")]
+    fn finish_application_resource_resize(&mut self, kind: ResourceKind, cx: &mut Context<Self>) {
+        let Some((key, width)) = self.resource_width_drag.take() else {
+            return;
+        };
+        AppSettings::update(cx, |settings| {
+            settings.resource_widths.insert(key, width);
+        });
         self.persist_application_resource_width(kind, width, cx);
         cx.notify();
     }
@@ -1986,14 +2043,11 @@ impl NavopApp {
         width: f32,
         cx: &mut Context<Self>,
     ) {
+        // 键按拖动发生时的布局生成：应用菜单布局同样要记住宽度，不能只存图标布局。
+        let key = crate::resource_mount::stable_width_key(AppSettings::global(cx).app_layout, kind);
         let task = cx.spawn(async move |_, cx| {
             smol::Timer::after(std::time::Duration::from_millis(180)).await;
             cx.update(|cx| {
-                if AppSettings::global(cx).app_layout != AppLayout::GlobalNavigation {
-                    return;
-                }
-                let key =
-                    crate::resource_mount::stable_width_key(AppLayout::GlobalNavigation, kind);
                 if let Err(error) = AppSettings::try_update_and_save(cx, |settings| {
                     settings.resource_widths.insert(key.clone(), width);
                 }) {
@@ -2005,6 +2059,13 @@ impl NavopApp {
     }
 
     fn sync_connection_sidebar_theme(&mut self, cx: &mut Context<Self>) {
+        // 应用菜单布局下连接面板属于外壳，颜色已经由外壳 token 统一；再套终端主题的
+        // 侧栏色会让面板变成另一个底色，和图标栏、标签栏对不上。
+        if AppSettings::global(cx).app_layout == AppLayout::HomeNavigation {
+            self.connection_sidebar
+                .update(cx, |sidebar, cx| sidebar.set_terminal_palette(None, cx));
+            return;
+        }
         let terminal_active = {
             let tabs = self.tab_container.read(cx);
             if tabs.is_pinned_tab_active() {
@@ -3304,6 +3365,19 @@ impl Render for NavopApp {
             52.
         };
         let settings = AppSettings::global(cx);
+        // 拖动期间用会话内覆盖值，松手后才回落到设置；否则宽度要等保存防抖生效才动。
+        let resource_width_key = crate::resource_mount::stable_width_key(layout, resource);
+        let persisted_resource_width = self
+            .resource_width_drag
+            .as_ref()
+            .filter(|(key, _)| *key == resource_width_key)
+            .map(|(_, width)| *width)
+            .or_else(|| {
+                settings
+                    .resource_widths
+                    .get(resource_width_key.as_str())
+                    .copied()
+            });
         let plan = plan_mount_with_navigation_width(
             layout,
             &declaration,
@@ -3311,18 +3385,26 @@ impl Render for NavopApp {
             navigation_width,
             &MountPreferences {
                 desired_visible: self.connection_sidebar.read(cx).is_expanded(),
-                width: settings
-                    .resource_widths
-                    .get(crate::resource_mount::stable_width_key(layout, resource).as_str())
-                    .copied(),
+                width: persisted_resource_width,
             },
         );
         let resource_visible = plan.visibility == MountVisibility::Visible
             || (plan.visibility == MountVisibility::Overlay && !self.resource_overlay_dismissed);
+        // 业务页的宿主模式要在外壳读取 sidebar_contributions 之前确定，
+        // 否则数据库页会先画自己的内嵌树，下一帧才被外壳接管。
+        let external = self.external_primary_sidebar(cx);
+        self.tab_container.update(cx, |tabs, cx| {
+            tabs.set_external_primary_sidebar(external, cx)
+        });
         // 应用菜单与 Tab 底层分区，活动 Tab 才与 Content 使用相同内容表面。
         self.tab_container.update(cx, |tabs, cx| {
             tabs.set_tab_bar_bg_color(chrome_palette.tab_bar, cx);
             tabs.set_active_tab_bg_color(chrome_palette.content, cx);
+            // 非活动 Tab 铺一层画布色：壳色 Tab 栏上不再是一排看不见的文字，
+            // 悬停时再抬到内容表面，等于预览「点下去会变成什么样」。
+            tabs.set_inactive_tab_bg_color(cx.theme().muted, cx);
+            tabs.set_inactive_tab_hover_color(cx.theme().background, cx);
+            tabs.set_inactive_tab_border_color(cx.theme().border, cx);
         });
         let mut resource_element = plan.width.and_then(|width| {
             let rendered = resource_visible
@@ -3330,6 +3412,8 @@ impl Render for NavopApp {
                 .flatten()?;
             if plan.width.is_some() {
                 let app = cx.entity();
+                // 拖动条压在面板右缘上（不占布局宽度）：面板和内容直接相接，
+                // 分隔线落在面板边框这一像素上，不会在两者之间露出一条缝。
                 let resize = one_ui::resize_handle::resize_handle::<
                     one_ui::resize_handle::ResizePanel,
                     Self,
@@ -3337,27 +3421,19 @@ impl Render for NavopApp {
                     crate::resource_mount::stable_width_key(layout, resource),
                     gpui::Axis::Horizontal,
                 )
-                .inline()
+                .placement(one_ui::resize_handle::HandlePlacement::Left)
                 .idle_line_color(gpui::transparent_black())
                 .on_resize(move |position, _, cx| {
-                    let next_width = app.update(cx, |app, _| {
-                        crate::resource_mount::update_resource_resize_drag(
-                            &mut app.resource_resize_drag,
-                            position,
-                            gpui::px(width),
-                        )
+                    app.update(cx, |app, cx| {
+                        app.resize_application_resource(resource, position, gpui::px(width), cx);
                     });
-                    if let Some(next_width) = next_width {
-                        app.update(cx, |app, cx| {
-                            app.resize_application_resource(resource, next_width, cx);
-                        });
-                    }
                 });
                 Some(
-                    gpui_component::h_flex()
-                        .items_stretch()
+                    gpui::div()
+                        .relative()
                         .flex_shrink_0()
                         .h_full()
+                        .w(px(width))
                         .child(rendered)
                         .child(resize)
                         .into_any_element(),
@@ -3371,11 +3447,20 @@ impl Render for NavopApp {
             plan.visibility,
             MountVisibility::Visible | MountVisibility::Collapsed | MountVisibility::Overlay
         );
-        // 先同步宿主模式，再构造 Tab 内容；否则外壳已画树时，业务内树会多活一帧。
-        let external = layout == AppLayout::GlobalNavigation;
+        // 宿主模式在上面已经同步过，这里直接沿用，避免同一帧两套判定。
+        // 主页标签下，标签栏的开关位用来收起/展开左侧应用菜单；
+        // 其他标签仍交回资源栏，避免两个折叠对象争同一个按钮。
+        let home_menu_expanded = (layout == AppLayout::HomeNavigation
+            && active_key == Some("Home"))
+        .then(|| {
+            cx.try_global::<GlobalHomePage>()
+                .map(|home| !home.home_page.read(cx).home_sidebar_collapsed())
+        })
+        .flatten();
         self.tab_container.update(cx, |tabs, cx| {
             tabs.set_resource_sidebar_toggle_visible(has_resource, cx);
             tabs.set_navigation_sidebar_toggle(has_resource.then_some(resource_visible), cx);
+            tabs.set_home_menu_toggle(home_menu_expanded, cx);
         });
         // 同一 TabContainer 只保留一份；外壳分别调用其 Tab 栏与内容 renderer。
         // 不把整个容器放进上下两个位置，避免重复 Tab 栏和重复内容。

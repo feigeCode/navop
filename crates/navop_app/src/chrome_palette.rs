@@ -46,6 +46,10 @@ mod tests {
         assert!(palette.contains("content: theme.background"));
         assert!(app.contains("tabs.set_tab_bar_bg_color(chrome_palette.tab_bar, cx)"));
         assert!(app.contains("tabs.set_active_tab_bg_color(chrome_palette.content, cx)"));
+        // 非活动 Tab 必须有胶囊底：壳色 Tab 栏上默认透明时看不出这是 Tab。
+        assert!(app.contains("tabs.set_inactive_tab_bg_color(cx.theme().muted, cx)"));
+        assert!(app.contains("tabs.set_inactive_tab_hover_color(cx.theme().background, cx)"));
+        assert!(app.contains("tabs.set_inactive_tab_border_color(cx.theme().border, cx)"));
         assert!(app.contains("let chrome_palette = crate::chrome_palette::chrome_palette(cx)"));
         assert!(app.contains(".bg(chrome_palette.rail)"));
         assert!(navigation.contains("if global {"));

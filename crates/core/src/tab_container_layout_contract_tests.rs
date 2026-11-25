@@ -308,7 +308,7 @@ fn tab_items_keep_visible_blocks_and_a_neutral_active_outline() {
         .expect("tab bar renderer");
     let tab_bar = &source[tab_bar_start..];
 
-    assert!(tab_bar.contains("let inactive_tab_border_color = gpui::transparent_black();"));
+    assert!(tab_bar.contains(".unwrap_or(gpui::transparent_black())"));
     assert!(tab_bar.contains("let active_tab_border_color = border_color;"));
     assert!(
         tab_bar.contains(

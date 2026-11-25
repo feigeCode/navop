@@ -172,12 +172,17 @@ fn base_slot(layout: AppLayout, active: &ResourceDeclaration) -> Option<MountSlo
         AppLayout::GlobalNavigation => (active.resource != ResourceKind::SettingsCategories)
             .then_some(MountSlot::PrimarySidebar),
         AppLayout::HomeNavigation => {
-            // 展开布局只保留应用菜单；连接列表仍由图标布局的外壳挂载。
-            // 主页自身的 Tree 视图不受影响，其他业务资源也保留在各自页面内部。
-            (active.resource == ResourceKind::Connections
-                && active.is_ssh_workspace
-                && !active.is_local)
-                .then_some(MountSlot::WorkspaceSidebar)
+            // 展开布局只保留应用菜单。连接树与数据库类对象树由外壳托管：
+            // 它们的表面颜色、拖动分隔线和折叠开关才能和连接面板保持一致；
+            // 其余业务资源（笔记、AI、设置）仍留在各自页面内部。
+            let hosted = match active.resource {
+                ResourceKind::Connections => active.is_ssh_workspace && !active.is_local,
+                ResourceKind::DbObjects
+                | ResourceKind::RedisKeys
+                | ResourceKind::MongoCollections => true,
+                _ => false,
+            };
+            hosted.then_some(MountSlot::WorkspaceSidebar)
         }
     }
 }
@@ -603,9 +608,6 @@ mod tests {
     #[test]
     fn 主页导航业务资源保留在功能内部() {
         for resource in [
-            ResourceKind::DbObjects,
-            ResourceKind::RedisKeys,
-            ResourceKind::MongoCollections,
             ResourceKind::Notes,
             ResourceKind::AiSessions,
             ResourceKind::SettingsCategories,
@@ -623,6 +625,45 @@ mod tests {
                 MountVisibility::Hidden,
             );
             assert_eq!(None, result.width);
+        }
+    }
+
+    #[test]
+    fn 主页导航数据库类对象树交给外壳托管() {
+        for (resource, active) in [
+            (
+                ResourceKind::DbObjects,
+                declaration(ResourceKind::DbObjects),
+            ),
+            (
+                ResourceKind::RedisKeys,
+                declaration(ResourceKind::RedisKeys),
+            ),
+            (
+                ResourceKind::MongoCollections,
+                declaration(ResourceKind::MongoCollections),
+            ),
+        ] {
+            let result = plan(AppLayout::HomeNavigation, &active, 1440.0, &prefs());
+            assert_mount(
+                &result,
+                resource,
+                MountSlot::WorkspaceSidebar,
+                MountVisibility::Visible,
+            );
+            assert!(result.width.is_some());
+
+            // 折叠与经典图标布局的空闲窗口同样由外壳决定显隐，业务页不再自己画树。
+            let collapsed = plan(
+                AppLayout::HomeNavigation,
+                &active,
+                1440.0,
+                &MountPreferences {
+                    desired_visible: false,
+                    width: None,
+                },
+            );
+            assert_eq!(MountVisibility::Collapsed, collapsed.visibility);
         }
     }
 

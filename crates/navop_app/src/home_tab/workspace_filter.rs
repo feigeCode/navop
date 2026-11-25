@@ -4,15 +4,25 @@ use one_ui::IconSize;
 
 impl HomePage {
     pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_collapsed = !self.sidebar_collapsed;
+        // 折叠时展开，展开时折叠。
+        self.set_sidebar_expanded(self.sidebar_collapsed, cx);
+    }
+
+    /// 把应用菜单设成目标状态；状态没变化时不重复写设置。
+    /// 标签栏里的开关直接给目标值，避免「先取反再取反」的时序误差。
+    pub(crate) fn set_sidebar_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
+        let collapsed = !expanded;
+        if self.sidebar_collapsed == collapsed {
+            return;
+        }
+        self.sidebar_collapsed = collapsed;
         // 应用菜单与连接资源栏是两个独立折叠对象，互不改写对方状态。
-        let expanded = !self.sidebar_collapsed;
         if one_core::settings::AppSettings::try_update_and_save(cx, |settings| {
             settings.home_navigation_menu_expanded = expanded;
         })
         .is_err()
         {
-            self.sidebar_collapsed = !self.sidebar_collapsed;
+            self.sidebar_collapsed = !collapsed;
         }
         cx.notify();
     }

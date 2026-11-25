@@ -210,10 +210,9 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
                     if self.inline {
                         return this
                             .when(is_horizontal, |this| {
-                                this.cursor_col_resize()
-                                    .h_full()
-                                    .w(hit_area)
-                                    .justify_center()
+                                // 内联手柄排在面板之后、占一条抓取区宽度；分隔线贴右对齐，
+                                // 正好落在面板与内容的分界上（铺底色由调用方负责）。
+                                this.cursor_col_resize().h_full().w(hit_area).justify_end()
                             })
                             .when(!is_horizontal, |this| {
                                 this.cursor_row_resize().w_full().h(hit_area).items_center()
