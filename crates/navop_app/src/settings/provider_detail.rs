@@ -887,11 +887,20 @@ impl ProviderDetail {
         self.run_fetch(window, cx, FetchMode::Test);
     }
 
+    /// 拉取 / 探活取值：不能沿用「保存时必须先勾选模型」的校验。
+    ///
+    /// 新建提供商时模型目录必然为空，而「加载模型」正是把目录填满的前置动作；
+    /// 若这里要求已勾选，就会落进「没模型 → 不许拉取 → 没模型」的死循环，
+    /// 点下去只剩底部一条「至少需要选择一个模型」，看起来像按钮没反应。
+    fn fetch_config(&mut self, cx: &mut Context<Self>) -> Option<ProviderConfig> {
+        self.current_config(cx, false)
+    }
+
     fn run_fetch(&mut self, _window: &mut Window, cx: &mut Context<Self>, mode: FetchMode) {
         if self.models_loading {
             return;
         }
-        let Some(config) = self.current_config(cx, mode == FetchMode::Load) else {
+        let Some(config) = self.fetch_config(cx) else {
             return;
         };
 
@@ -1601,11 +1610,12 @@ fn non_empty(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiBaseAction, ApiModeItem, EffortItem, SelectionAction, api_base_action_on_type_change,
-        api_mode_items, apply_selection_action, filter_loaded_models, filter_models,
-        format_header_lines, merge_models, parse_header_lines, parse_headers_for_provider,
-        reasoning_effort_items, toggle_model,
+        ApiBaseAction, ApiModeItem, EffortItem, ProviderDetail, SelectionAction,
+        api_base_action_on_type_change, api_mode_items, apply_selection_action,
+        filter_loaded_models, filter_models, format_header_lines, merge_models, parse_header_lines,
+        parse_headers_for_provider, reasoning_effort_items, toggle_model,
     };
+    use gpui::TestAppContext;
     use gpui_component::select::SelectItem;
     use one_core::llm::types::{ApiMode, ProviderType, ReasoningEffort};
 
@@ -1864,5 +1874,34 @@ mod tests {
                 "切到 {new_type:?} 时不应覆盖用户手填地址"
             );
         }
+    }
+
+    /// 新建提供商还没勾选任何模型时，「加载模型」也必须能取到请求配置。
+    ///
+    /// 线上表现：模型区写着「还没有模型 — 先拉取列表或手动添加」，点「加载模型」
+    /// 却毫无反应，底部只剩一条红字「至少需要选择一个模型」；手动添加一个模型后
+    /// 再点，几十个模型立刻全拉回来。根因是拉取误用了保存时的模型校验。
+    #[gpui::test]
+    fn fetch_config_does_not_require_a_selected_model(cx: &mut TestAppContext) {
+        cx.update(|cx| gpui_component::init(cx));
+
+        let (detail, cx) = cx.add_window_view(|window, cx| ProviderDetail::new(None, window, cx));
+
+        detail.update_in(cx, |form, window, cx| {
+            form.name_input.update(cx, |input, cx| {
+                input.set_value("SiliconFlow", window, cx);
+            });
+        });
+
+        let (save_config, fetch_config) = detail.update_in(cx, |form, _window, cx| {
+            (form.current_config(cx, true), form.fetch_config(cx))
+        });
+
+        assert!(save_config.is_none(), "保存路径仍应要求先勾选模型");
+        let config = fetch_config.expect("未勾选模型时也应能构造拉取用配置");
+        assert!(
+            !config.models.is_empty(),
+            "拉取用配置仍需带一个占位模型，否则构造 provider 会失败"
+        );
     }
 }

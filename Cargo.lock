@@ -457,7 +457,10 @@ dependencies = [
  "gpui-component",
  "gpui-fast",
  "image",
+ "mac-notification-sys",
  "mcp_host",
+ "notify-rust",
+ "objc2-foundation 0.3.2",
  "one-assets",
  "one-core",
  "public_mcp",
@@ -8285,7 +8288,7 @@ dependencies = [
 
 [[package]]
 name = "navop"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "anyhow",
  "data_domain",
@@ -8298,7 +8301,7 @@ dependencies = [
 
 [[package]]
 name = "navop-data"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "anyhow",
  "data_domain",
@@ -8310,7 +8313,7 @@ dependencies = [
 
 [[package]]
 name = "navop-shell"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "anyhow",
  "domain_api",
@@ -8322,7 +8325,7 @@ dependencies = [
 
 [[package]]
 name = "navop_app"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "agent_runtime",
  "ai_chat_view",
@@ -14200,9 +14203,11 @@ dependencies = [
  "futures",
  "gpui-fast",
  "libc",
+ "miow",
  "modem-transfer",
  "one-core",
  "otp",
+ "piper",
  "plist",
  "polling",
  "process-util",
@@ -14219,6 +14224,7 @@ dependencies = [
  "tracing",
  "uuid",
  "windows 0.61.3",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

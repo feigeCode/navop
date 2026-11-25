@@ -16,11 +16,16 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::setting::{
     NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage,
 };
 use gpui_component::{h_flex, v_flex};
-use one_core::settings::{AppSettings, monospace_font_options};
+use one_core::settings::{
+    AppSettings, TerminalDesktopNotificationDuration, TerminalDesktopNotificationMode,
+    monospace_font_options,
+};
 use rust_i18n::t;
 use terminal_view::{
     MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, available_monospace_fonts, current_settings,
@@ -39,23 +44,29 @@ impl SettingsSectionProvider for ShellSettingsProvider {
     }
 }
 
-/// 终端设置页：外观、回滚与日志、剪贴板、输入辅助、危险操作确认、界面与按键，
-/// 最后是本地终端默认 shell 与自定义终端。
+/// 终端设置页：外观、回滚与日志、剪贴板、输入辅助、危险操作确认、界面与按键、
+/// 系统通知（按平台能力展示），最后是本地终端默认 shell 与自定义终端。
 fn terminal_settings_page(cx: &mut App) -> SettingPage {
     let profile = AppSettings::global(cx).local_terminal_profile.clone();
     let defaults = AppSettings::default();
+    let mut groups = vec![
+        terminal_appearance_group(cx, &defaults),
+        terminal_scrolling_group(&defaults),
+        terminal_clipboard_group(&defaults),
+        terminal_input_group(&defaults),
+        terminal_safety_group(&defaults),
+        terminal_interface_group(&defaults),
+    ];
+    let notification_support = app_kit::integration::desktop_notification::support();
+    if notification_support.system_notification {
+        groups.push(terminal_notification_group(&defaults, notification_support));
+    }
+    groups.push(local_terminal::local_terminal_setting_group(&profile));
+
     SettingPage::new(t!("Settings.terminal.title"))
         .default_open(true)
         .resettable(true)
-        .groups([
-            terminal_appearance_group(cx, &defaults),
-            terminal_scrolling_group(&defaults),
-            terminal_clipboard_group(&defaults),
-            terminal_input_group(&defaults),
-            terminal_safety_group(&defaults),
-            terminal_interface_group(&defaults),
-            local_terminal::local_terminal_setting_group(&profile),
-        ])
+        .groups(groups)
 }
 
 /// 外观：字体、字号、配色、光标与行内的辅助标记。
@@ -200,6 +211,30 @@ fn terminal_interface_group(defaults: &AppSettings) -> SettingGroup {
             ),
             vim_scroll_to_arrow_keys_item(),
         ])
+}
+
+/// 系统通知：触发时机、按平台能力展示的停留时长 / 提示音、测试通知与 Codex CLI 配置提示。
+///
+/// 各平台能力差异见 [`app_kit::integration::desktop_notification::NotificationSupport`]：
+/// macOS 的通知停留时长由系统决定、Linux 的提示音由通知守护进程决定，对应的选项直接不展示，
+/// 免得用户改了一个不会生效的设置。
+fn terminal_notification_group(
+    defaults: &AppSettings,
+    support: app_kit::integration::desktop_notification::NotificationSupport,
+) -> SettingGroup {
+    let mut items = vec![desktop_notification_mode_item(defaults)];
+    if support.duration {
+        items.push(desktop_notification_duration_item(defaults));
+    }
+    if support.sound {
+        items.push(desktop_notification_sound_item(defaults));
+    }
+    items.push(desktop_notification_test_item());
+    items.push(desktop_notification_codex_tip_item());
+
+    SettingGroup::new()
+        .title(t!("Settings.terminal.desktop_notification_group"))
+        .items(items)
 }
 
 /// 终端等宽字体下拉。
@@ -443,6 +478,188 @@ fn bool_item(
         .default_value(default_value),
     )
     .description(t!(description_key.as_str()).to_string())
+}
+
+/// 终端系统通知（OSC 9 / OSC 777）弹出时机。
+const CODEX_NOTIFICATION_CONFIG_SNIPPET: &str =
+    "[tui]\nnotifications = true\nnotification_method = \"osc9\"\nnotification_condition = \"always\"";
+
+fn desktop_notification_mode_item(defaults: &AppSettings) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.terminal.desktop_notification_mode"),
+        SettingField::dropdown(
+            vec![
+                (
+                    SharedString::from(
+                        TerminalDesktopNotificationMode::UnfocusedOrInactiveTab.as_str(),
+                    ),
+                    t!("Settings.terminal.desktop_notification_unfocused_or_inactive_tab").into(),
+                ),
+                (
+                    SharedString::from(
+                        TerminalDesktopNotificationMode::UnfocusedWindowOnly.as_str(),
+                    ),
+                    t!("Settings.terminal.desktop_notification_unfocused_window_only").into(),
+                ),
+                (
+                    SharedString::from(TerminalDesktopNotificationMode::Always.as_str()),
+                    t!("Settings.terminal.desktop_notification_always").into(),
+                ),
+                (
+                    SharedString::from(TerminalDesktopNotificationMode::Off.as_str()),
+                    t!("Settings.terminal.desktop_notification_off").into(),
+                ),
+            ],
+            |cx: &App| {
+                SharedString::from(
+                    AppSettings::global(cx)
+                        .terminal_desktop_notification_mode
+                        .as_str(),
+                )
+            },
+            |value: SharedString, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.terminal_desktop_notification_mode =
+                        TerminalDesktopNotificationMode::from_str(value.as_ref());
+                });
+            },
+        )
+        .default_value(SharedString::from(
+            defaults.terminal_desktop_notification_mode.as_str(),
+        )),
+    )
+    .description(t!("Settings.terminal.desktop_notification_mode_description").to_string())
+}
+
+fn desktop_notification_duration_item(defaults: &AppSettings) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.terminal.desktop_notification_duration"),
+        SettingField::dropdown(
+            vec![
+                (
+                    SharedString::from(TerminalDesktopNotificationDuration::Long.as_str()),
+                    t!("Settings.terminal.desktop_notification_duration_long").into(),
+                ),
+                (
+                    SharedString::from(TerminalDesktopNotificationDuration::Short.as_str()),
+                    t!("Settings.terminal.desktop_notification_duration_short").into(),
+                ),
+            ],
+            |cx: &App| {
+                SharedString::from(
+                    AppSettings::global(cx)
+                        .terminal_desktop_notification_duration
+                        .as_str(),
+                )
+            },
+            |value: SharedString, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.terminal_desktop_notification_duration =
+                        TerminalDesktopNotificationDuration::from_str(value.as_ref());
+                });
+            },
+        )
+        .default_value(SharedString::from(
+            defaults.terminal_desktop_notification_duration.as_str(),
+        )),
+    )
+    .description(t!("Settings.terminal.desktop_notification_duration_description").to_string())
+}
+
+fn desktop_notification_sound_item(defaults: &AppSettings) -> SettingItem {
+    bool_item(
+        "desktop_notification_sound",
+        defaults.terminal_desktop_notification_sound,
+        |settings| settings.terminal_desktop_notification_sound,
+        |settings, value| settings.terminal_desktop_notification_sound = value,
+    )
+}
+
+fn desktop_notification_test_item() -> SettingItem {
+    SettingItem::new(
+        t!("Settings.terminal.desktop_notification_test"),
+        SettingField::render(|_options, _window, _cx| {
+            Button::new("terminal-notification-send-test")
+                .label(t!("Settings.terminal.desktop_notification_test_button"))
+                .small()
+                .outline()
+                .on_click(|_, _, cx| {
+                    let settings = AppSettings::global(cx);
+                    app_kit::integration::desktop_notification::send_test_notification(
+                        settings.terminal_desktop_notification_duration,
+                        settings.terminal_desktop_notification_sound,
+                    );
+                })
+        }),
+    )
+    .description(t!("Settings.terminal.desktop_notification_test_description").to_string())
+}
+
+fn desktop_notification_codex_tip_item() -> SettingItem {
+    SettingItem::render(|_options, _window, cx| {
+        let theme = cx.theme();
+        v_flex()
+            .w_full()
+            .gap_2()
+            .p_3()
+            .rounded_md()
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.secondary)
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme.foreground)
+                            .child(t!("Settings.terminal.desktop_notification_codex_tip_title")),
+                    )
+                    .child(
+                        Button::new("terminal-notification-copy-codex-config")
+                            .label(t!("Settings.terminal.desktop_notification_codex_tip_copy"))
+                            .tooltip(t!(
+                                "Settings.terminal.desktop_notification_codex_tip_tooltip"
+                            ))
+                            .small()
+                            .ghost()
+                            .on_click(|_, _, cx| {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                    CODEX_NOTIFICATION_CONFIG_SNIPPET.to_string(),
+                                ));
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(t!("Settings.terminal.desktop_notification_codex_tip_desc")),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .px_2p5()
+                    .py_2()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.background)
+                    .font_family(theme.mono_font_family.clone())
+                    .text_xs()
+                    .text_color(theme.foreground)
+                    .child(CODEX_NOTIFICATION_CONFIG_SNIPPET),
+            )
+    })
+    .keywords([
+        "codex".to_string(),
+        "osc9".to_string(),
+        "config.toml".to_string(),
+    ])
 }
 
 #[cfg(test)]

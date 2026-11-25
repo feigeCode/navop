@@ -342,9 +342,15 @@ impl AddonManager {
 
         for id in &self.load_order {
             if let Some(addon) = self.addons.get_mut(id) {
+                if exclusive_id.is_some() {
+                    // 前序独占 addon（如 WebLinksAddon）已命中，直接短路后续 addon，
+                    // 避免 FilePathAddon 在 UI 线程对 URL 子串做无效的文件系统探测。
+                    changed |= addon.clear_hover();
+                    continue;
+                }
                 let update = addon.on_mouse_move(context);
                 changed |= update.changed;
-                if update.hovered && update.exclusive && exclusive_id.is_none() {
+                if update.hovered && update.exclusive {
                     exclusive_id = Some(*id);
                 }
             }
@@ -353,7 +359,7 @@ impl AddonManager {
         if let Some(exclusive_id) = exclusive_id {
             for id in &self.load_order {
                 if *id == exclusive_id {
-                    continue;
+                    break;
                 }
                 if let Some(addon) = self.addons.get_mut(id) {
                     changed |= addon.clear_hover();
@@ -1319,12 +1325,15 @@ impl FilePathAddon {
         }
 
         let candidate = mat.as_str();
-        if candidate.starts_with("file://") {
+        if is_within_url_scheme(line_text, mat.start(), candidate) {
             return false;
         }
 
         let (path_part, _line_number, _column_number) = split_path_line_column(candidate);
         let cleaned_path = trim_trailing_punctuation(&path_part);
+        if is_unc_network_path(&cleaned_path) {
+            return false;
+        }
         let path_end_col = start_col + cleaned_path.chars().count();
         if column >= path_end_col {
             return false;
@@ -1581,8 +1590,37 @@ fn is_cwd_entry_token_char(char: char) -> bool {
         )
 }
 
+/// 判断路径是否为 Windows SMB/UNC 网络共享路径（`//host/share` 或 `\\host\share`）。
+///
+/// 在 Windows 上对 UNC 路径同步调用 `Path::exists()` 会触发 `CreateFileW` 网络探测，
+/// 主机不可达或非 SMB 域名（例如从 URL 误截出的 `//github.com/...`）会直接阻塞 UI 线程。
+fn is_unc_network_path(path: &str) -> bool {
+    path.starts_with("//") || path.starts_with(r"\\")
+}
+
+/// 判断正则命中片段是否处于 URL scheme（如 `https://...`、`ssh://...`、`file://...`）内部。
+fn is_within_url_scheme(line_text: &str, match_start: usize, candidate: &str) -> bool {
+    if candidate.contains("://") {
+        return true;
+    }
+
+    let prefix = &line_text[..match_start];
+    if prefix.ends_with(':') && candidate.starts_with("//") {
+        return true;
+    }
+
+    let token_start = prefix
+        .rfind(|ch: char| {
+            ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '>' | '(' | '[' | '{')
+        })
+        .map(|idx| idx + prefix[idx..].chars().next().map_or(1, char::len_utf8))
+        .unwrap_or(0);
+    let token_prefix = &prefix[token_start..];
+    token_prefix.contains("://")
+}
+
 fn resolve_path(raw_path: &str, base_dir: Option<&Path>) -> Option<PathBuf> {
-    if raw_path.is_empty() {
+    if raw_path.is_empty() || is_unc_network_path(raw_path) {
         return None;
     }
 
@@ -2032,6 +2070,115 @@ mod tests {
         assert!(addon.hovered_path().is_none());
 
         _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn file_path_hover_rejects_url_substrings_and_unc_network_paths() {
+        let dir = unique_temp_dir("reject-url-and-unc");
+        fs::create_dir_all(&dir).expect("temp dir should be created");
+        let mut addon = FilePathAddon::new();
+
+        // 1. HTTPS URL（回归现场：//github.com/feigeCode/navop/pull/593 不能被当成 UNC 路径探测）
+        let url_line = "PR: https://github.com/feigeCode/navop/pull/593";
+        for needle in ["//github.com", "github.com", "navop/pull/593"] {
+            let col = char_column(url_line, url_line.find(needle).expect("needle present"));
+            assert!(
+                !addon.detect_path_at(url_line, col, 0, Some(Path::new(&dir))),
+                "URL substring '{needle}' must not match FilePathAddon"
+            );
+            assert!(addon.hovered_path().is_none());
+        }
+
+        // 2. 单独出现的 //host/share/file 与 \\host\share\file UNC 路径
+        let slash_unc = "open //host/share/file.txt now";
+        let slash_col = char_column(slash_unc, slash_unc.find("//host").expect("unc present"));
+        assert!(!addon.detect_path_at(slash_unc, slash_col, 0, Some(Path::new(&dir))));
+        assert!(addon.hovered_path().is_none());
+
+        let backslash_unc = r"open \\host\share\file.txt now";
+        let backslash_col = char_column(
+            backslash_unc,
+            backslash_unc.find(r"\\host").expect("unc present"),
+        );
+        assert!(!addon.detect_path_at(backslash_unc, backslash_col, 0, Some(Path::new(&dir))));
+        assert!(addon.hovered_path().is_none());
+
+        // 3. resolve_path 兜底拒绝 UNC 路径
+        assert!(super::resolve_path("//github.com/feigeCode/navop/pull/593", Some(&dir)).is_none());
+        assert!(super::resolve_path(r"\\host\share\file.txt", Some(&dir)).is_none());
+
+        _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn dispatch_mouse_move_short_circuits_subsequent_addons_after_exclusive_hit() {
+        use super::{HoverUpdate, TerminalAddonMouseContext, WebLinksAddon};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingAddon {
+            move_calls: std::sync::Arc<AtomicUsize>,
+            clear_calls: std::sync::Arc<AtomicUsize>,
+        }
+
+        impl TerminalAddon for CountingAddon {
+            fn id(&self) -> &'static str {
+                "counting_after_web_links"
+            }
+
+            fn on_mouse_move(&mut self, _context: &mut TerminalAddonMouseContext) -> HoverUpdate {
+                self.move_calls.fetch_add(1, Ordering::SeqCst);
+                HoverUpdate::default()
+            }
+
+            fn clear_hover(&mut self) -> bool {
+                self.clear_calls.fetch_add(1, Ordering::SeqCst);
+                false
+            }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        let move_calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let clear_calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut manager = AddonManager::new();
+        manager.load(Box::new(WebLinksAddon::new()));
+        manager.load(Box::new(CountingAddon {
+            move_calls: move_calls.clone(),
+            clear_calls: clear_calls.clone(),
+        }));
+
+        let line = "See https://github.com/feigeCode/navop/pull/593 for details";
+        let col = char_column(line, line.find("github.com").expect("url present"));
+        let mut opened = Vec::new();
+        let mut open_url = |url: &str| opened.push(url.to_string());
+        let mut ctx = TerminalAddonMouseContext::new(
+            0,
+            col,
+            line,
+            gpui::Modifiers::default(),
+            gpui::Point::default(),
+            true,
+            None,
+            &mut open_url,
+        );
+
+        assert!(manager.dispatch_mouse_move(&mut ctx));
+        assert_eq!(
+            move_calls.load(Ordering::SeqCst),
+            0,
+            "exclusive WebLinksAddon hit must short-circuit subsequent addons' on_mouse_move"
+        );
+        assert_eq!(
+            clear_calls.load(Ordering::SeqCst),
+            1,
+            "short-circuited subsequent addons should still clear stale hover state"
+        );
     }
 
     fn char_column(text: &str, byte_index: usize) -> usize {

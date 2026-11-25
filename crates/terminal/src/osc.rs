@@ -45,7 +45,19 @@ impl ReportedWorkingDir {
     }
 }
 
-/// OSC 事件类型（基于 OSC 133 协议）
+/// 终端程序发出的桌面/用户通知（OSC 9 / OSC 777）。
+///
+/// 例如 Antigravity CLI、Claude Code、Codex、iTerm2 等在需要用户审批、等待输入或
+/// 任务完成时通过 `OSC 9;<message>` 或 `OSC 777;notify;<title>;<body>` 发出通知。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalNotification {
+    /// 可选通知标题（OSC 777 提供，OSC 9 通常为 `None`）。
+    pub title: Option<String>,
+    /// 通知正文。
+    pub body: String,
+}
+
+/// OSC 事件类型（基于 OSC 133 协议与终端通知协议）
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OscEvent {
     /// 提示符开始（OSC 133;A）
@@ -62,6 +74,8 @@ pub enum OscEvent {
     CommandRecorded(String),
     /// 交互 PTY 的设备路径（OSC 1337;NavopTty=...）
     NavopTty(String),
+    /// 终端应用桌面通知（OSC 9 / OSC 777;notify）
+    Notification(TerminalNotification),
 }
 
 /// 跨 PTY/SSH read chunk 保存未完成 OSC 序列的增量解析器。
@@ -187,6 +201,43 @@ pub fn parse_osc_payload(payload: &str) -> Option<OscEvent> {
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())?;
         return Some(OscEvent::CommandRecorded(command));
+    }
+
+    // OSC 9：iTerm2 / Windows Terminal / Antigravity CLI 桌面通知。
+    // 注意必须排除 ConEmu / Windows Terminal 进度条序列 `OSC 9;4;...`
+    // （如 `9;4;0`、`9;4;1;50`、`9;4;3`），避免把进度条误当成通知。
+    if let Some(rest) = payload.strip_prefix("9;") {
+        if rest == "4" || rest.starts_with("4;") {
+            return None;
+        }
+        let body = rest.trim();
+        if body.is_empty() {
+            return None;
+        }
+        return Some(OscEvent::Notification(TerminalNotification {
+            title: None,
+            body: body.to_string(),
+        }));
+    }
+
+    // OSC 777：rxvt-unicode / VTE / Ghostty 桌面通知 (`777;notify;<title>;<body>`)
+    if let Some(rest) = payload.strip_prefix("777;notify;") {
+        let (raw_title, raw_body) = match rest.split_once(';') {
+            Some((title, body)) => (title.trim(), body.trim()),
+            None => ("", rest.trim()),
+        };
+        if raw_title.is_empty() && raw_body.is_empty() {
+            return None;
+        }
+        let (title, body) = if raw_body.is_empty() {
+            (None, raw_title.to_string())
+        } else {
+            (
+                (!raw_title.is_empty()).then(|| raw_title.to_string()),
+                raw_body.to_string(),
+            )
+        };
+        return Some(OscEvent::Notification(TerminalNotification { title, body }));
     }
 
     None
@@ -428,5 +479,47 @@ mod tests {
     fn parse_unknown_osc_returns_none() {
         assert_eq!(parse_osc_payload("999;unknown"), None);
         assert_eq!(parse_osc_payload("133;X"), None);
+    }
+
+    #[test]
+    fn parse_osc_9_notification_and_ignore_progress_bar() {
+        assert_eq!(
+            parse_osc_payload("9;Needs approval"),
+            Some(OscEvent::Notification(TerminalNotification {
+                title: None,
+                body: "Needs approval".to_string(),
+            }))
+        );
+        assert_eq!(
+            parse_osc_payload("9;  Agent finished  "),
+            Some(OscEvent::Notification(TerminalNotification {
+                title: None,
+                body: "Agent finished".to_string(),
+            }))
+        );
+        // ConEmu / Windows Terminal 进度条 OSC 9;4;... 不得误报为通知
+        assert_eq!(parse_osc_payload("9;4;0"), None);
+        assert_eq!(parse_osc_payload("9;4;1;50"), None);
+        assert_eq!(parse_osc_payload("9;4;3"), None);
+        assert_eq!(parse_osc_payload("9;   "), None);
+    }
+
+    #[test]
+    fn parse_osc_777_notification() {
+        assert_eq!(
+            parse_osc_payload("777;notify;Antigravity;Needs approval"),
+            Some(OscEvent::Notification(TerminalNotification {
+                title: Some("Antigravity".to_string()),
+                body: "Needs approval".to_string(),
+            }))
+        );
+        assert_eq!(
+            parse_osc_payload("777;notify;;Task complete"),
+            Some(OscEvent::Notification(TerminalNotification {
+                title: None,
+                body: "Task complete".to_string(),
+            }))
+        );
+        assert_eq!(parse_osc_payload("777;notify;;"), None);
     }
 }

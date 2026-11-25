@@ -11,7 +11,17 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::new_local_view(config, tab_index, None, None, window, cx)
+        Self::new_local_view(config, tab_index, None, None, None, window, cx)
+    }
+
+    pub fn new_local_with_profile_title(
+        config: LocalConfig,
+        profile_title: Option<String>,
+        tab_index: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_local_view(config, tab_index, None, profile_title, None, window, cx)
     }
 
     /// 扩展声明的终端型连接使用的本地终端:带固定标签标题和连接设置里选的图标,
@@ -24,7 +34,15 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::new_local_view(config, tab_index, Some(title), connection_icon, window, cx)
+        Self::new_local_view(
+            config,
+            tab_index,
+            Some(title),
+            None,
+            connection_icon,
+            window,
+            cx,
+        )
     }
 
     /// `title` 为 `Some` 表示扩展声明的终端型连接:固定标题且可重启。
@@ -32,6 +50,7 @@ impl TerminalView {
         config: LocalConfig,
         tab_index: Option<usize>,
         title: Option<String>,
+        local_profile_title: Option<String>,
         connection_icon: Option<Icon>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -68,6 +87,7 @@ impl TerminalView {
                 connection_icon,
                 sync_path_enabled: true,
                 local_working_dir,
+                local_profile_title,
                 workspace_source,
                 tab_index,
                 duplicate_source: Some(duplicate_source),
@@ -111,6 +131,7 @@ impl TerminalView {
                 connection_icon: None,
                 sync_path_enabled: sync_path_with_terminal,
                 local_working_dir: None,
+                local_profile_title: None,
                 workspace_source: None,
                 tab_index,
                 duplicate_source: Some(duplicate_source),
@@ -139,6 +160,7 @@ impl TerminalView {
                 connection_icon: None,
                 sync_path_enabled: false,
                 local_working_dir: None,
+                local_profile_title: None,
                 workspace_source: None,
                 tab_index: None,
                 duplicate_source: None,
@@ -167,6 +189,7 @@ impl TerminalView {
                 connection_icon: None,
                 sync_path_enabled: false,
                 local_working_dir: None,
+                local_profile_title: None,
                 workspace_source: None,
                 tab_index: None,
                 duplicate_source: None,
@@ -200,6 +223,7 @@ impl TerminalView {
                 connection_icon: None,
                 sync_path_enabled: true,
                 local_working_dir: None,
+                local_profile_title: None,
                 workspace_source: None,
                 tab_index,
                 duplicate_source: Some(duplicate_source),
@@ -233,6 +257,7 @@ impl TerminalView {
                 connection_icon: None,
                 sync_path_enabled: true,
                 local_working_dir: None,
+                local_profile_title: None,
                 workspace_source: None,
                 tab_index,
                 duplicate_source: Some(duplicate_source),

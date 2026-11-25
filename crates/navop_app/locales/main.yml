@@ -6484,6 +6484,14 @@ CredentialForm:
     en: Choose an algorithm, then generate a key pair. The private key fills the form below and the public key goes to your clipboard.
     zh-CN: 先选择算法，再生成一对密钥：私钥自动填入下方表单，公钥复制到剪贴板。
     zh-HK: 先選擇演算法，再產生一對金鑰：私鑰會填入下方表單，公鑰複製到剪貼簿。
+  generate_key_public_key:
+    en: "Public key (append it to the server's ~/.ssh/authorized_keys)"
+    zh-CN: 公钥（可直接粘贴到服务器的 ~/.ssh/authorized_keys）
+    zh-HK: 公鑰（可直接貼到伺服器的 ~/.ssh/authorized_keys）
+  generate_key_copy_public_key:
+    en: Copy public key
+    zh-CN: 复制公钥
+    zh-HK: 複製公鑰
   generate_key_algorithm_ed25519:
     en: Ed25519 (recommended)
     zh-CN: Ed25519（推荐）

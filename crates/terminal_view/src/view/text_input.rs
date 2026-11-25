@@ -10,6 +10,28 @@ pub(super) enum DisconnectedCtrlDCloseTarget {
     Window,
 }
 
+/// 纯 Ctrl+C 判定：仅 ctrl+c，不带 alt/shift/platform 修饰键。
+pub(super) fn is_plain_ctrl_c(keystroke: &Keystroke) -> bool {
+    let modifiers = keystroke.modifiers;
+    modifiers.control
+        && !modifiers.alt
+        && !modifiers.shift
+        && !modifiers.platform
+        && keystroke.key.eq_ignore_ascii_case("c")
+}
+
+/// 当按键命中 `terminal.copy` 快捷键时，决定本次是执行复制还是退化透传（如无选区的 Ctrl+C 发 `\x03`）。
+pub(super) fn should_copy_instead_of_interrupt(
+    keystroke: &Keystroke,
+    has_selection: bool,
+) -> bool {
+    if is_plain_ctrl_c(keystroke) {
+        has_selection
+    } else {
+        true
+    }
+}
+
 /// 断开态 Ctrl+D 判定：仅 ctrl+d，不带 alt/shift/platform 修饰键。
 pub(super) fn is_disconnected_ctrl_d(keystroke: &Keystroke) -> bool {
     let modifiers = keystroke.modifiers;
@@ -136,13 +158,18 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if keystroke_matches_shortcuts(
+        let matches_copy_shortcut = keystroke_matches_shortcuts(
             &event.keystroke,
             &shortcuts_for(cx, action_id::TERMINAL_COPY, &[TERMINAL_COPY_SHORTCUT]),
-        ) {
+        );
+        if matches_copy_shortcut
+            && should_copy_instead_of_interrupt(&event.keystroke, self.has_copyable_selection(cx))
+        {
             self.copy(&Copy, _window, cx);
             return;
         }
+        let allow_ctrl_c_interrupt_passthrough =
+            matches_copy_shortcut && is_plain_ctrl_c(&event.keystroke);
 
         // 凭据/MFA 等待期间按键进入终端内联捕获，不透传 PTY。
         if self.credential_capture.is_some() {
@@ -319,7 +346,8 @@ impl TerminalView {
             self.dismiss_history_prompt();
         }
 
-        if is_terminal_action_shortcut(&event.keystroke, cx) {
+        if !allow_ctrl_c_interrupt_passthrough && is_terminal_action_shortcut(&event.keystroke, cx)
+        {
             return;
         }
 
@@ -356,6 +384,15 @@ impl TerminalView {
                 Cow::Owned(s) => s.into_bytes(),
             };
             self.write_to_pty(bytes, cx);
+            return;
+        }
+
+        // 普通可打印字符由终端自己消费并停止传播：否则按键会继续进入 macOS
+        // 的 NSTextInputContext，长按被系统截获为 Press-and-Hold 重音候选浮窗，
+        // 同时抑制自动重复（vim 中长按 h/j/k/l 光标无法连续移动）。
+        if let Some(text) = crate::keys::direct_input_text(&event.keystroke) {
+            self.commit_text(text, cx);
+            cx.stop_propagation();
         }
     }
 }

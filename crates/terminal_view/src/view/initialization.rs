@@ -13,6 +13,7 @@ impl TerminalView {
             connection_icon,
             sync_path_enabled,
             local_working_dir,
+            local_profile_title,
             workspace_source,
             tab_index,
             duplicate_source,
@@ -222,18 +223,24 @@ impl TerminalView {
             .is_enabled()
             .then_some(terminal_performance_metrics);
 
-        // 焦点获得/失去订阅
-        let focus_subscription = cx.on_focus(&focus_handle, window, |this, _window, cx| {
+        // 焦点获得/失去订阅（同时在窗口激活态变化时同步 DECSET 1004 FocusIn/FocusOut）
+        let focus_subscription = cx.on_focus(&focus_handle, window, |this, window, cx| {
             if this.cursor_blink_enabled {
                 this.blink_manager.update(cx, BlinkCursor::start);
             }
+            this.sync_terminal_focus_report(window, cx);
             cx.emit(TerminalPaneEvent::Focused);
         });
-        let blur_subscription = cx.on_blur(&focus_handle, window, |this, _window, cx| {
+        let blur_subscription = cx.on_blur(&focus_handle, window, |this, window, cx| {
             if this.cursor_blink_enabled {
                 this.blink_manager.update(cx, BlinkCursor::stop);
             }
+            this.sync_terminal_focus_report(window, cx);
         });
+        let window_activation_subscription =
+            cx.observe_window_activation(window, |this, window, cx| {
+                this.sync_terminal_focus_report(window, cx);
+            });
 
         let mut subscriptions = Vec::new();
         subscriptions.push(sidebar_subscription);
@@ -247,6 +254,7 @@ impl TerminalView {
         subscriptions.push(blink_subscription);
         subscriptions.push(focus_subscription);
         subscriptions.push(blur_subscription);
+        subscriptions.push(window_activation_subscription);
         if let Some(global_settings) = cx.try_global::<GlobalTerminalLocalSettings>().cloned() {
             let settings_subscription = cx.subscribe_in(
                 &global_settings.0,
@@ -284,6 +292,11 @@ impl TerminalView {
             session_log_name,
             local_working_dir: if is_local_terminal {
                 local_working_dir
+            } else {
+                None
+            },
+            local_profile_title: if is_local_terminal {
+                local_profile_title
             } else {
                 None
             },
@@ -330,6 +343,7 @@ impl TerminalView {
             selection_autoscroll_display_offset: None,
             selection_autoscroll_task: None,
             focus_handle,
+            last_reported_terminal_focus: None,
             performance_metrics,
             terminal_bounds: Bounds::default(),
             ime_state: None,
@@ -390,4 +404,41 @@ impl TerminalView {
             .push(cx.on_release(|this, cx| this.cancel_zmodem_background_tasks(cx)));
         this
     }
+
+    /// 按 xterm DECSET 1004（`TermMode::FOCUS_IN_OUT`）协议向终端上报焦点变化。
+    ///
+    /// 只有当终端应用显式开启 `FOCUS_IN_OUT` 且有效焦点（窗体激活 && 面板聚焦）
+    /// 发生边沿跃迁时，才写入 `\x1b[I`（FocusIn）或 `\x1b[O`（FocusOut）。
+    pub(super) fn sync_terminal_focus_report(
+        &mut self,
+        window: &Window,
+        cx: &Context<Self>,
+    ) {
+        let terminal = self.terminal.read(cx);
+        let mode = terminal.mode();
+        let is_focused = window.is_window_active() && self.focus_handle.is_focused(window);
+        if let Some(sequence) =
+            terminal_focus_report_sequence(mode, self.last_reported_terminal_focus, is_focused)
+        {
+            self.last_reported_terminal_focus = Some(is_focused);
+            terminal.write(sequence);
+        } else if !mode.contains(TermMode::FOCUS_IN_OUT) {
+            self.last_reported_terminal_focus = None;
+        }
+    }
+}
+
+/// 根据终端 `FOCUS_IN_OUT` 模式与焦点边沿，返回应写入 PTY/SSH 的转义序列。
+pub(super) fn terminal_focus_report_sequence(
+    mode: TermMode,
+    last_reported: Option<bool>,
+    is_focused: bool,
+) -> Option<&'static [u8]> {
+    if !mode.contains(TermMode::FOCUS_IN_OUT) {
+        return None;
+    }
+    if last_reported == Some(is_focused) {
+        return None;
+    }
+    Some(if is_focused { b"\x1b[I" } else { b"\x1b[O" })
 }
