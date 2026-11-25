@@ -127,6 +127,7 @@ impl WidthPolicy {
 }
 
 /// 外壳拖动和业务树共用同一个宽度边界，非法输入使用默认值。
+#[cfg(feature = "shell")]
 pub fn sanitize_resource_width(resource: ResourceKind, width: f32) -> f32 {
     resource_width_policy(resource)
         .map(|policy| policy.sanitize(Some(width)))
@@ -285,14 +286,17 @@ pub fn plan_mount(
 }
 
 /// GPUI 拖动回调给出相对手柄原点的偏移，不能直接当窗口横坐标。
+#[cfg(feature = "shell")]
 pub fn drag_resource_width(initial_width: f32, cursor_offset_x: f32) -> f32 {
     (initial_width + cursor_offset_x).max(0.0)
 }
 
 /// 一次拖动的鼠标起点和面板初始宽度。状态由 NavopApp 持有，不能放在 render 闭包里。
+#[cfg(feature = "shell")]
 pub type ResourceResizeDrag = (gpui::Point<gpui::Pixels>, gpui::Pixels);
 
 /// 更新一次连续拖动；重渲染后仍使用同一个起点，收到 `None` 时清理会话。
+#[cfg(feature = "shell")]
 pub fn update_resource_resize_drag(
     drag: &mut Option<ResourceResizeDrag>,
     position: Option<gpui::Point<gpui::Pixels>>,
