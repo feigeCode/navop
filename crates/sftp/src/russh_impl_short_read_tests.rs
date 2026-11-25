@@ -11,7 +11,7 @@
 //! 一致。整个测试不碰网络、不开端口、不依赖任何外部服务。
 
 use super::*;
-use russh_sftp::protocol::{Data, Handle, Status, Version};
+use russh_sftp::protocol::{Data, Handle, SftpHandle, Status, Version};
 use std::collections::HashMap;
 
 /// 复刻 JumpServer：无论客户端要多少，一次最多回 32 KiB。
@@ -62,7 +62,7 @@ impl russh_sftp::server::Handler for FakeSftpServer {
         async move {
             Ok(Handle {
                 id,
-                handle: filename,
+                handle: filename.into(),
             })
         }
     }
@@ -70,7 +70,7 @@ impl russh_sftp::server::Handler for FakeSftpServer {
     fn read(
         &mut self,
         id: u32,
-        _handle: String,
+        _handle: SftpHandle,
         offset: u64,
         len: u32,
     ) -> impl Future<Output = std::result::Result<Data, Self::Error>> + Send {
@@ -95,7 +95,7 @@ impl russh_sftp::server::Handler for FakeSftpServer {
     fn close(
         &mut self,
         id: u32,
-        _handle: String,
+        _handle: SftpHandle,
     ) -> impl Future<Output = std::result::Result<Status, Self::Error>> + Send {
         async move {
             Ok(Status {

@@ -62,6 +62,11 @@ pub struct TerminalSettings {
     /// 左边距展示行号
     #[serde(default)]
     pub show_line_numbers: bool,
+    /// 是否启用 tmux 控制通道集成。
+    pub tmux_integration: bool,
+    /// 自定义 tmux socket 路径；空值表示默认 socket。
+    #[serde(default)]
+    pub tmux_socket: String,
     /// 在 alt-screen TUI(vim/less/man 等)中把鼠标滚轮事件转为方向键发送给 PTY,
     /// 让 vim 等程序不开启鼠标报告也能滚动,同时保留终端原生选区/复制能力。
     #[serde(default = "default_vim_scroll_to_arrow_keys")]
@@ -122,6 +127,8 @@ impl TerminalSettings {
             selection_highlight: app_settings.terminal_selection_highlight,
             show_line_timestamps: app_settings.terminal_show_timestamps,
             show_line_numbers: app_settings.terminal_show_line_numbers,
+            tmux_integration: app_settings.terminal_tmux_integration,
+            tmux_socket: app_settings.terminal_tmux_socket.clone(),
             vim_scroll_to_arrow_keys: local_settings.vim_scroll_to_arrow_keys,
             builtin_highlights_initialized: local_settings.builtin_highlights_initialized,
             custom_highlights: local_settings.custom_highlights.clone(),
@@ -347,6 +354,8 @@ fn update_app_settings<T>(
         settings.terminal_selection_highlight = next.selection_highlight;
         settings.terminal_show_timestamps = next.show_line_timestamps;
         settings.terminal_show_line_numbers = next.show_line_numbers;
+        settings.terminal_tmux_integration = next.tmux_integration;
+        settings.terminal_tmux_socket = next.tmux_socket.clone();
     });
 }
 
@@ -370,6 +379,8 @@ fn terminal_app_fields_equal(left: &TerminalSettings, right: &TerminalSettings) 
         && left.selection_highlight == right.selection_highlight
         && left.show_line_timestamps == right.show_line_timestamps
         && left.show_line_numbers == right.show_line_numbers
+        && left.tmux_integration == right.tmux_integration
+        && left.tmux_socket == right.tmux_socket
 }
 
 #[cfg(test)]
@@ -498,6 +509,30 @@ mod tests {
             TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
 
         assert!(settings.right_click_paste);
+    }
+
+    #[test]
+    fn terminal_settings_reads_tmux_integration_from_app_settings() {
+        let app_settings = AppSettings {
+            terminal_tmux_integration: false,
+            terminal_tmux_socket: "/tmp/navop.sock".to_string(),
+            ..AppSettings::default()
+        };
+
+        let settings =
+            TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
+
+        assert!(!settings.tmux_integration);
+        assert_eq!(settings.tmux_socket, "/tmp/navop.sock");
+    }
+
+    #[test]
+    fn tmux_socket_participates_in_app_settings_equality() {
+        let left = TerminalSettings::default();
+        let mut right = left.clone();
+        right.tmux_socket = "/tmp/other.sock".to_string();
+
+        assert!(!terminal_app_fields_equal(&left, &right));
     }
 
     #[test]

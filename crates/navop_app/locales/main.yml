@@ -144,9 +144,9 @@ Monitor:
     zh-CN: 监控
     zh-HK: 監控
   subtitle:
-    en: Live CPU, memory, disk, and network metrics for saved SSH hosts
-    zh-CN: 查看已保存 SSH 主机的 CPU、内存、磁盘与网络实时状态
-    zh-HK: 查看已儲存 SSH 主機的 CPU、記憶體、磁碟與網路即時狀態
+    en: Live CPU, memory, disk, and network metrics for the SSH hosts you turn monitoring on for
+    zh-CN: 查看已开启资源监控的 SSH 主机的 CPU、内存、磁盘与网络实时状态
+    zh-HK: 查看已開啟資源監控的 SSH 主機的 CPU、記憶體、磁碟與網路即時狀態
   search_placeholder:
     en: Search hosts, addresses, or systems…
     zh-CN: 搜索主机、地址或系统…
@@ -155,10 +155,14 @@ Monitor:
     en: Refresh
     zh-CN: 刷新
     zh-HK: 重新整理
+  refresh_all:
+    en: Reconnect and refresh every enabled monitor
+    zh-CN: 重新连接并刷新所有已开启的监控
+    zh-HK: 重新連線並重新整理所有已開啟的監控
   refresh_host:
-    en: Reconnect and refresh monitors
-    zh-CN: 重新连接并刷新全部监控
-    zh-HK: 重新連線並重新整理全部監控
+    en: Reconnect and refresh this host
+    zh-CN: 重新连接并刷新这台主机的监控
+    zh-HK: 重新連線並重新整理這台主機的監控
   every_seconds:
     en: Every %{seconds}s
     zh-CN: 每 %{seconds} 秒
@@ -179,6 +183,34 @@ Monitor:
     en: Unavailable
     zh-CN: 不可用
     zh-HK: 不可用
+  not_monitoring:
+    en: Off
+    zh-CN: 未监控
+    zh-HK: 未監控
+  card_toggle:
+    en: Monitoring
+    zh-CN: 资源监控
+    zh-HK: 資源監控
+  card_toggle_tooltip:
+    en: When on, this host is sampled on the Monitor page and in the connection list on the Home page
+    zh-CN: 开启后，监控页与首页连接列表都会采集这台主机的资源占用
+    zh-HK: 開啟後，監控頁與首頁連線清單都會採集這台主機的資源佔用
+  enabled_summary:
+    en: "%{enabled}/%{total} monitored"
+    zh-CN: 已开启 %{enabled}/%{total}
+    zh-HK: 已開啟 %{enabled}/%{total}
+  idle_title:
+    en: Monitoring is off
+    zh-CN: 未开启资源监控
+    zh-HK: 未開啟資源監控
+  idle_description:
+    en: Turn it on to start a background session. This choice is shared with the connection list on the Home page.
+    zh-CN: 开启后才会建立后台采集会话；该选择与首页连接列表共用。
+    zh-HK: 開啟後才會建立背景採集工作階段；此選擇與首頁連線清單共用。
+  start_monitoring:
+    en: Start monitoring
+    zh-CN: 开始监控
+    zh-HK: 開始監控
   updated_at:
     en: "Updated %{time}"
     zh-CN: "%{time} 更新"
@@ -3096,9 +3128,9 @@ Settings:
         zh-CN: 显示远端资源占用
         zh-HK: 顯示遠端資源佔用
       show_host_metrics_desc:
-        en: Collect SSH server system, CPU, memory, disk and network usage with a background session and show them in the connection list without opening a terminal.
-        zh-CN: 用后台 SSH 会话采集服务器的系统、CPU、内存、磁盘与网络占用，无需打开终端即可在连接列表中看到
-        zh-HK: 用後台 SSH 會話採集伺服器的系統、CPU、記憶體、磁碟與網路佔用，無需開啟終端即可在連線列表中看到
+        en: Collect SSH server system, CPU, memory, disk and network usage with a background session and show it in the list view of the connection list. It is hidden in the navigation and grid layouts, and only connections with Monitoring turned on are collected.
+        zh-CN: 用后台 SSH 会话采集服务器的系统、CPU、内存、磁盘与网络占用，仅在连接列表的「列表视图」中显示，导航视图和网格视图不显示；且只对已在监控页开启资源监控的连接采集
+        zh-HK: 用後台 SSH 會話採集伺服器的系統、CPU、記憶體、磁碟與網路佔用，僅在連線清單的「列表檢視」中顯示，導覽檢視和網格檢視不顯示；且只對已在監控頁開啟資源監控的連線採集
       home_layout:
         en: Home Connection Layout
         zh-CN: 主页连接布局

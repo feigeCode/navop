@@ -13,6 +13,7 @@ use agent_runtime::{ResourceRef, ResourceScope};
 use ai_chat_view::ContextAttachment;
 use alacritty_terminal::term::TermMode;
 use terminal::terminal::Terminal;
+use terminal::tmux::TmuxSessionState;
 
 pub(crate) use context::{LiveContextInputs, build_live_resource_context};
 
@@ -31,6 +32,8 @@ const SCOPE_PROCESS: &str = "process";
 const SCOPE_LIVE_TERMINAL: &str = "terminal";
 /// 作用域键：终端所属连接的资源 id。
 const SCOPE_CONNECTION: &str = "connection";
+/// 作用域键：tmux 会话结构（终端在 tmux 内时才出现）。
+const SCOPE_TMUX: &str = "tmux";
 
 /// 选中内容摘要的最大字符数，避免把整段输出塞进提示词。
 const SELECTION_PREVIEW_MAX_CHARS: usize = 120;
@@ -51,6 +54,85 @@ pub(crate) struct TerminalLiveState {
     rows: usize,
     cols: usize,
     exited: Option<i32>,
+    tmux: Option<TmuxSummary>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TmuxSummary {
+    session_id: String,
+    session_name: String,
+    windows: usize,
+    active_window: String,
+    active_pane: String,
+    cwd: Option<String>,
+    command: String,
+    command_running: Option<bool>,
+    in_mode: bool,
+    other_panes: Vec<String>,
+}
+
+impl TmuxSummary {
+    fn from_state(state: &TmuxSessionState) -> Self {
+        let active_window = state.active_window();
+        let active_pane = state.active_pane();
+        let other_panes = state
+            .panes
+            .iter()
+            .filter(|pane| active_pane.is_none_or(|active| active.id != pane.id))
+            .map(|pane| {
+                format!(
+                    "{} {} {}",
+                    pane.id,
+                    pane.command,
+                    pane.cwd.as_deref().unwrap_or("?")
+                )
+            })
+            .collect();
+        Self {
+            session_id: state.session_id.clone(),
+            session_name: state.session_name.clone(),
+            windows: state.windows.len(),
+            active_window: active_window
+                .map(|window| format!("{}:{} \"{}\"", window.index, window.id, window.name))
+                .unwrap_or_else(|| "?".to_string()),
+            active_pane: active_pane
+                .map(|pane| pane.id.clone())
+                .unwrap_or_else(|| "?".to_string()),
+            cwd: active_pane.and_then(|pane| pane.cwd.clone()),
+            command: active_pane
+                .map(|pane| pane.command.clone())
+                .unwrap_or_default(),
+            command_running: active_pane.and_then(|pane| pane.command_running),
+            in_mode: active_pane.is_some_and(|pane| pane.in_mode),
+            other_panes,
+        }
+    }
+
+    fn summary(&self) -> String {
+        let mut summary = format!(
+            "session \"{}\" ({}), {} windows; active window {}; active pane {}; cwd={}; command={}; running={}; mode={}",
+            self.session_name,
+            self.session_id,
+            self.windows,
+            self.active_window,
+            self.active_pane,
+            self.cwd.as_deref().unwrap_or("?"),
+            if self.command.is_empty() {
+                "?"
+            } else {
+                self.command.as_str()
+            },
+            self.command_running
+                .map(|running| running.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            if self.in_mode { "copy/other" } else { "normal" },
+        );
+        if !self.other_panes.is_empty() {
+            summary.push_str("; other panes: ");
+            summary.push_str(&self.other_panes.join("; "));
+        }
+        summary
+    }
 }
 
 impl TerminalLiveState {
@@ -64,6 +146,10 @@ impl TerminalLiveState {
             rows: terminal.rows(),
             cols: terminal.cols(),
             exited: terminal.child_exited(),
+            tmux: terminal
+                .tmux_session()
+                .filter(|state| state.attached)
+                .map(TmuxSummary::from_state),
         }
     }
 
@@ -76,6 +162,9 @@ impl TerminalLiveState {
                 "Working directory",
                 dir,
             ));
+        }
+        if let Some(tmux) = &self.tmux {
+            scopes.push(ResourceScope::new(SCOPE_TMUX, "tmux", tmux.summary()));
         }
         scopes.push(ResourceScope::new(
             SCOPE_SCREEN,
@@ -187,6 +276,7 @@ pub(crate) fn apply_live_scopes(resource: &mut ResourceRef, scopes: Vec<Resource
         SCOPE_SELECTION,
         SCOPE_SIZE,
         SCOPE_PROCESS,
+        SCOPE_TMUX,
     ];
     resource
         .scopes
@@ -240,6 +330,7 @@ mod tests {
             rows: 40,
             cols: 120,
             exited: None,
+            tmux: None,
         }
     }
 
@@ -268,6 +359,30 @@ mod tests {
         );
         assert!(scope_value(&scopes, SCOPE_SELECTION).is_none());
         assert!(scope_value(&scopes, SCOPE_PROCESS).is_none());
+    }
+
+    #[test]
+    fn tmux_scope_reports_active_pane_and_copy_mode() {
+        let mut state = state();
+        state.tmux = Some(TmuxSummary {
+            session_id: "$0".to_string(),
+            session_name: "main".to_string(),
+            windows: 2,
+            active_window: "1:@1 \"editor\"".to_string(),
+            active_pane: "%3".to_string(),
+            cwd: Some("/srv/app".to_string()),
+            command: "vim".to_string(),
+            command_running: Some(true),
+            in_mode: true,
+            other_panes: vec!["%4 bash /var/log".to_string()],
+        });
+
+        let summary = scope_value(&state.scopes(), SCOPE_TMUX).expect("tmux scope");
+        assert!(summary.contains("active pane %3"));
+        assert!(summary.contains("cwd=/srv/app"));
+        assert!(summary.contains("running=true"));
+        assert!(summary.contains("mode=copy/other"));
+        assert!(summary.contains("other panes: %4"));
     }
 
     #[test]

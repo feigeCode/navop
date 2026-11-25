@@ -140,6 +140,16 @@ impl TerminalView {
         self.apply_custom_highlight_rules(&settings.custom_highlights, cx);
         self.apply_selection_highlight(settings.selection_highlight, cx);
         self.apply_line_margin(settings, cx);
+        let tmux_integration = settings.tmux_integration;
+        let tmux_socket = settings.tmux_socket.clone();
+        self.terminal.update(cx, |terminal, cx| {
+            terminal.configure_tmux_integration(tmux_integration, tmux_socket, cx);
+        });
+        let tmux_socket = settings.tmux_socket.clone();
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_tmux_integration(tmux_integration, cx);
+            sidebar.set_tmux_socket(&tmux_socket, window, cx);
+        });
         let theme = TerminalTheme::resolve(&settings.theme, cx.theme());
         self.apply_theme(&theme, window, cx);
     }

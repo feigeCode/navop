@@ -72,6 +72,8 @@ pub enum OscEvent {
     WorkingDirChanged(ReportedWorkingDir),
     /// 记录 shell 实际执行过的命令（OSC 1337;Command=<base64>）
     CommandRecorded(String),
+    /// 交互 PTY 的设备路径（OSC 1337;NavopTty=...）
+    NavopTty(String),
     /// 终端应用桌面通知（OSC 9 / OSC 777;notify）
     Notification(TerminalNotification),
 }
@@ -183,6 +185,13 @@ pub fn parse_osc_payload(payload: &str) -> Option<OscEvent> {
         return Some(OscEvent::WorkingDirChanged(ReportedWorkingDir::new(
             host, path,
         )));
+    }
+
+    if let Some(tty) = payload.strip_prefix("1337;NavopTty=") {
+        let tty = tty.trim();
+        if tty.starts_with('/') && !tty.contains('\0') {
+            return Some(OscEvent::NavopTty(tty.to_string()));
+        }
     }
 
     // OSC 1337：命令记录
@@ -414,6 +423,15 @@ mod tests {
             parse_osc_payload(&payload),
             Some(OscEvent::CommandRecorded("git status".to_string()))
         );
+    }
+
+    #[test]
+    fn parse_navop_tty_report() {
+        assert_eq!(
+            parse_osc_payload("1337;NavopTty=/dev/pts/7"),
+            Some(OscEvent::NavopTty("/dev/pts/7".to_string()))
+        );
+        assert_eq!(parse_osc_payload("1337;NavopTty=not-a-tty"), None);
     }
 
     #[test]

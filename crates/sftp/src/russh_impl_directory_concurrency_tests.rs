@@ -4,12 +4,17 @@
 //! several requests concurrently.
 
 use super::*;
-use russh_sftp::protocol::{Data, File, Handle, Name, Status, Version};
+use russh_sftp::protocol::{Data, File, Handle, Name, SftpHandle, Status, Version};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 type ActivePaths = Arc<StdMutex<HashSet<String>>>;
 type MaxPaths = Arc<AtomicUsize>;
+
+/// 测试里 handle 由远端路径生成，统一按 UTF-8 还原成 HashMap 的键。
+fn handle_key(handle: SftpHandle) -> String {
+    String::from_utf8(handle.into_bytes()).expect("fake server handle is utf-8")
+}
 
 struct FakeDirectoryServer {
     files: Vec<(String, Vec<u8>)>,
@@ -61,13 +66,18 @@ impl russh_sftp::server::Handler for FakeDirectoryServer {
         path: String,
     ) -> impl Future<Output = std::result::Result<Handle, Self::Error>> + Send {
         self.listed = false;
-        async move { Ok(Handle { id, handle: path }) }
+        async move {
+            Ok(Handle {
+                id,
+                handle: path.into(),
+            })
+        }
     }
 
     fn readdir(
         &mut self,
         id: u32,
-        _handle: String,
+        _handle: SftpHandle,
     ) -> impl Future<Output = std::result::Result<Name, Self::Error>> + Send {
         let result = if self.listed {
             Err(StatusCode::Eof)
@@ -104,7 +114,7 @@ impl russh_sftp::server::Handler for FakeDirectoryServer {
         async move {
             Ok(Handle {
                 id,
-                handle: filename,
+                handle: filename.into(),
             })
         }
     }
@@ -112,11 +122,15 @@ impl russh_sftp::server::Handler for FakeDirectoryServer {
     fn read(
         &mut self,
         id: u32,
-        handle: String,
+        handle: SftpHandle,
         offset: u64,
         len: u32,
     ) -> impl Future<Output = std::result::Result<Data, Self::Error>> + Send {
-        let data = self.contents.get(&handle).cloned().unwrap_or_default();
+        let data = self
+            .contents
+            .get(&handle_key(handle))
+            .cloned()
+            .unwrap_or_default();
         async move {
             let start = usize::try_from(offset)
                 .unwrap_or(usize::MAX)
@@ -132,12 +146,13 @@ impl russh_sftp::server::Handler for FakeDirectoryServer {
     fn close(
         &mut self,
         id: u32,
-        handle: String,
+        handle: SftpHandle,
     ) -> impl Future<Output = std::result::Result<Status, Self::Error>> + Send {
+        let key = handle_key(handle);
         self.active_paths
             .lock()
             .expect("active path lock")
-            .remove(&handle);
+            .remove(&key);
         async move {
             Ok(Status {
                 id,

@@ -31,6 +31,7 @@ pub mod action_id {
     pub const SQL_TOGGLE_COMMENT: &str = "sql.toggle_comment";
     pub const TERMINAL_SEND_TAB: &str = "terminal.send_tab";
     pub const TERMINAL_SEND_SHIFT_TAB: &str = "terminal.send_shift_tab";
+    pub const TERMINAL_SEND_CTRL_B: &str = "terminal.send_ctrl_b";
     pub const TERMINAL_COPY: &str = "terminal.copy";
     pub const TERMINAL_PASTE: &str = "terminal.paste";
     pub const TERMINAL_SELECT_ALL: &str = "terminal.select_all";

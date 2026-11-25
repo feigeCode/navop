@@ -20,9 +20,10 @@ use std::sync::Arc;
 /// 只收可省略且不增加风险的读/执行入口：`terminal.control`、
 /// `terminal.write_command` 与 `terminal.write_keys` 要求显式 target，
 /// 因为它们是可控到单个前台程序的危险动作。
-const DEFAULT_TARGET_TOOLS: [(&str, ResourceKind); 2] = [
+const DEFAULT_TARGET_TOOLS: [(&str, ResourceKind); 3] = [
     ("terminal.read", ResourceKind::Terminal),
     ("terminal.exec", ResourceKind::Terminal),
+    ("terminal.tmux_list_panes", ResourceKind::Terminal),
 ];
 const TARGET_FIELD: &str = "target";
 const PROPERTIES_FIELD: &str = "properties";

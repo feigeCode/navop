@@ -162,6 +162,10 @@ pub enum SettingsPanelEvent {
     ShowLineTimestampsChanged(bool),
     /// 左边距显示行号开关
     ShowLineNumbersChanged(bool),
+    /// tmux 控制通道集成开关
+    TmuxIntegrationChanged(bool),
+    /// 自定义 tmux socket 路径
+    TmuxSocketChanged(String),
     /// 路径同步开关变更
     SyncPathChanged(bool),
     /// 终端面板右上角悬浮工具条（分屏 + 录制）显隐
@@ -220,6 +224,14 @@ pub struct SettingsPanel {
     show_line_timestamps: bool,
     /// 左边距展示行号
     show_line_numbers: bool,
+    /// tmux 控制通道集成
+    tmux_integration: bool,
+    /// 自定义 tmux socket
+    tmux_socket: String,
+    /// tmux socket 输入框
+    tmux_socket_input_state: Entity<InputState>,
+    /// tmux socket 输入变更抑制
+    suppress_tmux_socket_change: bool,
     /// 路径与终端同步开关
     sync_path: bool,
     /// 终端面板右上角悬浮工具条显隐
@@ -261,6 +273,8 @@ impl SettingsPanel {
         let selection_highlight = AppSettings::global(cx).terminal_selection_highlight;
         let show_line_timestamps = AppSettings::global(cx).terminal_show_timestamps;
         let show_line_numbers = AppSettings::global(cx).terminal_show_line_numbers;
+        let tmux_integration = AppSettings::global(cx).terminal_tmux_integration;
+        let tmux_socket = AppSettings::global(cx).terminal_tmux_socket.clone();
         let suggestion_popup_opacity = AppSettings::normalize_terminal_suggestion_popup_opacity(
             AppSettings::global(cx).terminal_suggestion_popup_opacity,
         );
@@ -281,6 +295,12 @@ impl SettingsPanel {
         });
         scrollback_lines_input_state.update(cx, |state: &mut InputState, cx| {
             state.set_value(&scrollback_lines.to_string(), window, cx);
+        });
+        let tmux_socket_input_state = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("Settings.tmux_socket_placeholder"))
+        });
+        tmux_socket_input_state.update(cx, |state: &mut InputState, cx| {
+            state.set_value(&tmux_socket, window, cx);
         });
 
         // 字体选择列表
@@ -382,6 +402,29 @@ impl SettingsPanel {
             },
         ));
 
+        let tmux_socket_entity = tmux_socket_input_state.clone();
+        subscriptions.push(cx.subscribe_in(
+            &tmux_socket_input_state,
+            window,
+            move |this, _state, event: &InputEvent, _window, cx| {
+                if this.suppress_tmux_socket_change {
+                    return;
+                }
+                match event {
+                    InputEvent::Change => {
+                        this.tmux_socket = tmux_socket_entity.read(cx).value().to_string();
+                        cx.notify();
+                    }
+                    InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                        let value = tmux_socket_entity.read(cx).value().trim().to_string();
+                        this.tmux_socket = value.clone();
+                        cx.emit(SettingsPanelEvent::TmuxSocketChanged(value));
+                    }
+                    _ => {}
+                }
+            },
+        ));
+
         // 订阅字体选择事件
         subscriptions.push(cx.subscribe_in(
             &font_select_state,
@@ -444,6 +487,10 @@ impl SettingsPanel {
             selection_highlight,
             show_line_timestamps,
             show_line_numbers,
+            tmux_integration,
+            tmux_socket,
+            tmux_socket_input_state,
+            suppress_tmux_socket_change: false,
             custom_highlights: Vec::new(),
             has_file_manager,
             focus_handle: cx.focus_handle(),
@@ -591,6 +638,26 @@ impl SettingsPanel {
 
     pub fn set_show_line_numbers(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.show_line_numbers = enabled;
+        cx.notify();
+    }
+
+    pub fn set_tmux_integration(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.tmux_integration = enabled;
+        cx.notify();
+    }
+
+    pub fn set_tmux_socket(
+        &mut self,
+        socket: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.tmux_socket = socket.to_string();
+        self.suppress_tmux_socket_change = true;
+        self.tmux_socket_input_state.update(cx, |state, cx| {
+            state.set_value(socket, window, cx);
+        });
+        self.suppress_tmux_socket_change = false;
         cx.notify();
     }
 
@@ -1049,6 +1116,68 @@ impl SettingsPanel {
                         min = AppSettings::MIN_TERMINAL_SCROLLBACK_LINES,
                         max = AppSettings::MAX_TERMINAL_SCROLLBACK_LINES
                     ))),
+            )
+    }
+
+    fn render_tmux_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.colors();
+        let border = colors.border;
+        let muted_fg = colors.muted_foreground;
+        let tmux_integration = self.tmux_integration;
+
+        v_flex()
+            .gap_3()
+            .p_3()
+            .border_t_1()
+            .border_color(border)
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(muted_fg)
+                            .child(t!("Settings.tmux_section").to_uppercase()),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(div().text_sm().child(t!("Settings.tmux_integration")))
+                            .child(
+                                Switch::new("tmux-integration-switch")
+                                    .checked(tmux_integration)
+                                    .small()
+                                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                                        this.tmux_integration = *checked;
+                                        cx.emit(SettingsPanelEvent::TmuxIntegrationChanged(
+                                            *checked,
+                                        ));
+                                    })),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted_fg)
+                                    .child(t!("Settings.tmux_socket")),
+                            )
+                            .child(
+                                Input::new(&self.tmux_socket_input_state)
+                                    .small()
+                                    .w_full(),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted_fg)
+                                    .child(t!("Settings.tmux_socket_help")),
+                            ),
+                    ),
             )
     }
 
@@ -2073,6 +2202,7 @@ impl Render for SettingsPanel {
                                 .child(self.render_font_section(cx))
                                 .child(self.render_scrollback_section(cx))
                                 .child(self.render_cursor_section(cx))
+                                .child(self.render_tmux_section(cx))
                                 .child(self.render_safety_section(cx))
                                 .when(has_file_manager, |el| {
                                     el.child(self.render_file_manager_section(cx))
