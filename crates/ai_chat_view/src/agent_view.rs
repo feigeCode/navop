@@ -7691,7 +7691,7 @@ impl AgentChatView {
             None => search_entry.into_any_element(),
         };
 
-        let mut header = PanelHeader::new("agent-chat-toolbar")
+        let header = PanelHeader::new("agent-chat-toolbar")
             .variant(PanelHeaderVariant::Toolbar)
             .horizontal_padding(one_ui::theme_geometry().spacing.space_4)
             .background(theme.background)
