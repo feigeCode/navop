@@ -71,9 +71,9 @@ Common:
     zh-CN: "无法打开连接链接：%{error}"
     zh-HK: "無法開啟連線連結：%{error}"
   deeplink_scheme_disabled:
-    en: "%{scheme}:// links are disabled. Enable them in Settings → General → Link protocols."
-    zh-CN: "%{scheme}:// 链接未启用，可在「设置 → 通用 → 链接协议」中开启。"
-    zh-HK: "%{scheme}:// 連結未啟用，可在「設定 → 一般 → 連結協定」中開啟。"
+    en: "%{scheme}:// links are disabled. Enable them in Settings → Link protocols."
+    zh-CN: "%{scheme}:// 链接未启用，可在「设置」的「链接协议」中开启。"
+    zh-HK: "%{scheme}:// 連結未啟用，可在「設定」的「連結協定」中開啟。"
   storage_unavailable:
     en: Application storage is unavailable
     zh-CN: 应用存储不可用
@@ -3083,9 +3083,9 @@ Settings:
         zh-CN: 允许 Navop 处理来自浏览器和文档的 ssh:// 与 sftp:// 链接。这些协议通常由终端或文件管理器接管，因此在勾选前保持关闭。
         zh-HK: 允許 Navop 處理來自瀏覽器與文件的 ssh:// 與 sftp:// 連結。這些協定通常由終端機或檔案管理器接管，因此在勾選前保持關閉。
       ssh_group_description:
-        en: Let Navop handle ssh:// links from browsers and documents. They normally belong to the terminal, so this stays off until enabled here.
-        zh-CN: 允许 Navop 处理来自浏览器和文档的 ssh:// 链接。这类链接通常由终端接管，因此在勾选前保持关闭。
-        zh-HK: 允許 Navop 處理來自瀏覽器與文件的 ssh:// 連結。這類連結通常由終端機接管，因此在勾選前保持關閉。
+        en: Let Navop handle ssh:// links and JumpServer jms:// links from browsers and documents. ssh:// normally belongs to the terminal, so it stays off until enabled here; jms:// is on by default.
+        zh-CN: 允许 Navop 处理来自浏览器和文档的 ssh:// 链接与 JumpServer 的 jms:// 链接。ssh:// 通常由终端接管，因此在勾选前保持关闭；jms:// 默认开启。
+        zh-HK: 允許 Navop 處理來自瀏覽器與文件的 ssh:// 連結與 JumpServer 的 jms:// 連結。ssh:// 通常由終端機接管，因此在勾選前保持關閉；jms:// 預設開啟。
       sftp_group_description:
         en: Let Navop handle sftp:// links from browsers and documents. They normally belong to the file manager, so this stays off until enabled here.
         zh-CN: 允许 Navop 处理来自浏览器和文档的 sftp:// 链接。这类链接通常由文件管理器接管，因此在勾选前保持关闭。
@@ -3106,6 +3106,14 @@ Settings:
         en: Open the SFTP pane at the directory in the link. Credentials are used for this session only and never saved.
         zh-CN: 在链接指定的目录打开 SFTP 面板。凭据只用于本次会话，不会保存。
         zh-HK: 在連結指定的目錄開啟 SFTP 面板。憑證只用於本次工作階段，不會儲存。
+      jms:
+        en: Handle jms:// links (JumpServer)
+        zh-CN: 接管 jms:// 链接（JumpServer）
+        zh-HK: 接管 jms:// 連結（JumpServer）
+      jms_desc:
+        en: Open the JumpServer asset carried by the link in a temporary SSH session. The one-time token is used for this session only and never saved.
+        zh-CN: 用链接里的一次性 token 临时打开 JumpServer 资产。token 只用于本次会话，不会保存。
+        zh-HK: 用連結裡的一次性 token 臨時開啟 JumpServer 資產。token 只用於本次工作階段，不會儲存。
 
     # 语言设置
     Language:
