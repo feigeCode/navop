@@ -139,6 +139,7 @@ fn runtime_catalog_registers_panels_with_shell_app() {
             title: Some("监控".to_string()),
             icon: None,
             anchor: "terminal-sidebar".to_string(),
+            placement: crate::extension::manifest::PanelPlacement::Bottom,
             order: 10,
             when: None,
         },
@@ -147,6 +148,7 @@ fn runtime_catalog_registers_panels_with_shell_app() {
             title: Some("快捷".to_string()),
             icon: None,
             anchor: "terminal-sidebar".to_string(),
+            placement: Default::default(),
             order: -5,
             when: Some("".to_string()),
         },
@@ -166,6 +168,15 @@ fn runtime_catalog_registers_panels_with_shell_app() {
     assert_eq!("监控", monitor.title);
     // entry 继承 shellApp.entry。
     assert!(monitor.entry_path.ends_with("ui/explorer.js"));
+    // placement 注册进 catalog，缺省为右侧。
+    assert_eq!(
+        crate::extension::manifest::PanelPlacement::Bottom,
+        monitor.placement
+    );
+    assert_eq!(
+        crate::extension::manifest::PanelPlacement::Right,
+        panels[0].placement
+    );
     // 不存在的 anchor 查不到。
     assert!(catalog.panels_for_anchor("main-sidebar").is_empty());
 }
@@ -181,6 +192,7 @@ fn runtime_catalog_rejects_panels_without_shell_app() {
         title: Some("孤儿面板".to_string()),
         icon: None,
         anchor: "terminal-sidebar".to_string(),
+        placement: Default::default(),
         order: 0,
         when: None,
     }];
@@ -1017,6 +1029,7 @@ fn runtime_catalog_panel_inherits_app_icon_when_panel_has_none() {
         title: Some("检查器".to_string()),
         icon: None,
         anchor: "db-sidebar".to_string(),
+        placement: Default::default(),
         order: 0,
         when: None,
     });
@@ -1210,6 +1223,7 @@ fn catalog_toolbox_excludes_apps_with_sidebar_panels() {
         title: None,
         icon: None,
         anchor: "terminal-sidebar".to_string(),
+        placement: Default::default(),
         order: 0,
         when: None,
     });

@@ -17,7 +17,16 @@ fn icon_from_path(path: Option<&std::path::Path>) -> Icon {
     match path {
         Some(path) if path.is_file() => {
             let asset = one_core::storage::connection_icon::local_icon_asset_path(path);
-            Icon::default().path(asset).color()
+            let icon = Icon::default().path(asset);
+            // currentColor 线稿必须走 mono/svg，color/img 不会替它解析主题色。
+            if std::fs::read_to_string(path)
+                .map(|source| source.contains("currentColor"))
+                .unwrap_or(false)
+            {
+                icon.mono()
+            } else {
+                icon.color()
+            }
         }
         _ => Icon::new(IconName::ExtensionsLine),
     }
@@ -86,7 +95,7 @@ pub(crate) struct ExtensionPanelEntry {
     pub(crate) view: Option<AnyView>,
     /// 是否打开。
     pub(crate) open: bool,
-    /// 停靠位置（默认右侧）。
+    /// 停靠位置（首建时取清单 `placement`，缺省右侧；之后以用户移动为准）。
     pub(crate) placement: SidebarPlacement,
 }
 
@@ -99,7 +108,7 @@ impl ExtensionPanelEntry {
             order: spec.order,
             view: None,
             open: false,
-            placement: SidebarPlacement::Right,
+            placement: spec.placement,
         }
     }
 }
@@ -114,6 +123,7 @@ mod tests {
             title: SharedString::new(format!("面板 {id}")),
             icon_path: None,
             order,
+            placement: SidebarPlacement::Right,
         }
     }
 
@@ -132,6 +142,20 @@ mod tests {
         );
         let ids: Vec<&str> = merged.iter().map(|e| e.id.as_ref()).collect();
         assert_eq!(ids, vec!["c:zero", "a:one", "b:two"]);
+    }
+
+    #[test]
+    fn new_panel_uses_the_manifest_default_placement() {
+        for placement in [
+            SidebarPlacement::Left,
+            SidebarPlacement::Right,
+            SidebarPlacement::Bottom,
+        ] {
+            let mut declared = spec("ext.a:p", 0);
+            declared.placement = placement;
+            let merged = sync_extension_panels(Vec::new(), vec![declared]);
+            assert_eq!(placement, merged[0].placement);
+        }
     }
 
     #[test]
@@ -193,6 +217,7 @@ mod tests {
             title: SharedString::new("旧标题"),
             icon_path: None,
             order: 0,
+            placement: SidebarPlacement::Right,
         })];
         let merged = sync_extension_panels(current, vec![spec("ext.a:p", 0)]);
         assert_eq!(merged[0].title.as_ref(), "面板 ext.a:p");

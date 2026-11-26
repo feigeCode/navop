@@ -2411,6 +2411,22 @@ impl TerminalSidebar {
         }))
     }
 
+    /// 「+」：打开扩展市场的复合扩展列表，让用户发现可挂进侧栏的面板。
+    fn render_marketplace_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let style = ButtonCustomVariant::new(cx)
+            .foreground(self.colors.foreground)
+            .hover(self.colors.muted)
+            .active(self.colors.muted);
+        IconButton::new("terminal-sidebar-add-extension", IconName::Plus)
+            .hit_size(Size::Size(one_ui::theme_geometry().layout.global_rail_item))
+            .glyph_size(OneIconSize::Small)
+            .custom(style)
+            .tooltip(t!("Sidebar.add_extension_panel").to_string())
+            .on_click(|_, window, cx| {
+                one_core::extension_marketplace::open_composite(window, cx);
+            })
+    }
+
     /// 渲染工具栏
     pub fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let border_color = self.colors.border;
@@ -2444,7 +2460,11 @@ impl TerminalSidebar {
                             .iter()
                             .map(|entry| self.render_extension_toolbar_button(entry, window, cx))
                             .collect::<Vec<_>>(),
-                    ),
+                    )
+                    .when(one_core::extension_marketplace::is_available(cx), |this| {
+                        this.child(div().w(px(16.0)).h(px(1.0)).my_1().bg(self.colors.border))
+                            .child(self.render_marketplace_button(cx))
+                    }),
             )
             .into_any_element()
     }
@@ -2582,6 +2602,26 @@ impl TerminalSidebarToolbar {
         })
     }
 
+    fn render_marketplace_button(
+        &self,
+        item_size: Size,
+        colors: &TerminalColors,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let style = ButtonCustomVariant::new(cx)
+            .foreground(colors.foreground)
+            .hover(colors.muted)
+            .active(colors.muted);
+        IconButton::new("terminal-detached-toolbar-add-extension", IconName::Plus)
+            .hit_size(item_size)
+            .glyph_size(OneIconSize::Small)
+            .custom(style)
+            .tooltip(t!("Sidebar.add_extension_panel").to_string())
+            .on_click(|_, window, cx| {
+                one_core::extension_marketplace::open_composite(window, cx);
+            })
+    }
+
     fn render_button(
         &self,
         button: TerminalToolbarButtonSnapshot,
@@ -2650,7 +2690,17 @@ impl Render for TerminalSidebarToolbar {
                     })
                     .children(snapshot.extension_buttons.iter().cloned().map(|button| {
                         self.render_extension_button(button, item_size, &snapshot.colors, cx)
-                    })),
+                    }))
+                    .when(one_core::extension_marketplace::is_available(cx), |this| {
+                        this.child(
+                            div()
+                                .w(px(16.0))
+                                .h(px(1.0))
+                                .my_1()
+                                .bg(snapshot.colors.border),
+                        )
+                        .child(self.render_marketplace_button(item_size, &snapshot.colors, cx))
+                    }),
             )
             .when_some(save_button, |this, button| {
                 this.child(v_flex().w_full().items_center().pb_2().child(button))
@@ -2755,6 +2805,18 @@ mod tests {
     use one_core::storage::{ConnectionType, StoredConnection};
     use std::collections::BTreeMap;
     use terminal::terminal::TerminalConnectionKind;
+
+    #[test]
+    fn marketplace_plus_button_opens_composite_extensions() {
+        let source = include_str!("mod.rs");
+        assert!(source.contains("terminal-sidebar-add-extension"));
+        assert!(
+            source.contains("terminal-detached-toolbar-add-extension"),
+            "工作区使用分离式工具栏，也必须渲染市场入口"
+        );
+        assert!(source.contains("one_core::extension_marketplace::open_composite(window, cx)"));
+        assert!(source.contains("Sidebar.add_extension_panel"));
+    }
 
     fn stored_connection(id: i64, name: &str, connection_type: ConnectionType) -> StoredConnection {
         StoredConnection {
@@ -3089,6 +3151,7 @@ mod tests {
             title: gpui::SharedString::new(id),
             icon_path: None,
             order: 0,
+            placement,
         });
         entry.placement = placement;
         entry

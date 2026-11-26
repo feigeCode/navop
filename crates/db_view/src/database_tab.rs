@@ -49,6 +49,10 @@ const PANEL_MIN_SIZE: Pixels = px(100.0);
 const TREE_PANEL_DEFAULT_SIZE: Pixels = px(250.0);
 const CHAT_SIDEBAR_MIN_WIDTH: Pixels = px(360.0);
 const DATABASE_TOOLS_SIDEBAR_DEFAULT_WIDTH: Pixels = px(400.0);
+/// 扩展面板停靠底部时的初始高度（通栏，不参与左右侧的拖拽调宽）。
+const DATABASE_EXTENSION_BOTTOM_PANEL_HEIGHT: Pixels = px(300.0);
+/// 底部扩展面板可拖到的最小高度，避免被拖成一条看不见的缝。
+const DATABASE_EXTENSION_BOTTOM_PANEL_MIN_HEIGHT: Pixels = px(120.0);
 
 fn resized_tree_panel_size(
     mouse_x: Pixels,
@@ -142,6 +146,8 @@ fn database_tab_icon_with_registry_loader(
 enum ResizingPanel {
     TreePanel,
     Sidebar,
+    /// 底部扩展面板的上下拖拽。
+    BottomExtension,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,6 +169,7 @@ pub struct DatabaseTabView {
     _subscriptions: Vec<gpui::Subscription>,
     tree_panel_size: Pixels,
     sidebar_panel_size: Pixels,
+    bottom_extension_panel_height: Pixels,
     sidebar_render_mode: DatabaseSidebarRenderMode,
     resizing: Option<ResizingPanel>,
     bounds: Bounds<Pixels>,
@@ -317,6 +324,7 @@ impl DatabaseTabView {
             _subscriptions: subscriptions,
             tree_panel_size: TREE_PANEL_DEFAULT_SIZE,
             sidebar_panel_size: DATABASE_TOOLS_SIDEBAR_DEFAULT_WIDTH,
+            bottom_extension_panel_height: DATABASE_EXTENSION_BOTTOM_PANEL_HEIGHT,
             sidebar_render_mode: DatabaseSidebarRenderMode::Embedded,
             resizing: None,
             bounds: Bounds::default(),
@@ -588,6 +596,27 @@ impl DatabaseTabView {
             })
     }
 
+    fn render_bottom_extension_resize_handle(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let view = cx.entity().clone();
+
+        resize_handle::<ResizePanel, ResizePanel>(
+            "database-extension-bottom-resize",
+            Axis::Vertical,
+        )
+        .inline()
+        .on_drag(ResizePanel, move |info, _, _, cx| {
+            cx.stop_propagation();
+            view.update(cx, |view, cx| {
+                view.resizing = Some(ResizingPanel::BottomExtension);
+                cx.notify();
+            });
+            cx.new(|_| info.deref().clone())
+        })
+    }
+
     fn resize(
         &mut self,
         mouse_position: Point<Pixels>,
@@ -618,6 +647,14 @@ impl DatabaseTabView {
                 let upper = max_size.min(SIDEBAR_MAX_WIDTH);
                 let lower = SIDEBAR_MIN_WIDTH.max(CHAT_SIDEBAR_MIN_WIDTH).min(upper);
                 self.sidebar_panel_size = new_size.clamp(lower, upper);
+            }
+            ResizingPanel::BottomExtension => {
+                // 面板贴着内容区底部，鼠标位置决定它的高度。
+                let new_size = self.bounds.bottom() - mouse_position.y;
+                let upper = (self.bounds.size.height - PANEL_MIN_SIZE)
+                    .max(DATABASE_EXTENSION_BOTTOM_PANEL_MIN_HEIGHT);
+                self.bottom_extension_panel_height =
+                    new_size.clamp(DATABASE_EXTENSION_BOTTOM_PANEL_MIN_HEIGHT, upper);
             }
         }
 
@@ -1029,6 +1066,14 @@ impl TabContent for DatabaseTabView {
             return Vec::new();
         }
 
+        // 底部通栏面板由页签自己渲染（外置侧栏模式下宿主 dock 看不到内容区），
+        // 此时侧栏只剩工具条，不能按「面板可见」给它留出整条宽度。
+        let database_tools_panel_visible = {
+            let sidebar = self.sidebar.read(_cx);
+            sidebar.is_panel_visible()
+                && sidebar.active_extension_placement() != Some(SidebarPlacement::Bottom)
+        };
+
         vec![
             SidebarContribution {
                 id: SidebarPanelId::new(self.db_tree_view.entity_id(), "database.tree"),
@@ -1055,11 +1100,13 @@ impl TabContent for DatabaseTabView {
                 title: SharedString::from("Database Tools"),
                 icon: IconName::Bot,
                 view: self.sidebar.clone().into(),
+                // Database Tools 的初始停靠与扩展面板的 placement 无关：
+                // 扩展要求的是它自己的面板位置，不是工具侧栏的位置。
                 default_placement: SidebarPlacement::Right,
                 policy: database_tools_sidebar_policy(),
                 style: SidebarPanelStyle::default(),
                 size: database_tools_sidebar_size(
-                    self.sidebar.read(_cx).is_panel_visible(),
+                    database_tools_panel_visible,
                     self.sidebar_panel_size,
                 ),
                 chrome: database_tools_sidebar_chrome(),
@@ -1257,6 +1304,54 @@ mod tests {
         );
     }
 
+    /// Database Tools 的初始停靠是它自己的事，不跟着扩展面板的 placement 走。
+    ///
+    /// 这里只看生产代码（`include_str!` 会把测试模块也读进来）。
+    #[test]
+    fn database_tools_tab_placement_does_not_follow_extension_placement() {
+        let source = include_str!("database_tab.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+
+        assert!(
+            production.contains("default_placement: SidebarPlacement::Right,"),
+            "Database Tools 页签的初始停靠应固定为右侧"
+        );
+
+        let tools_start = production
+            .find("SharedString::from(\"Database Tools\")")
+            .expect("Database Tools 页签贡献");
+        let tools = &production[tools_start..];
+        let tools = &tools[..tools
+            .find("database_tools_sidebar_size(")
+            .expect("Database Tools 尺寸规格")];
+        assert!(
+            !tools.contains("active_extension_placement()"),
+            "Database Tools 的默认停靠又变回跟随扩展面板了"
+        );
+    }
+
+    /// 外置侧栏模式下内容区由宿主 dock 包着，底部面板只能由页签自己渲染。
+    #[test]
+    fn external_sidebar_mode_still_renders_the_bottom_extension_panel() {
+        let source = include_str!("database_tab.rs");
+        // `impl Render` 后面紧跟测试模块；不截掉测试自身，断言里的字面量会自指恒真。
+        let render = source
+            .rsplit_once("impl Render for DatabaseTabView")
+            .expect("database tab render implementation")
+            .1;
+        let render = render.split("#[cfg(test)]").next().unwrap_or(render);
+
+        assert!(render.contains("DatabaseSidebarRenderMode::External"));
+        assert!(
+            render.contains("render_bottom_extension_panel("),
+            "外置侧栏模式没有画底部扩展面板，`placement: bottom` 会彻底不可见"
+        );
+        assert!(
+            render.contains(".on_prepaint("),
+            "外置侧栏模式需要自己的 bounds 才能算出底部面板的拖拽高度"
+        );
+    }
+
     #[test]
     fn tree_panel_resize_uses_database_tab_origin_in_nested_layouts() {
         let view_bounds = Bounds {
@@ -1281,9 +1376,150 @@ mod tests {
             .expect("database tab render implementation")
             .1;
 
-        assert!(render_implementation.contains(".on_prepaint(move |bounds, _, cx|"));
-        assert!(render_implementation.contains("view.bounds = bounds"));
+        // bounds 捕获在 connected-workspace 助手里（底部停靠面板需要包一层），
+        // 因此 on_prepaint 断言针对整个文件，window.bounds 禁令仍只看 render。
+        assert!(source.contains(".on_prepaint("));
+        assert!(source.contains("view.bounds = bounds"));
         assert!(!render_implementation.contains("window.bounds()"));
+    }
+}
+
+impl DatabaseTabView {
+    /// 侧栏在内容区左/右边缘的容器；`visible = false` 时只留工具条宽度。
+    fn render_side_sidebar(
+        &mut self,
+        visible: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if visible {
+            return div()
+                .relative()
+                .h_full()
+                .w(self.sidebar_panel_size)
+                .flex_shrink_0()
+                .overflow_hidden()
+                .child(self.render_sidebar_resize_handle(window, cx))
+                .child(self.sidebar.clone())
+                .into_any_element();
+        }
+        div()
+            .h_full()
+            .w(TOOLBAR_WIDTH)
+            .flex_shrink_0()
+            .overflow_hidden()
+            .child(self.sidebar.clone())
+            .into_any_element()
+    }
+
+    /// 扩展声明 `placement: "bottom"` 时，面板渲染成内容区下方的通栏。
+    fn render_bottom_extension_panel(
+        &mut self,
+        id: SharedString,
+        title: SharedString,
+        view: gpui::AnyView,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let sidebar = self.sidebar.clone();
+        let theme = cx.theme();
+        let border_color = theme.border;
+        let background = theme.background;
+        v_flex()
+            .w_full()
+            .h(self.bottom_extension_panel_height)
+            .flex_shrink_0()
+            .bg(background)
+            .child(self.render_bottom_extension_resize_handle(cx))
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .h(one_ui::theme_geometry().layout.panel_header)
+                    .items_center()
+                    .px_2()
+                    .border_b_1()
+                    .border_color(border_color)
+                    .child(div().flex_1().min_w_0().truncate().text_sm().child(title))
+                    .child(
+                        one_ui::IconButton::new(
+                            format!("database-sidebar-ext-bottom-close-{id}"),
+                            IconName::Close,
+                        )
+                        .glyph_size(one_ui::IconSize::Small)
+                        .tooltip(t!("DatabaseSidebar.close_extension").to_string())
+                        .on_click(move |_, _, cx| {
+                            sidebar.update(cx, |sidebar, cx| {
+                                sidebar.close_extension_panel(&id, cx);
+                            });
+                        }),
+                    ),
+            )
+            .child(div().flex_1().min_h_0().overflow_hidden().child(view))
+            .into_any_element()
+    }
+
+    fn render_connected_workspace(
+        &mut self,
+        view: Entity<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let border_color = cx.theme().border;
+        let tree_panel_size = self.tree_panel_size;
+        let sidebar_visible = self.sidebar.read(cx).is_panel_visible();
+        let placement = self
+            .sidebar
+            .read(cx)
+            .active_extension_placement()
+            .unwrap_or(SidebarPlacement::Right);
+        let bottom_panel = self.sidebar.read(cx).bottom_extension_panel();
+        let docked_bottom = bottom_panel.is_some();
+        let sidebar_left = placement == SidebarPlacement::Left && !docked_bottom;
+
+        let row = h_flex()
+            .size_full()
+            .on_prepaint({
+                let bounds_view = view.clone();
+                move |bounds, _, cx| {
+                    bounds_view.update(cx, |view, _| {
+                        view.bounds = bounds;
+                    });
+                }
+            })
+            .child(
+                div()
+                    .relative()
+                    .h_full()
+                    .w(tree_panel_size)
+                    .flex_shrink_0()
+                    .border_r_1()
+                    .border_color(border_color)
+                    .child(self.db_tree_view.clone())
+                    .child(self.render_tree_resize_handle(window, cx)),
+            )
+            .when(sidebar_left, |this| {
+                this.child(self.render_side_sidebar(sidebar_visible, window, cx))
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .min_w_0()
+                    .child(self.render_workspace_content(cx)),
+            )
+            .when(!sidebar_left, |this| {
+                this.child(self.render_side_sidebar(sidebar_visible && !docked_bottom, window, cx))
+            })
+            .child(ResizeEventHandler { view });
+
+        let Some((id, title, content)) = bottom_panel else {
+            return row.into_any_element();
+        };
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .child(div().flex_1().min_h_0().child(row))
+            .child(self.render_bottom_extension_panel(id, title, content, cx))
+            .into_any_element()
     }
 }
 
@@ -1291,14 +1527,33 @@ impl Render for DatabaseTabView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_connected_flag = *self.is_connected.read(cx);
         let view = cx.entity().clone();
-        let sidebar_visible = self.sidebar.read(cx).is_panel_visible();
-        let sidebar_panel_size = self.sidebar_panel_size;
 
         if is_connected_flag && self.sidebar_render_mode == DatabaseSidebarRenderMode::External {
-            return div()
+            // 外置侧栏模式下内容区由宿主 dock 包着，底部通栏只能由页签自己画，
+            // 否则侧栏与页签都以为对方会渲染，`placement: "bottom"` 就完全不可见。
+            let bottom_panel = self.sidebar.read(cx).bottom_extension_panel();
+            let bounds_view = view.clone();
+            let mut workspace = v_flex()
                 .track_focus(&self.focus_handle)
                 .size_full()
-                .child(self.render_workspace_content(cx));
+                .min_h_0()
+                .on_prepaint(move |bounds, _, cx| {
+                    bounds_view.update(cx, |view, _| {
+                        view.bounds = bounds;
+                    });
+                })
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .child(self.render_workspace_content(cx)),
+                );
+            if let Some((id, title, content)) = bottom_panel {
+                workspace =
+                    workspace.child(self.render_bottom_extension_panel(id, title, content, cx));
+            }
+            // 拖拽调高底部面板需要这个元素持续上报鼠标位移。
+            return workspace.child(ResizeEventHandler { view });
         }
 
         div()
@@ -1307,66 +1562,9 @@ impl Render for DatabaseTabView {
             .when(!is_connected_flag, |el: gpui::Div| {
                 el.child(self.render_connection_status(cx))
             })
-            .when(
-                is_connected_flag
-                    && self.sidebar_render_mode == DatabaseSidebarRenderMode::Embedded,
-                |el: gpui::Div| {
-                    let border_color = cx.theme().border;
-                    let tree_panel_size = self.tree_panel_size;
-                    let bounds_view = view.clone();
-
-                    el.child(
-                        h_flex()
-                            .size_full()
-                            .on_prepaint(move |bounds, _, cx| {
-                                bounds_view.update(cx, |view, _| {
-                                    view.bounds = bounds;
-                                });
-                            })
-                            .child(
-                                div()
-                                    .relative()
-                                    .h_full()
-                                    .w(tree_panel_size)
-                                    .flex_shrink_0()
-                                    .border_r_1()
-                                    .border_color(border_color)
-                                    .child(self.db_tree_view.clone())
-                                    .child(self.render_tree_resize_handle(window, cx)),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .h_full()
-                                    .min_w_0()
-                                    .child(self.render_workspace_content(cx)),
-                            )
-                            .when(sidebar_visible, |this| {
-                                this.child(
-                                    div()
-                                        .relative()
-                                        .h_full()
-                                        .w(sidebar_panel_size)
-                                        .flex_shrink_0()
-                                        .overflow_hidden()
-                                        .child(self.render_sidebar_resize_handle(window, cx))
-                                        .child(self.sidebar.clone()),
-                                )
-                            })
-                            .when(!sidebar_visible, |this| {
-                                this.child(
-                                    div()
-                                        .h_full()
-                                        .w(TOOLBAR_WIDTH)
-                                        .flex_shrink_0()
-                                        .overflow_hidden()
-                                        .child(self.sidebar.clone()),
-                                )
-                            })
-                            .child(ResizeEventHandler { view }),
-                    )
-                },
-            )
+            .when(is_connected_flag, |el: gpui::Div| {
+                el.child(self.render_connected_workspace(view.clone(), window, cx))
+            })
     }
 }
 

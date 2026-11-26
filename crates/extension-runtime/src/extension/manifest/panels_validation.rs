@@ -110,6 +110,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::extension::manifest::PanelPlacement;
 
     fn manifest_with(panels: serde_json::Value) -> Manifest {
         serde_json::from_value(json!({
@@ -232,6 +233,36 @@ mod tests {
         }]));
         validate_panels(&manifest).expect("anchor 缺省即 terminal-sidebar");
         assert_eq!(manifest.contributes.panels[0].anchor, "terminal-sidebar");
+    }
+
+    #[test]
+    fn placement_defaults_to_right_and_accepts_all_three_edges() {
+        let manifest = manifest_with(json!([
+            { "id": "a", "title": "默认" },
+            { "id": "b", "title": "左", "placement": "left" },
+            { "id": "c", "title": "下", "placement": "bottom" }
+        ]));
+        validate_panels(&manifest).expect("三种停靠位置都合法");
+        assert_eq!(PanelPlacement::Right, manifest.contributes.panels[0].placement);
+        assert_eq!(PanelPlacement::Left, manifest.contributes.panels[1].placement);
+        assert_eq!(PanelPlacement::Bottom, manifest.contributes.panels[2].placement);
+    }
+
+    #[test]
+    fn unknown_placement_is_rejected_at_parse_time() {
+        let result = serde_json::from_value::<Manifest>(json!({
+            "schema_version": 1,
+            "id": "com.example.tools",
+            "name": "测试扩展",
+            "version": "0.1.0",
+            "engines": { "onetcli": ">=0.1.0", "nsh": "0.3.0" },
+            "permissions": ["shell:exec"],
+            "contributes": {
+                "shellApp": { "title": "app", "entry": "ui/dist/bundle.js" },
+                "panels": [{ "id": "a", "placement": "top" }]
+            }
+        }));
+        assert!(result.is_err(), "未知 placement 必须在安装期被拒绝");
     }
 
     #[test]

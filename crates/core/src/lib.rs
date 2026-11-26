@@ -13,6 +13,7 @@ pub mod connection_notifier;
 pub mod contributions;
 pub mod crypto;
 pub mod dock;
+pub mod extension_marketplace;
 pub mod gpui_tokio;
 pub mod key_storage;
 pub mod keybindings;

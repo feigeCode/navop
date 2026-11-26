@@ -31,6 +31,7 @@ mod dev_extension_registry;
 #[cfg(feature = "shell")]
 mod dev_host_ops;
 mod env_file;
+mod extension_panels;
 #[cfg(feature = "nsh-host")]
 mod extension_update;
 mod file_association;
@@ -650,6 +651,11 @@ where
         // 面板视图同样由 nsh 宿主创建。
         #[cfg(all(feature = "nsh-db", feature = "database"))]
         db_extension_panels::init_database_extension_panels(cx);
+        // 终端 / 数据库侧栏的「+」：跳到扩展市场的复合扩展列表。
+        // 无 nsh 宿主的构建不注册，侧栏因此也不会渲染这个入口。
+        if nsh_ui_available() {
+            extension_panels::init(cx);
+        }
         // 资源工作台的 terminal 页面需要宿主提供可嵌入终端;未注册时
         // 工作台渲染「此构建不可用」而不是崩溃。
         // dev 工程注册表与 `navop.dev` 操作集：nsh 宿主接管时也要装，

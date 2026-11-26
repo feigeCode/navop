@@ -10,6 +10,7 @@
 
 use std::{
     collections::HashMap,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -491,6 +492,10 @@ impl NshTab {
             asset_base: program.asset_base,
             host: self.channel.clone(),
             context: nsh_engine::EngineContext::default().with(api),
+            // 页面数据（`nsh/storage` 的 `storage.json`、窗口位置等）跟
+            // Navop 的数据目录走：不传时 nsh 退回系统的 Application
+            // Support 根目录，备份/迁移/卸载都管不到。
+            data_dir: nsh_data_dir(),
             // 原生组件（`<Terminal/>` 这类）按**本页面**的注册表注入：
             // 每视图一份，工厂里钉死扩展身份与清单权限。
             components: super::native::components_for(
@@ -1007,6 +1012,21 @@ impl Render for NshTab {
 ///
 /// 图标文件走 `local-icon/` 资产命名空间（应用 `AssetSource` 直接读盘，
 /// SVG 以图像方式解码可保留原色）；文件缺失或没声明时用通用扩展图标。
+/// nsh 页面数据的根目录：`<Navop 数据目录>/nsh`。
+///
+/// 每个页面再由 nsh 按自己 `nsh.json` 的 `id` 在下面各占一个目录
+/// （`storage.json` 就写在 `<root>/<app id>/storage.json`）。不传
+/// `data_dir` 时 nsh 会退回系统的 `Application Support` 根目录，页面数据
+/// 就散落在 Navop 的数据目录之外，Navop 的备份、迁移和卸载都管不到。
+fn nsh_data_dir() -> Option<PathBuf> {
+    one_core::app_dirs::data_dir().map(|data_dir| nsh_data_dir_in(&data_dir))
+}
+
+/// 纯路径拼法：`data_dir` 下专给 nsh 页面的子目录。
+fn nsh_data_dir_in(data_dir: &Path) -> PathBuf {
+    data_dir.join("nsh")
+}
+
 fn extension_icon(icon_path: Option<&std::path::Path>) -> gpui_component::Icon {
     use gpui_component::Icon;
     match icon_path {
@@ -1207,7 +1227,7 @@ impl NshTab {
 
 #[cfg(test)]
 mod tests {
-    use super::extension_icon;
+    use super::{extension_icon, nsh_data_dir_in};
 
     /// 标签页图标：声明的文件存在就用它，缺失/没声明时退回通用扩展图标，
     /// 不 panic、也不返回 None（宁可有占位图标，也别在标签栏留空槽）。
@@ -1220,5 +1240,28 @@ mod tests {
         let _ = extension_icon(Some(&file));
         let _ = extension_icon(Some(std::path::Path::new("/definitely/not/here.svg")));
         let _ = extension_icon(None);
+    }
+
+    /// 页面的数据根是 `<Navop 数据目录>/nsh`：扩展页面存的东西（面板记录、
+    /// 窗口位置）要跟着 Navop 的数据目录走，不能落在系统 Application
+    /// Support 根目录下。
+    #[test]
+    fn nsh_pages_keep_their_data_under_navops_data_dir() {
+        assert_eq!(
+            nsh_data_dir_in(std::path::Path::new("/data/navop")),
+            std::path::Path::new("/data/navop/nsh")
+        );
+    }
+
+    /// 光有拼法不够：装载页面的 `AppOptions` 必须真的把它传下去。少了这行，
+    /// nsh 会静默退回系统目录，而这个测试是唯一会红的地方。
+    #[test]
+    fn app_options_pass_the_data_dir_to_the_page() {
+        let source = include_str!("tab.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+        assert!(
+            production.contains("data_dir: nsh_data_dir(),"),
+            "AppOptions 没有把 data_dir 传给 nsh 页面"
+        );
     }
 }

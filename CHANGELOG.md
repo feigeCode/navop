@@ -4,6 +4,58 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.24.2] - 2026-11-26
+
+#### 更新内容
+
+- 扩展面板可在清单里声明停靠位置（左 / 右 / 底，默认右侧），终端与数据库侧栏都按声明停靠，用户手动拖动后以手动位置优先；数据库侧栏的底部面板占满内容区宽度，高度可拖拽调整。
+- 侧栏「+」直接打开扩展市场并只看复合扩展；新增「服务器日志」复合扩展（底部通栏，按记录 tail / grep 远程日志）与「服务器容器」复合扩展（右侧页签，进程、容器、镜像、卷、网络、Compose 与 Kubernetes）。
+- 终端搜索增加区分大小写、整词、正则三个开关；整词匹配对中文等非 ASCII 文本同样生效，正则模式下不会改写用户写的模式。
+- 应用外壳布局重构：统一外壳配色层次、浮动侧边栏与主页首屏快捷入口和分组概览，首页侧栏品牌区加 logo 并收掉多余留白。
+- 终端、数据库、笔记等资源的侧栏展开状态按资源分别记忆，切回来仍保持原来的开合；笔记页恢复顶部开关。
+- 终端集成 tmux 控制通道与窗格工作流，可在普通终端里按需启用 tmux 工具。
+- SSH：基础认证区直接提供 keyboard-interactive 开关，设置页增加 jms:// 接管开关；升级 russh 0.65.4 与 russh-sftp 4.0.0。
+- 数据库：单条记录支持以 JSON 查看，新增 F5 刷新与 Ctrl+S 保存快捷键。
+- 资源监控改为按连接开启，默认不采集；需要时在连接设置里打开。
+- 生成 SSH 密钥后保留并展示公钥，可随时重新复制。
+
+#### 修复与优化
+
+- macOS 系统通知改走 UNUserNotificationCenter，修复设置页「发送测试通知」点击后完全没有反应的问题。
+- 修复终端主动断开重连时仍复用旧共享 SSH transport 导致重连失败，以及未知主机确认后共享会话重试不正确的问题。
+- nsh 页面（扩展 UI）的本地数据改存到 Navop 数据目录下，可随 Navop 备份、迁移与卸载一起处理，不再散落在系统 Application Support 根目录。
+- 修复数据库 WHERE 与 ORDER BY 过滤条件可以写成多行的问题，现在严格单行。
+- Agent 保留原始工具名并快速终止无效工具调用，减少一次无效请求后的长时间等待。
+- ACP 兜底目录补上 ~/.kimi-code/bin，GUI 里可以直接解析到 kimi。
+- 修复单条记录 JSON 查看图标、外壳侧栏拖动线、高 DPI 下 RDP 光标闪烁等细节问题。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.24.2) 下载桌面端安装包。
+
+---
+
+#### What's New
+
+- Extension panels can now declare a dock placement in their manifest (left / right / bottom, right by default). The terminal and database sidebars follow it on first open, and manual drags take precedence afterwards. The database bottom panel spans the content width and its height can be dragged.
+- The sidebar "+" button opens the extension marketplace filtered to composite extensions. Two new composite extensions ship with this release: Server Logs (bottom panel, tails and greps remote logs per record) and Server Containers (right panel with process, container, image, volume, network, Compose and Kubernetes tabs).
+- Terminal search gains match-case, whole-word and regex toggles. Whole-word matching also works for CJK text, and regex mode never rewrites the pattern you typed.
+- The app shell layout was reworked: unified surface hierarchy, floating sidebar, quick actions and group overview on the home screen, plus a brand logo in the home sidebar header.
+- Sidebar expand state is now remembered per resource (terminal, database, notes, ...) and restored when you switch back; the notes page toggle is back.
+- The terminal integrates a tmux control channel and pane workflow, with tmux tools available on demand in ordinary terminals.
+- SSH: the basic-auth section offers a keyboard-interactive toggle, settings gain a jms:// takeover switch, and russh / russh-sftp were upgraded to 0.65.4 and 4.0.0.
+- Database: single records can be viewed as JSON, with new F5 refresh and Ctrl+S save shortcuts.
+- Resource monitoring is now opt-in per connection and off by default; enable it in the connection settings when needed.
+- After generating an SSH key the public key is kept and shown, ready to copy again at any time.
+
+#### Fixes and Improvements
+
+- macOS notifications now go through UNUserNotificationCenter, fixing the "send test notification" button doing nothing.
+- Fixed reconnects reusing a stale shared SSH transport after an intentional disconnect, and incorrect shared-session retry after accepting an unknown host key.
+- Local data of nsh pages (extension UI) now lives under the Navop data directory, so it is covered by Navop backup, migration and uninstall instead of being scattered across the system Application Support root.
+- Fixed database WHERE and ORDER BY filters accepting multiple lines; they are strictly single-line now.
+- Agents keep the original tool name and fail invalid tool calls fast, avoiding a long wait after one bad request.
+- Added ~/.kimi-code/bin to the ACP fallback directories so kimi resolves from the GUI.
+- Fixed the single-record JSON view icon, the shell sidebar drag line and RDP cursor flicker on high-DPI displays.
+
 ## [v0.24.1] - 2026-11-25
 
 #### 更新内容

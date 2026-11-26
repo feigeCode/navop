@@ -10,7 +10,7 @@ mod panels_validation;
 pub mod versioning;
 
 pub use contributes::{
-    CommandContrib, DocumentExporterContrib, DocumentRendererContrib, PanelContrib,
+    CommandContrib, DocumentExporterContrib, DocumentRendererContrib, PanelContrib, PanelPlacement,
     RemoteFileEditorLaunchMode, ResolvedTerminalLaunch, ResourceConnectionContrib,
     ResourceConnectionFieldType, ResourceConnectionForm, ResourceConnectionFormField,
     ResourceConnectionFormTab, ResourceConnectionSelectOption, ResourceConnectionTerminal,

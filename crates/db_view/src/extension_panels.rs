@@ -11,6 +11,7 @@ use std::sync::Arc;
 use gpui::{AnyView, App, Global, SharedString};
 use gpui_component::Icon;
 use one_assets::IconName;
+use one_core::sidebar_contribution::SidebarPlacement;
 
 /// 宿主侧给数据库侧栏列出的一个扩展面板。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,6 +24,8 @@ pub struct DatabaseExtensionPanelSpec {
     pub icon_path: Option<PathBuf>,
     /// 排序权重，小的在前。
     pub order: i64,
+    /// 默认停靠位置（清单 `panels[].placement`）：左侧 / 右侧（默认）/ 底部。
+    pub placement: SidebarPlacement,
 }
 
 /// 面板 `when` 子句的求值上下文（由 db_view 按当前连接填）。
@@ -98,7 +101,16 @@ fn icon_from_path(path: Option<&Path>) -> Icon {
     match path {
         Some(path) if path.is_file() => {
             let asset = one_core::storage::connection_icon::local_icon_asset_path(path);
-            Icon::default().path(asset).color()
+            let icon = Icon::default().path(asset);
+            // currentColor 线稿必须走 mono/svg，color/img 不会替它解析主题色。
+            if std::fs::read_to_string(path)
+                .map(|source| source.contains("currentColor"))
+                .unwrap_or(false)
+            {
+                icon.mono()
+            } else {
+                icon.color()
+            }
         }
         _ => Icon::new(IconName::ExtensionsLine),
     }
@@ -115,6 +127,8 @@ pub(crate) struct ExtensionPanelEntry {
     pub(crate) icon: Icon,
     /// 排序权重。
     pub(crate) order: i64,
+    /// 停靠位置（清单 `placement`；数据库侧栏的面板不提供手动移动）。
+    pub(crate) placement: SidebarPlacement,
     /// 面板视图（首次打开时创建并缓存）。
     pub(crate) view: Option<AnyView>,
     /// 视图是按哪个连接建的（`DatabasePanelContext.connection_id`）。
@@ -129,6 +143,7 @@ impl ExtensionPanelEntry {
             title: spec.title,
             icon: icon_from_path(spec.icon_path.as_deref()),
             order: spec.order,
+            placement: spec.placement,
             view: None,
             view_connection: None,
         }
@@ -151,6 +166,7 @@ pub(crate) fn sync_extension_panels(
                 kept.title = spec.title;
                 kept.icon = icon_from_path(spec.icon_path.as_deref());
                 kept.order = spec.order;
+                kept.placement = spec.placement;
                 kept
             } else {
                 ExtensionPanelEntry::from_spec(spec)
@@ -170,7 +186,16 @@ mod tests {
             title: SharedString::new(title),
             icon_path: None,
             order,
+            placement: SidebarPlacement::Right,
         }
+    }
+
+    #[test]
+    fn specs_carry_the_manifest_default_placement() {
+        let mut declared = spec("logs", 0, "日志");
+        declared.placement = SidebarPlacement::Bottom;
+        let next = sync_extension_panels(Vec::new(), vec![declared]);
+        assert_eq!(SidebarPlacement::Bottom, next[0].placement);
     }
 
     #[test]

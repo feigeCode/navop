@@ -620,12 +620,102 @@ impl TerminalAddon for WebLinksAddon {
     }
 }
 
+/// 日志与终端搜索的匹配选项。普通搜索默认按字面文本、忽略大小写。
+///
+/// `whole_word` 只在字面模式生效：正则模式下边界由用户自己写（搜索条也会
+/// 把 `W` 置灰），这里不会悄悄改写用户的正则。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TerminalSearchOptions {
+    pub(crate) match_case: bool,
+    pub(crate) whole_word: bool,
+    pub(crate) regex: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TerminalSearchToggle {
+    MatchCase,
+    WholeWord,
+    Regex,
+}
+
+impl TerminalSearchOptions {
+    pub(crate) fn is_on(self, toggle: TerminalSearchToggle) -> bool {
+        match toggle {
+            TerminalSearchToggle::MatchCase => self.match_case,
+            TerminalSearchToggle::WholeWord => self.whole_word,
+            TerminalSearchToggle::Regex => self.regex,
+        }
+    }
+
+    pub(crate) fn toggled(self, toggle: TerminalSearchToggle) -> Self {
+        let mut next = self;
+        match toggle {
+            TerminalSearchToggle::MatchCase => next.match_case = !self.match_case,
+            TerminalSearchToggle::WholeWord => next.whole_word = !self.whole_word,
+            TerminalSearchToggle::Regex => next.regex = !self.regex,
+        }
+        next
+    }
+}
+
+/// 字面搜索的正则源码：转义后按需补整词边界。
+///
+/// 终端搜索走 alacritty 的字节级 regex（unicode 关闭），`(?-u:\b)` 只认
+/// ASCII 词字符。因此边界只在「模式首/尾确实是 ASCII 词字符」的那一侧添加：
+/// 无条件包裹会让 `中文`、`-flag` 这类模式永远匹配不到。
+fn literal_search_source(pattern: &str, escaped: String, whole_word: bool) -> String {
+    fn is_ascii_word(byte: u8) -> bool {
+        byte.is_ascii_alphanumeric() || byte == b'_'
+    }
+
+    if !whole_word {
+        return escaped;
+    }
+    let left = pattern
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| is_ascii_word(*byte));
+    let right = pattern
+        .as_bytes()
+        .last()
+        .is_some_and(|byte| is_ascii_word(*byte));
+    match (left, right) {
+        (true, true) => format!(r"(?-u:\b)(?:{escaped})(?-u:\b)"),
+        (true, false) => format!(r"(?-u:\b)(?:{escaped})"),
+        (false, true) => format!(r"(?:{escaped})(?-u:\b)"),
+        (false, false) => escaped,
+    }
+}
+
+fn compile_terminal_search_pattern(
+    pattern: &str,
+    options: TerminalSearchOptions,
+) -> Result<Option<RegexSearch>, regex::Error> {
+    if pattern.is_empty() {
+        return Ok(None);
+    }
+    let source = if options.regex {
+        pattern.to_string()
+    } else {
+        literal_search_source(pattern, regex::escape(pattern), options.whole_word)
+    };
+    let source = if options.match_case {
+        format!("(?-i){source}")
+    } else {
+        format!("(?i){source}")
+    };
+    RegexSearch::new(&source)
+        .map(Some)
+        .map_err(|error| regex::Error::Syntax(error.to_string()))
+}
+
 /// Search Addon - Text search functionality
 pub struct SearchAddon {
     regex: Option<RegexSearch>,
     current_match: Option<RangeInclusive<AlacPoint>>,
     visible_decorations: Vec<DecorationSpan>,
     pattern: String,
+    options: TerminalSearchOptions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -638,6 +728,7 @@ pub(crate) struct TerminalSearchRequest {
     pub(crate) regex: RegexSearch,
     pub(crate) current_match: Option<RangeInclusive<AlacPoint>>,
     pub(crate) pattern: String,
+    pub(crate) options: TerminalSearchOptions,
 }
 
 pub(crate) fn find_terminal_search_match(
@@ -679,25 +770,38 @@ impl SearchAddon {
             current_match: None,
             visible_decorations: Vec::new(),
             pattern: String::new(),
+            options: TerminalSearchOptions::default(),
         }
     }
 
     /// Set search pattern
     pub fn set_pattern(&mut self, pattern: &str) -> Result<(), regex::Error> {
-        if pattern.is_empty() {
-            self.regex = None;
-            self.current_match = None;
-            self.visible_decorations.clear();
-            self.pattern.clear();
-            return Ok(());
-        }
+        self.pattern = pattern.to_string();
+        self.rebuild()
+    }
 
-        let regex = RegexSearch::new(pattern).map_err(|e| regex::Error::Syntax(e.to_string()))?;
-        self.regex = Some(regex);
+    pub(crate) fn set_options(
+        &mut self,
+        options: TerminalSearchOptions,
+    ) -> Result<(), regex::Error> {
+        self.options = options;
+        self.rebuild()
+    }
+
+    fn rebuild(&mut self) -> Result<(), regex::Error> {
+        self.regex = None;
         self.current_match = None;
         self.visible_decorations.clear();
-        self.pattern = pattern.to_string();
+        self.regex = compile_terminal_search_pattern(&self.pattern, self.options)?;
         Ok(())
+    }
+
+    pub(crate) fn options(&self) -> TerminalSearchOptions {
+        self.options
+    }
+
+    pub(crate) fn has_invalid_regex(&self) -> bool {
+        self.options.regex && !self.pattern.is_empty() && self.regex.is_none()
     }
 
     /// Get current pattern
@@ -715,16 +819,21 @@ impl SearchAddon {
             regex: self.regex.clone()?,
             current_match: self.current_match.clone(),
             pattern: self.pattern.clone(),
+            options: self.options,
         })
     }
 
     pub(crate) fn apply_search_result(
         &mut self,
         pattern: &str,
+        options: TerminalSearchOptions,
         previous_match: &Option<RangeInclusive<AlacPoint>>,
         result: Option<RangeInclusive<AlacPoint>>,
     ) -> bool {
-        if self.pattern != pattern || &self.current_match != previous_match {
+        if self.pattern != pattern
+            || self.options != options
+            || &self.current_match != previous_match
+        {
             return false;
         }
         let Some(result) = result else {
@@ -1677,7 +1786,7 @@ fn file_path_to_url(path: &Path) -> Option<String> {
 mod tests {
     use super::{
         AddonManager, CustomHighlightAddon, CwdEntryCache, FilePathAddon, SearchAddon,
-        TerminalAddon, TerminalAddonFrameContext, TerminalDamageHint,
+        TerminalAddon, TerminalAddonFrameContext, TerminalDamageHint, TerminalSearchOptions,
         compile_custom_highlight_rules, register_default_addons,
     };
     use crate::settings::TerminalHighlightRule;
@@ -1930,6 +2039,180 @@ mod tests {
     }
 
     #[test]
+    fn search_options_literal_mode_escapes_regex_and_ignores_case() {
+        let term = test_term_with_content(b"foo.bar\r\nfooXbar\r\nFOO.BAR");
+        let mut addon = SearchAddon::new();
+        addon
+            .set_pattern("foo.bar")
+            .expect("literal should compile");
+        addon.on_frame(&TerminalAddonFrameContext {
+            term: &term,
+            visible_lines: 0..term.screen_lines(),
+            display_offset: term.grid().display_offset(),
+            is_local: false,
+            base_dir: None,
+            damage: TerminalDamageHint::Full,
+        });
+
+        let decorations =
+            addon.provide_decorations(0..term.screen_lines(), term.grid().display_offset());
+        assert_eq!(2, decorations.len(), "{decorations:?}");
+    }
+
+    #[test]
+    fn search_options_match_case_only_accepts_exact_case() {
+        let term = test_term_with_content(b"foo Foo FOO");
+        let mut addon = SearchAddon::new();
+        addon
+            .set_options(TerminalSearchOptions {
+                match_case: true,
+                ..TerminalSearchOptions::default()
+            })
+            .expect("options should compile");
+        addon.set_pattern("Foo").expect("pattern should compile");
+        addon.on_frame(&TerminalAddonFrameContext {
+            term: &term,
+            visible_lines: 0..term.screen_lines(),
+            display_offset: term.grid().display_offset(),
+            is_local: false,
+            base_dir: None,
+            damage: TerminalDamageHint::Full,
+        });
+
+        assert_eq!(
+            1,
+            addon
+                .provide_decorations(0..term.screen_lines(), term.grid().display_offset())
+                .len()
+        );
+    }
+
+    #[test]
+    fn search_options_whole_word_does_not_match_inside_identifiers() {
+        let term = test_term_with_content(b"foo foo_bar foo-bar FOO");
+        let mut addon = SearchAddon::new();
+        addon
+            .set_options(TerminalSearchOptions {
+                whole_word: true,
+                ..TerminalSearchOptions::default()
+            })
+            .expect("options should compile");
+        addon.set_pattern("foo").expect("pattern should compile");
+        addon.on_frame(&TerminalAddonFrameContext {
+            term: &term,
+            visible_lines: 0..term.screen_lines(),
+            display_offset: term.grid().display_offset(),
+            is_local: false,
+            base_dir: None,
+            damage: TerminalDamageHint::Full,
+        });
+
+        assert_eq!(
+            3,
+            addon
+                .provide_decorations(0..term.screen_lines(), term.grid().display_offset())
+                .len()
+        );
+    }
+
+    /// 整词匹配不能把非 ASCII 文本变成「永远搜不到」。
+    ///
+    /// `(?-u:\b)` 只认 ASCII 词字符，若无条件加在 `中文` 两侧，字节级 regex
+    /// 会在任何位置都不满足词边界。这里钉住：CJK 模式在 `W` 打开时仍按字面匹配。
+    #[test]
+    fn search_options_whole_word_still_matches_cjk_literals() {
+        let term = test_term_with_content("中文 abc中文".as_bytes());
+        let mut addon = SearchAddon::new();
+        addon
+            .set_options(TerminalSearchOptions {
+                whole_word: true,
+                ..TerminalSearchOptions::default()
+            })
+            .expect("options should compile");
+        addon.set_pattern("中文").expect("pattern should compile");
+        addon.on_frame(&TerminalAddonFrameContext {
+            term: &term,
+            visible_lines: 0..term.screen_lines(),
+            display_offset: term.grid().display_offset(),
+            is_local: false,
+            base_dir: None,
+            damage: TerminalDamageHint::Full,
+        });
+
+        assert_eq!(
+            2,
+            addon
+                .provide_decorations(0..term.screen_lines(), term.grid().display_offset())
+                .len()
+        );
+    }
+
+    /// 正则模式下 `W` 被忽略是显式契约：边界该由用户自己的正则表达。
+    #[test]
+    fn search_options_regex_mode_ignores_whole_word_toggle() {
+        let term = test_term_with_content(b"foo fooA FOO fao");
+        let mut addon = SearchAddon::new();
+        addon
+            .set_options(TerminalSearchOptions {
+                match_case: true,
+                whole_word: true,
+                regex: true,
+            })
+            .expect("options should compile");
+        addon.set_pattern("f.o").expect("regex should compile");
+        addon.on_frame(&TerminalAddonFrameContext {
+            term: &term,
+            visible_lines: 0..term.screen_lines(),
+            display_offset: term.grid().display_offset(),
+            is_local: false,
+            base_dir: None,
+            damage: TerminalDamageHint::Full,
+        });
+
+        // `fooA` 里的 `foo` 也算命中——整词开关不会改写用户的正则。
+        let decorations =
+            addon.provide_decorations(0..term.screen_lines(), term.grid().display_offset());
+        assert_eq!(3, decorations.len(), "{decorations:?}");
+    }
+
+    #[test]
+    fn invalid_regex_is_reported_without_leaving_stale_highlights() {
+        let mut addon = SearchAddon::new();
+        addon.set_pattern("foo").expect("literal should compile");
+        addon
+            .set_options(TerminalSearchOptions {
+                regex: true,
+                ..TerminalSearchOptions::default()
+            })
+            .expect("regex option should compile");
+
+        assert!(addon.set_pattern("[").is_err());
+        assert!(addon.has_invalid_regex());
+        assert!(!addon.is_active());
+        assert!(addon.current_match().is_none());
+        assert!(addon.search_request().is_none());
+    }
+
+    #[test]
+    fn changing_search_options_recompiles_and_resets_current_match() {
+        let mut term = test_term_with_content(b"foo Foo");
+        let mut addon = SearchAddon::new();
+        addon.set_pattern("foo").expect("pattern should compile");
+        assert!(addon.find_last(&mut term).is_some());
+        let options = TerminalSearchOptions {
+            match_case: true,
+            ..TerminalSearchOptions::default()
+        };
+
+        addon.set_options(options).expect("options should compile");
+
+        assert!(addon.current_match().is_none());
+        assert_eq!(options, addon.options());
+        let request = addon.search_request().expect("request should exist");
+        assert_eq!(options, request.options);
+    }
+
+    #[test]
     fn async_search_result_requires_the_exact_request_snapshot() {
         use alacritty_terminal::index::{Column, Line, Point};
 
@@ -1947,25 +2230,41 @@ mod tests {
         let next = Point::new(Line(0), Column(4))..=Point::new(Line(0), Column(6));
         assert!(addon.apply_search_result(
             &request.pattern,
+            request.options,
             &request.current_match,
             Some(next.clone()),
         ));
         assert_eq!(Some(&next), addon.current_match());
 
         let stale_pattern_result = Point::new(Line(1), Column(4))..=Point::new(Line(1), Column(6));
-        assert!(
-            !addon.apply_search_result("bar", &Some(next.clone()), Some(stale_pattern_result),)
-        );
+        assert!(!addon.apply_search_result(
+            "bar",
+            request.options,
+            &Some(next.clone()),
+            Some(stale_pattern_result),
+        ));
         assert_eq!(Some(&next), addon.current_match());
 
         assert!(!addon.apply_search_result(
             "foo",
+            request.options,
             &Some(first),
             Some(Point::new(Line(1), Column(4))..=Point::new(Line(1), Column(6))),
         ));
         assert_eq!(Some(&next), addon.current_match());
 
-        assert!(!addon.apply_search_result("foo", &Some(next.clone()), None));
+        assert!(!addon.apply_search_result("foo", request.options, &Some(next.clone()), None));
+        assert_eq!(Some(&next), addon.current_match());
+
+        assert!(!addon.apply_search_result(
+            "foo",
+            TerminalSearchOptions {
+                match_case: true,
+                ..request.options
+            },
+            &request.current_match,
+            Some(next.clone()),
+        ));
         assert_eq!(Some(&next), addon.current_match());
     }
 
