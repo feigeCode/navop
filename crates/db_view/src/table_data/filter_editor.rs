@@ -875,6 +875,73 @@ pub enum FilterEditorEvent {
     QueryApply,
 }
 
+fn normalize_single_line_text(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                if !normalized.ends_with(' ') {
+                    normalized.push(' ');
+                }
+            }
+            '\n' => {
+                if !normalized.ends_with(' ') {
+                    normalized.push(' ');
+                }
+            }
+            _ => normalized.push(ch),
+        }
+    }
+    normalized.trim_end_matches(' ').to_string()
+}
+
+fn normalize_single_line_text_and_offsets(text: &str, offsets: &[usize]) -> (String, Vec<usize>) {
+    let mut normalized = String::with_capacity(text.len());
+    let mut boundaries = Vec::with_capacity(text.len() + 1);
+    boundaries.push((0, 0));
+
+    let mut chars = text.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        let mut next_index = index + ch.len_utf8();
+        match ch {
+            '\r' => {
+                if chars.peek().is_some_and(|(_, next)| *next == '\n') {
+                    let (next_index_after_lf, _) = chars.next().expect("peeked newline");
+                    next_index = next_index_after_lf + 1;
+                }
+                if !normalized.ends_with(' ') {
+                    normalized.push(' ');
+                }
+            }
+            '\n' => {
+                if !normalized.ends_with(' ') {
+                    normalized.push(' ');
+                }
+            }
+            _ => normalized.push(ch),
+        }
+        boundaries.push((next_index, normalized.len()));
+    }
+
+    let mapped_offsets = offsets
+        .iter()
+        .map(|offset| {
+            let offset = (*offset).min(text.len());
+            boundaries
+                .iter()
+                .find(|(source_offset, _)| *source_offset >= offset)
+                .map(|(_, normalized_offset)| *normalized_offset)
+                .unwrap_or(normalized.len())
+        })
+        .collect();
+
+    (normalized, mapped_offsets)
+}
+
 pub struct SimpleCodeEditor {
     editor: Entity<EditorState>,
     _sub: Subscription,
@@ -882,16 +949,51 @@ pub struct SimpleCodeEditor {
 
 impl SimpleCodeEditor {
     pub fn new(editor: Entity<EditorState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let _sub = cx.subscribe_in(&editor, window, |_, _, event: &InputEvent, _, cx| {
-            if let InputEvent::PressEnter { .. } = event {
-                cx.emit(FilterEditorEvent::QueryApply);
-            }
-        });
+        let _sub = cx.subscribe_in(
+            &editor,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => this.normalize_single_line_value(window, cx),
+                InputEvent::PressEnter { .. } => {
+                    this.normalize_single_line_value(window, cx);
+                    cx.emit(FilterEditorEvent::QueryApply);
+                }
+                _ => {}
+            },
+        );
         Self { editor, _sub }
     }
 
     pub fn get_text_from_app(&self, app_cx: &App) -> String {
-        self.editor.read(app_cx).text().to_string()
+        normalize_single_line_text(self.editor.read(app_cx).text().to_string().as_str())
+    }
+
+    fn normalize_single_line_value(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (text, cursor, selection, selection_reversed) = {
+            let editor = self.editor.read(cx);
+            (
+                editor.text().to_string(),
+                editor.cursor(),
+                editor.selected_range(),
+                editor.is_selection_reversed(),
+            )
+        };
+        if !text.contains('\r') && !text.contains('\n') {
+            return;
+        }
+
+        let (normalized, offsets) = normalize_single_line_text_and_offsets(
+            &text,
+            &[cursor, selection.start, selection.end],
+        );
+        self.editor.update(cx, |editor, cx| {
+            editor.set_value(normalized, window, cx);
+            editor.set_selected_range_with_direction(
+                offsets[1]..offsets[2],
+                selection_reversed,
+                cx,
+            );
+        });
     }
 }
 
@@ -903,9 +1005,9 @@ impl Render for SimpleCodeEditor {
             .size_full()
             // Enter 提交后平台仍会把 key_char（macOS 上是 "\n"）塞进输入框：keymap 动作
             // 分发早于 key_down 监听，`submit_on_enter` 只保证编辑态不自己插换行，随后那次
-            // 平台文本插入要在这里消费掉，单行语义才完整（Shift+Enter 仍保留换行）。
+            // 平台文本插入要在这里消费掉，单行语义才完整。
             .on_key_down(|event: &KeyDownEvent, _, cx| {
-                if event.keystroke.key == "enter" && !event.keystroke.modifiers.shift {
+                if event.keystroke.key == "enter" {
                     cx.stop_propagation();
                 }
             })
@@ -925,7 +1027,7 @@ pub fn create_simple_editor(
         let editor = EditorState::new(window, cx)
             .language("sql")
             .line_number(false)
-            // 过滤条件按单行语义使用：Enter 直接查询，Shift+Enter 才换行。
+            // 过滤条件严格按单行语义使用：Enter 直接查询，不保留任何换行。
             // `EditorState` 恒为多行（`EditorMode::MULTI_LINE`），旧版 `InputState`
             // 的 `.multi_line(false)` 已无对应 API，用 `submit_on_enter` 等价表达。
             .submit_on_enter(true)
@@ -990,7 +1092,7 @@ impl TableFilterEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let clause = clause.into();
+        let clause = normalize_single_line_text(clause.into().as_str());
         self.order_by_editor.update(cx, |editor, cx| {
             editor.editor.update(cx, |input_state, cx| {
                 input_state.set_value(clause.clone(), window, cx);
@@ -1159,7 +1261,16 @@ mod tests {
         assert_eq!(labels.first().map(String::as_str), Some("0"));
     }
 
-    /// 回归：过滤条按单行语义使用，Enter 应直接查询。
+    #[test]
+    fn normalizes_crlf_lf_and_trailing_line_breaks_to_one_line() {
+        assert_eq!("a b", normalize_single_line_text("a\r\nb"));
+        assert_eq!("a b", normalize_single_line_text("a\nb"));
+        assert_eq!("a b", normalize_single_line_text("a\rb"));
+        assert_eq!("a", normalize_single_line_text("a\n"));
+        assert_eq!("a", normalize_single_line_text("a\r\n"));
+    }
+
+    /// 回归：过滤条收起时按单行语义使用，Enter 应直接查询。
     ///
     /// 外部化 gpui-component 时 `InputState.multi_line(false)` 被换成恒为
     /// 多行的 `EditorState`，Enter 变成插入换行（查询仍会发，但输入框被撑成两行）。
@@ -1207,9 +1318,58 @@ mod tests {
         cx.simulate_keystrokes("shift-enter");
         cx.run_until_parked();
         assert_eq!(
-            "age > 18\n",
+            "age > 18",
             cx.read(|cx| editor.read(cx).get_text_from_app(cx)),
-            "Shift+Enter 应保留换行"
+            "过滤条收起时 Shift+Enter 也不应留下不可见的换行"
+        );
+        let raw_text = cx.read(|cx| {
+            let editor = editor.read(cx);
+            editor.editor.read(cx).text().to_string()
+        });
+        assert!(
+            !raw_text.contains('\r') && !raw_text.contains('\n'),
+            "编辑器状态本身也必须不含换行，不能只在读取时过滤：{raw_text:?}"
+        );
+        assert!(applied.get() >= 2, "Shift+Enter 也应直接触发查询");
+    }
+
+    /// 回归：粘贴多行 SQL 时不能把换行藏在一行高的编辑器里。
+    #[gpui::test]
+    fn pasted_line_breaks_are_normalized_to_spaces(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        let (window, editor) = cx.update(|cx| {
+            let mut editor = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity = cx.new(|cx| create_simple_editor(window, cx));
+                    editor = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .expect("open filter editor test window");
+            (window, editor.expect("filter editor"))
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let input = editor.read_with(&cx, |editor, _| editor.editor.clone());
+        let focus_handle = cx.read(|cx| input.read(cx).focus_handle(cx));
+        cx.update(|window, cx| window.focus(&focus_handle, cx));
+
+        cx.simulate_input("age > 18\r\nAND name = 'Alice'\n");
+        cx.run_until_parked();
+
+        assert_eq!(
+            "age > 18 AND name = 'Alice'",
+            cx.read(|cx| editor.read(cx).get_text_from_app(cx)),
+            "粘贴进来的 CRLF/LF 应规范为空格，尾部换行应删除"
+        );
+        let raw_text = cx.read(|cx| {
+            let editor = editor.read(cx);
+            editor.editor.read(cx).text().to_string()
+        });
+        assert!(
+            !raw_text.contains('\r') && !raw_text.contains('\n'),
+            "编辑器状态本身也必须完成单行规范化：{raw_text:?}"
         );
     }
 
