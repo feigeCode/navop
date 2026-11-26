@@ -23,7 +23,8 @@ use crate::runtime::{
 };
 use crate::tasks::agent_prompt::build_system_prompt;
 use crate::tasks::agent_tool_validation::{
-    available_tool_names, malformed_tool_call_reason, specs_for_task, tool_is_available,
+    available_tool_names, malformed_tool_call_reason, raw_tool_name_for_display,
+    raw_tool_name_is_empty, specs_for_task, tool_is_available,
 };
 use crate::tasks::context_compaction::{
     ContextCompactionPolicy, compact_session_context_if_needed,
@@ -147,6 +148,7 @@ pub(crate) async fn continue_after_tool_decision(
 async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) -> TaskOutcome {
     let dispatch_ctx = dispatch_context(&ctx.session, &ctx.turn_id, &ctx.resources);
     let max_iterations = ctx.services.agent_max_iterations();
+    let mut previous_unknown_tool_names = Vec::<String>::new();
     for iteration in 0..max_iterations {
         if cancellation.is_cancelled() {
             return TaskOutcome::Cancelled;
@@ -271,6 +273,17 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
             };
         }
 
+        if let Some(raw_name) = response
+            .tool_calls
+            .iter()
+            .map(|call| call.function.name.as_str())
+            .find(|name| raw_tool_name_is_empty(name))
+        {
+            return TaskOutcome::Failed {
+                reason: empty_tool_name_failure(raw_name, &tool_specs),
+            };
+        }
+
         // 模型在调用工具前可能附带一段说明:落历史并 finalize 当前流式消息。
         if let Some(text) = response.text.as_ref().filter(|t| !t.is_empty()) {
             ctx.session.record_assistant_message_with_reasoning(
@@ -290,14 +303,25 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
         // mode 要求 assistant tool_calls 消息原样带回对应 reasoning_content。
         let mut executable_calls = Vec::new();
         let mut approval_calls = Vec::new();
+        let mut unknown_tool_names = Vec::new();
         for llm_call in &response.tool_calls {
             log_llm_tool_call("agent_dispatch", llm_call);
             let call_id = llm_tool_call_id(llm_call);
-            let tool_name = ToolName::new(llm_call.function.name.clone());
+            let raw_tool_name = llm_call.function.name.as_str();
+            let tool_name = ToolName::new(raw_tool_name);
             if !tool_is_available(&tool_specs, &tool_name) {
+                if previous_unknown_tool_names
+                    .iter()
+                    .any(|previous| previous == raw_tool_name)
+                {
+                    return TaskOutcome::Failed {
+                        reason: repeated_unknown_tool_failure(raw_tool_name, &tool_specs),
+                    };
+                }
+                unknown_tool_names.push(raw_tool_name.to_string());
                 ctx.session.record_observation(
                     &ctx.turn_id,
-                    unavailable_tool_observation(call_id, tool_name, &tool_specs),
+                    unavailable_tool_observation(call_id, raw_tool_name, tool_name, &tool_specs),
                 );
                 continue;
             }
@@ -321,6 +345,7 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
 
             executable_calls.push(call);
         }
+        previous_unknown_tool_names = unknown_tool_names;
 
         if !approval_calls.is_empty() {
             let first = approval_calls.remove(0);
@@ -827,6 +852,7 @@ fn handle_update_plan(
 
 fn unavailable_tool_observation(
     call_id: ToolCallId,
+    raw_tool_name: &str,
     tool_name: ToolName,
     tool_specs: &[crate::tools::ToolSpec],
 ) -> ToolObservation {
@@ -835,11 +861,32 @@ fn unavailable_tool_observation(
         tool_name.clone(),
         t!(
             "AgentRuntime.unavailable_tool",
-            tool = tool_name.as_str(),
+            tool = raw_tool_name_for_display(raw_tool_name),
             available = available_tool_names(tool_specs)
         )
         .to_string(),
     )
+}
+
+fn empty_tool_name_failure(raw_tool_name: &str, tool_specs: &[crate::tools::ToolSpec]) -> String {
+    t!(
+        "AgentRuntime.empty_tool_name",
+        tool = raw_tool_name_for_display(raw_tool_name),
+        available = available_tool_names(tool_specs)
+    )
+    .to_string()
+}
+
+fn repeated_unknown_tool_failure(
+    raw_tool_name: &str,
+    tool_specs: &[crate::tools::ToolSpec],
+) -> String {
+    t!(
+        "AgentRuntime.repeated_unknown_tool",
+        tool = raw_tool_name_for_display(raw_tool_name),
+        available = available_tool_names(tool_specs)
+    )
+    .to_string()
 }
 
 /// 从 `llm-connector` 的工具调用取 call id(空则新生成)。

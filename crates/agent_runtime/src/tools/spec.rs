@@ -88,7 +88,7 @@ fn sanitize_tool_name(name: &str) -> String {
     }
     let trimmed = out.trim_matches('_').to_string();
     let mut normalized = if trimmed.is_empty() {
-        "tool".to_string()
+        "invalid_tool_name".to_string()
     } else {
         trimmed
     };
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(ToolName::new("sample.echo").as_str(), "sample_echo");
         assert_eq!(ToolName::new("执行 SQL").as_str(), "SQL");
         assert_eq!(ToolName::new("4.query").as_str(), "tool_4_query");
-        assert_eq!(ToolName::new("___").as_str(), "tool");
+        assert_eq!(ToolName::new("___").as_str(), "invalid_tool_name");
     }
 
     #[test]
@@ -297,9 +297,9 @@ mod tests {
     fn tool_name_allocator_handles_empty_and_invalid_names() {
         let mut allocator = ToolNameAllocator::default();
 
-        assert_eq!(allocator.allocate("").as_str(), "tool");
-        assert_eq!(allocator.allocate("___").as_str(), "tool_2");
-        assert_eq!(allocator.allocate("执行").as_str(), "tool_3");
+        assert_eq!(allocator.allocate("").as_str(), "invalid_tool_name");
+        assert_eq!(allocator.allocate("___").as_str(), "invalid_tool_name_2");
+        assert_eq!(allocator.allocate("执行").as_str(), "invalid_tool_name_3");
     }
 
     #[test]
