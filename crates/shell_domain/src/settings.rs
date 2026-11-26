@@ -11,13 +11,18 @@ use domain_api::SettingsSectionProvider;
 
 mod local_terminal;
 mod local_terminal_profiles;
+use app_kit::integration::desktop_notification::{
+    NOTIFICATION_SETTINGS_URL, NotificationAuthorization,
+};
 use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, px,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
+use gpui_component::WindowExt as _;
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::notification::Notification;
 use gpui_component::setting::{
     NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage,
 };
@@ -583,16 +588,43 @@ fn desktop_notification_test_item() -> SettingItem {
                 .label(t!("Settings.terminal.desktop_notification_test_button"))
                 .small()
                 .outline()
-                .on_click(|_, _, cx| {
+                .on_click(|_, window, cx| {
                     let settings = AppSettings::global(cx);
-                    app_kit::integration::desktop_notification::send_test_notification(
-                        settings.terminal_desktop_notification_duration,
-                        settings.terminal_desktop_notification_sound,
-                    );
+                    let authorization =
+                        app_kit::integration::desktop_notification::send_test_notification(
+                            settings.terminal_desktop_notification_duration,
+                            settings.terminal_desktop_notification_sound,
+                        );
+                    if authorization == NotificationAuthorization::Denied {
+                        push_notification_permission_denied(window, cx);
+                    }
                 })
         }),
     )
     .description(t!("Settings.terminal.desktop_notification_test_description").to_string())
+}
+
+/// 通知权限被拒绝时给出可见反馈。
+///
+/// 系统在授权被拒绝时依然让投递「成功」，只是以 `effectiveStyle: none` 丢掉通知，
+/// 用户在界面上只会看到「点了没反应」，所以这里必须显式提示并给出直达入口。
+fn push_notification_permission_denied(window: &mut Window, cx: &mut App) {
+    window.push_notification(
+        Notification::warning(
+            t!("Settings.terminal.desktop_notification_permission_denied_body").to_string(),
+        )
+        .title(t!("Settings.terminal.desktop_notification_permission_denied_title").to_string())
+        .action(|_, _, _| {
+            Button::new("terminal-notification-open-settings")
+                .label(
+                    t!("Settings.terminal.desktop_notification_permission_denied_open_settings")
+                        .to_string(),
+                )
+                .small()
+                .on_click(|_, _, cx| cx.open_url(NOTIFICATION_SETTINGS_URL))
+        }),
+        cx,
+    );
 }
 
 fn desktop_notification_codex_tip_item() -> SettingItem {

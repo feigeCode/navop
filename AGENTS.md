@@ -836,6 +836,13 @@
 - **验证方式**：`cargo test -p terminal --lib ssh_shell_integration` 覆盖 Bootstrap marker 分段、失败 marker、超时立即放行和真实 bash/zsh；`cargo test -p terminal --test ssh_runtime_integration_live -- --ignored --nocapture` 连续跑 5 次，真机 ready 约 130–160ms 且命令记录、零远端写入均正常。只跑 `bash -i -c` 不能替代真实 PTY。
 - **适用范围**：`crates/terminal/src/ssh_backend.rs`、`crates/terminal/src/ssh_shell_integration.rs`、所有通过 PTY stdin 注入多行/长脚本的终端初始化链路。
 
+- **标题**：macOS 系统通知必须走 UNUserNotificationCenter，legacy NSUserNotification 会被 usernoted 静默拒绝
+- **触发信号**：设置页「发送测试通知」点了完全没反应；`log show --last 10m --predicate 'process == "usernoted"'` 出现 `Legacy client com.onetcli.app connecting to modern client. You can't mix modern clients with legacy clients` 或 `Denying message N from connection <LegacyConnection identifier: ...>`。
+- **根因 / 约束**：`mac-notification-sys`（NSUserNotification）是 legacy 通道，同一个 bundle id 只要被 modern 客户端（UNUserNotificationCenter）注册过，usernoted 就直接拒掉 legacy 连接，通知静默丢失且 `show()` 不返回错误。换到现代通道后还有第二层坑：授权被拒绝时投递 API 依然返回成功，只是以 `effectiveStyle: none` 丢掉（日志 `authorizationStatus: Denied ... ineligible for pipeline`），UI 层完全无感；而 `requestAuthorization` 在同一 bundle id 已被拒绝后不会再弹框，用户只会看到「点了没反应」。
+- **正确做法**：macOS 分支启用 `notify-rust` 的 `preview-macos-un` feature（`UNUserNotificationCenter`，delegate 的 `willPresentNotification` 返回 banner，应用在前台也会弹）。发送前先用 `notify_rust::get_notification_settings_blocking()` 读 `UNAuthorizationStatus`，把 `Denied` 回传给设置页，用 `WindowExt::push_notification` + 「打开通知设置」深链 `x-apple.systempreferences:com.apple.Notifications-Settings.extension` 给出可见提示，不要只 `show()` 了事。授权状态不要用 `OnceLock` 缓存（用户可能刚去系统设置里打开开关）。未打包 `cargo run` 没有 bundle id，`check_bundle` 失败时降级成 debug 日志，不要 panic。
+- **验证方式**：`cargo check -p app_kit -p shell_domain` + `cargo clippy -p app_kit -p shell_domain --all-targets`；用 ad-hoc 签名的 .app 验证时必须放到 `~/Applications` 或 `/Applications` 并 `lsregister -f`（放 `/tmp` 会得到 `Failed to find or validate client ... with audit token` 而永远失败）；最后看 `log show --last 5m --predicate 'process == "usernoted"' | grep -i <bundle-id>` 出现 `Delivering ... effectiveStyle: banner` 才算真正投递成功，`effectiveStyle: none` 就是没弹。
+- **适用范围**：`crates/app_kit/src/integration/desktop_notification.rs`、`crates/shell_domain/src/settings.rs` 的通知设置组，以及任何在 macOS 上给 ad-hoc / 未签名应用发系统通知的调试流程。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

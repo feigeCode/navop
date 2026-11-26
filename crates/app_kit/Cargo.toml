@@ -48,14 +48,15 @@ x11rb = "0.13"
 # 系统通知：freedesktop 通知走 D-Bus，notify-rust 的 `z`（zbus）特性是默认后端。
 notify-rust = "4.18"
 
-# 系统通知：macOS 走 notify-rust 的 NSUserNotification 后端（mac-notification-sys）。
-# 关掉默认特性，避免在 macOS 上把用不到的 zbus / serde 依赖一起编进来。
-# 另外直接依赖 mac-notification-sys 用来显式设置通知发送者身份，并用
-# objc2-foundation 读取当前 app bundle 的 identifier。
+# 系统通知：macOS 走 notify-rust 的 `preview-macos-un` 后端，即现代
+# `UNUserNotificationCenter` 通道（需要系统授权，并且能在应用前台时弹 banner）。
+# 默认的 NSUserNotification 后端已被 macOS 废弃，而且当同一个 bundle id 曾被
+# 现代客户端注册过时，usernoted 会直接拒绝 legacy 连接（`You can't mix modern
+# clients with legacy clients`），表现为通知静默丢失。
 [target.'cfg(target_os = "macos")'.dependencies]
-mac-notification-sys = "0.6"
-notify-rust = { version = "4.18", default-features = false }
-objc2-foundation = { version = "0.3", features = ["NSBundle", "NSString"] }
+notify-rust = { version = "4.18", default-features = false, features = ["preview-macos-un"] }
+# 读取 `UNAuthorizationStatus`，用于在设置页区分「未授权 / 已拒绝」，给用户可见提示。
+mac-usernotifications = "0.3"
 
 # Windows 单实例、桌面通知与自更新安装：沿用全量产品的实现（tokio 异步 I/O、zip 解包、Shell / WinRT Toast 通知）。
 [target.'cfg(target_os = "windows")'.dependencies]

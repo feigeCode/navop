@@ -331,6 +331,18 @@ Settings:
       en: Send Test Notification
       zh-CN: 发送测试通知
       zh-HK: 傳送測試通知
+    desktop_notification_permission_denied_title:
+      en: Notification Permission Denied
+      zh-CN: 通知权限已被拒绝
+      zh-HK: 通知權限已被拒絕
+    desktop_notification_permission_denied_body:
+      en: macOS is not allowed to show Navop notifications, so the test notification was dropped silently. Enable notifications for Navop in System Settings → Notifications.
+      zh-CN: macOS 没有允许 Navop 发送通知，测试通知被系统静默丢弃。请在「系统设置 → 通知」中允许 Navop 的通知。
+      zh-HK: macOS 沒有允許 Navop 傳送通知，測試通知被系統靜默丟棄。請在「系統設定 → 通知」中允許 Navop 的通知。
+    desktop_notification_permission_denied_open_settings:
+      en: Open Notification Settings
+      zh-CN: 打开通知设置
+      zh-HK: 開啟通知設定
     desktop_notification_codex_tip_title:
       en: "Tip: Using Codex CLI?"
       zh-CN: "提示：在终端中使用 Codex CLI？"
