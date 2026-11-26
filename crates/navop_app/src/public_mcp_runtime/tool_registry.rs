@@ -205,7 +205,8 @@ pub(crate) mod tests_helpers {
         let catalog = extension_runtime::ExtensionRuntimeCatalog::from_manifests(vec![manifest])
             .expect("catalog should build");
 
-        let global_catalog = cx.default_global::<extension_runtime::GlobalExtensionRuntimeCatalog>();
+        let global_catalog =
+            cx.default_global::<extension_runtime::GlobalExtensionRuntimeCatalog>();
         global_catalog.replace(catalog);
         // tempdir 生命周期只到本函数；catalog 已经把需要的路径收进结构，安全。
         std::mem::forget(directory);
@@ -229,10 +230,9 @@ pub(crate) mod tests_helpers {
     }
 
     fn in_memory_sqlite() -> one_core::storage::connection::SqliteConnection {
-        let conn = one_core::storage::connection::SqliteConnection::open_with_pool_size(
-            ":memory:", 1,
-        )
-        .expect("sqlite should open");
+        let conn =
+            one_core::storage::connection::SqliteConnection::open_with_pool_size(":memory:", 1)
+                .expect("sqlite should open");
         conn.with_connection(|db| {
             one_core::storage::migration::run_migrations(db)?;
             Ok(())
@@ -1105,7 +1105,8 @@ mod tests {
     }
 
     fn ssh_params(host: &str) -> SshParams {
-        SshParams { otp: None,
+        SshParams {
+            otp: None,
             remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,

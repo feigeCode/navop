@@ -13,17 +13,15 @@ pub(crate) enum NavigationApplication {
     CredentialVault,
     KnownHosts,
     Extensions,
-    Settings,
 }
 
 pub(crate) fn home_applications(show_team: bool) -> Vec<NavigationApplication> {
     use NavigationApplication::*;
-    let mut applications = vec![Monitor, AiWorkbench];
+    let mut applications = vec![Monitor, AiWorkbench, Notes];
     if show_team {
         applications.push(Team);
     }
     applications.extend([
-        Notes,
         Extensions,
         Toolbox,
         CredentialVault,
@@ -42,6 +40,21 @@ pub(crate) fn home_applications(show_team: bool) -> Vec<NavigationApplication> {
 }
 
 impl NavigationApplication {
+    pub(crate) fn content_key(self) -> &'static str {
+        match self {
+            Self::AiWorkbench => "AiWorkbench",
+            Self::Monitor => "Monitor",
+            Self::Team => "TeamManagement",
+            Self::Notes => "Notes",
+            Self::JsonFormatter => "JsonFormatter",
+            Self::Toolbox => "Toolbox",
+            Self::SessionLogs => "SessionLogs",
+            Self::CredentialVault => "CredentialVault",
+            Self::KnownHosts => "KnownHosts",
+            Self::Extensions => "ExtensionManager",
+        }
+    }
+
     pub(crate) fn label(self) -> String {
         match self {
             Self::AiWorkbench => {
@@ -56,7 +69,6 @@ impl NavigationApplication {
             Self::CredentialVault => t!("Home.credential_vault").to_string(),
             Self::KnownHosts => t!("Home.known_hosts").to_string(),
             Self::Extensions => t!("Home.extensions").to_string(),
-            Self::Settings => t!("Settings.title").to_string(),
         }
     }
 
@@ -74,7 +86,6 @@ impl NavigationApplication {
             // 已知主机使用线性图标，与侧栏其余 *_Line 图标风格一致。
             Self::KnownHosts => one_assets::IconName::ServerLine,
             Self::Extensions => one_assets::IconName::ExtensionsLine,
-            Self::Settings => one_assets::IconName::Settings,
         }
     }
 }
@@ -88,8 +99,8 @@ mod tests {
         let mut with_team = vec![
             Monitor,
             AiWorkbench,
-            Team,
             Notes,
+            Team,
             Extensions,
             Toolbox,
             CredentialVault,

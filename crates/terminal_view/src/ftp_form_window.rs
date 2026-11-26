@@ -568,10 +568,9 @@ impl Render for FtpFormWindow {
                             .child(
                                 self.render_form_row(&t!("Ftp.host"), Input::new(&self.host_input)),
                             )
-                            .child(self.render_form_row(
-                                &t!("Ftp.port"),
-                                Input::new(&self.port_input),
-                            ))
+                            .child(
+                                self.render_form_row(&t!("Ftp.port"), Input::new(&self.port_input)),
+                            )
                             .child(self.render_form_row(
                                 &t!("Ftp.keychain"),
                                 self.credential_picker.clone(),

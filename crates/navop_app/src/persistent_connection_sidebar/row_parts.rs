@@ -122,9 +122,6 @@ pub(super) fn tree_connection_name_with_type_tag(
 
 pub(super) fn tree_count(count: usize, palette: SidebarPalette) -> AnyElement {
     div()
-        .px_1p5()
-        .rounded_full()
-        .bg(palette.muted)
         .text_xs()
         .text_color(palette.muted_foreground)
         .child(count.to_string())
@@ -136,9 +133,7 @@ pub(super) fn tree_connection_icon_slot(icon: Icon, palette: SidebarPalette) -> 
         .size(px(24.0))
         .flex_shrink_0()
         .rounded(px(6.0))
-        .border_1()
-        .border_color(palette.border)
-        .bg(palette.muted)
+        .bg(palette.muted.opacity(0.55))
         .flex()
         .items_center()
         .justify_center()

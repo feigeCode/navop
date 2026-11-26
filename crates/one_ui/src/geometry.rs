@@ -54,7 +54,7 @@ pub(crate) fn layout() -> Layout {
 
 pub(crate) fn resize() -> Resize {
     Resize {
-        edge_padding: px(4.),
+        edge_padding: px(6.),
         visible_line: px(1.),
     }
 }

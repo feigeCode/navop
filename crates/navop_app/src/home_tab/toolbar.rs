@@ -11,8 +11,22 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let navigation = Self::uses_global_navigation_layout(cx);
+        let managing_connections = navigation && self.navigation_connection_manager_open;
         let group_filter =
             self.render_workspace_filter_popover(self.workspace_filter_open, window, cx);
+        let placeholder = if navigation && !managing_connections {
+            t!("Home.global_search_placeholder").to_string()
+        } else {
+            t!("Home.search_placeholder").to_string()
+        };
+        let placeholder: SharedString = placeholder.into();
+        if self.search_placeholder != placeholder {
+            self.search_placeholder = placeholder.clone();
+            self.search_input.update(cx, |input, cx| {
+                input.set_placeholder(placeholder, window, cx)
+            });
+        }
         h_flex()
             .w_full()
             .min_w_0()
@@ -30,14 +44,11 @@ impl HomePage {
                     // 搜索框独占剩余空间；其余工具栏控件 flex_shrink_0，
                     // 防止窄窗口时按钮收缩把 dropdown caret 裁掉。
                     .min_w(gpui::rems(4.0))
-                    .when(window.bounds().size.width > px(1400.0), |search| {
-                        search.min_w(gpui::rems(46.0))
-                    })
                     .child(
                         Input::new(&self.search_input)
                             .cleanable(true)
                             .w_full()
-                            .bg(cx.theme().muted),
+                            .bg(cx.theme().input_background()),
                     ),
             )
             .child(
@@ -46,22 +57,34 @@ impl HomePage {
                     .flex_shrink_0()
                     .items_center()
                     .gap_1()
-                    .child(group_filter)
-                    .child(self.render_sort_button(cx))
-                    .child(self.render_layout_button(cx))
-                    .child(
-                        IconButton::new(
-                            "refresh-button",
-                            Icon::new(IconName::Refresh)
-                                .mono()
-                                .with_size(IconSize::Small),
+                    .when(!navigation || managing_connections, |tools| {
+                        tools.child(group_filter)
+                    })
+                    .when(!navigation || managing_connections, |tools| {
+                        tools.child(self.render_sort_button(cx))
+                    })
+                    .when(!navigation || managing_connections, |tools| {
+                        tools.child(self.render_layout_button(cx))
+                    })
+                    .when(!navigation || managing_connections, |tools| {
+                        tools.child(
+                            IconButton::new(
+                                "refresh-button",
+                                Icon::new(IconName::Refresh)
+                                    .mono()
+                                    .with_size(IconSize::Small),
+                            )
+                            .ghost()
+                            .flex_shrink_0()
+                            .tooltip(t!("Home.refresh"))
+                            .on_click(
+                                cx.listener(|home, _, _, cx| home.refresh_local_home_data(cx)),
+                            ),
                         )
-                        .ghost()
-                        .flex_shrink_0()
-                        .tooltip(t!("Home.refresh"))
-                        .on_click(cx.listener(|home, _, _, cx| home.refresh_local_home_data(cx))),
-                    )
-                    .child(self.render_batch_toggle(cx)),
+                    })
+                    .when(!navigation || managing_connections, |tools| {
+                        tools.child(self.render_batch_toggle(cx))
+                    }),
             )
             .child(
                 // 主操作区分隔线（demo：1×18px --border）
@@ -147,7 +170,6 @@ impl HomePage {
                 (ConnectionLayout::Card, t!("Home.card_view")),
                 (ConnectionLayout::List, t!("Home.list_view")),
                 (ConnectionLayout::Tree, t!("Home.tree_view")),
-                (ConnectionLayout::Navigation, t!("Home.navigation_view")),
             ]
             .into_iter()
             .fold(menu, |menu, (layout, label)| {
@@ -156,12 +178,15 @@ impl HomePage {
                     PopupMenuItem::new(label.to_string())
                         .checked(layout == current)
                         .on_click(move |_, _, cx| {
-                            view.update(cx, |home, cx| {
-                                home.set_connection_layout(layout.into(), cx);
-                                AppSettings::update_and_save(cx, |settings| {
-                                    settings.home_connection_layout = layout.into()
+                            if AppSettings::try_update_and_save(cx, |settings| {
+                                settings.connection_management_view = layout.into();
+                            })
+                            .is_ok()
+                            {
+                                view.update(cx, |home, cx| {
+                                    home.set_connection_layout(layout.into(), cx);
                                 });
-                            });
+                            }
                         }),
                 )
             })
@@ -198,7 +223,7 @@ impl HomePage {
             .flex_shrink_0()
             .button(
                 Button::new("new-connect-button")
-                    .primary()
+                    .outline()
                     .icon(Icon::new(IconName::Plus).mono().with_size(IconSize::Small))
                     .when(window.bounds().size.width > px(1000.0), |button| {
                         button.label(t!("Home.new_connection"))

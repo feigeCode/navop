@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, AppContext, ElementId, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, div,
+    SharedString, StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::{Icon, InteractiveElementExt, Sizable, h_flex, menu::ContextMenuExt};
 use one_assets::IconName;
@@ -63,11 +63,7 @@ impl PersistentConnectionSidebar {
     ) -> AnyElement {
         let home = self.home_page.clone();
         let tree = one_ui::theme_geometry().tree;
-        let row_height = if self.home_embedded {
-            tree.row_height + gpui::px(4.0)
-        } else {
-            tree.row_height
-        };
+        let row_height = tree.row_height;
         h_flex()
             .id("home-tree-recent-header")
             .w_full()
@@ -75,7 +71,7 @@ impl PersistentConnectionSidebar {
             .px(tree.base_padding)
             .gap_1()
             .items_center()
-            .cursor_pointer()
+            .cursor_default()
             .hover(move |row| row.bg(palette.hover))
             .on_click(move |_, _, cx| {
                 home.update(cx, |home, cx| {
@@ -95,17 +91,13 @@ impl PersistentConnectionSidebar {
             .into_any_element()
     }
 
-    /// 渲染“分组”分区标题：把最近连接区和下方文件夹区分开。
+    /// 渲染“分组”分区标题：用中性文字区分最近连接区和文件夹区。
     ///
-    /// 不可折叠（“全部折叠/展开”另有入口），也不用 chevron；顶部细边框
-    /// 不占布局高度，保证 uniform_list 的所有行仍然等高。
+    /// 不可折叠（“全部折叠/展开”另有入口），也不用 chevron 或额外分隔线，
+    /// 保证 uniform_list 的所有行仍然等高。
     fn render_groups_header(&self, count: usize, palette: SidebarPalette) -> AnyElement {
         let tree = one_ui::theme_geometry().tree;
-        let row_height = if self.home_embedded {
-            tree.row_height + gpui::px(4.0)
-        } else {
-            tree.row_height
-        };
+        let row_height = tree.row_height;
         h_flex()
             .id("home-tree-groups-header")
             .w_full()
@@ -113,8 +105,8 @@ impl PersistentConnectionSidebar {
             .px(tree.base_padding)
             .gap_1()
             .items_center()
-            .border_t_1()
-            .border_color(palette.border.opacity(0.6))
+            .rounded(px(6.0))
+            .text_color(palette.muted_foreground)
             // 与相邻分区标题的文字对齐：不画 chevron，但保留同等宽度的占位。
             .child(div().w(tree.disclosure_size))
             .child(
@@ -128,8 +120,7 @@ impl PersistentConnectionSidebar {
             .into_any_element()
     }
 
-    /// 渲染“未分组”分区标题：与文件夹区之间用顶部一条细分隔线划出界限，
-    /// 标题本身可折叠，视觉配方与“最近连接”分区标题保持一致。
+    /// 渲染“未分组”分区标题：标题本身可折叠，视觉配方与“最近连接”保持一致。
     fn render_unassigned_header(
         &self,
         count: usize,
@@ -139,11 +130,7 @@ impl PersistentConnectionSidebar {
     ) -> AnyElement {
         let home = self.home_page.clone();
         let tree = one_ui::theme_geometry().tree;
-        let row_height = if self.home_embedded {
-            tree.row_height + gpui::px(4.0)
-        } else {
-            tree.row_height
-        };
+        let row_height = tree.row_height;
         h_flex()
             .id("home-tree-unassigned-header")
             .w_full()
@@ -151,9 +138,9 @@ impl PersistentConnectionSidebar {
             .px(tree.base_padding)
             .gap_1()
             .items_center()
-            .border_t_1()
-            .border_color(palette.border.opacity(0.6))
-            .cursor_pointer()
+            .rounded(px(6.0))
+            .text_color(palette.muted_foreground)
+            .cursor_default()
             .hover(move |row| row.bg(palette.hover))
             .on_click(move |_, _, cx| {
                 home.update(cx, |home, cx| {
@@ -195,28 +182,21 @@ impl PersistentConnectionSidebar {
         let rename_config = self.workspace_dialog_config(id, cx);
         let view_for_menu = view.clone();
         let tree = one_ui::theme_geometry().tree;
-        let row_height = if self.home_embedded {
-            tree.row_height + gpui::px(4.0)
-        } else {
-            tree.row_height
-        };
+        let row_height = tree.row_height;
         h_flex()
             .id(ElementId::Name(group.clone()))
             .group(group.clone())
             .w_full()
             .h(row_height)
-            .border_l_2()
-            .border_color(gpui::transparent_black())
+            .rounded(px(6.0))
             .pl(tree.base_padding + tree.indent * depth)
             .pr_1()
             .gap_1()
             .items_center()
-            .cursor_pointer()
+            .cursor_default()
             .text_color(palette.foreground)
             .hover(move |this| this.bg(palette.hover))
-            .drag_over::<DragConnection>(move |this, _, _, _| {
-                this.bg(palette.hover).border_color(palette.accent)
-            })
+            .drag_over::<DragConnection>(move |this, _, _, _| this.bg(palette.hover))
             .on_drop(cx.listener(move |this, drag: &DragConnection, _, cx| {
                 this.set_workspace_collapsed(id, false, cx);
                 this.home_page.update(cx, |home, cx| {
@@ -348,11 +328,7 @@ impl PersistentConnectionSidebar {
         };
         let view_for_menu = cx.entity();
         let tree = one_ui::theme_geometry().tree;
-        let row_height = if self.home_embedded {
-            tree.row_height + gpui::px(4.0)
-        } else {
-            tree.row_height
-        };
+        let row_height = tree.row_height;
         let visual_depth = if workspace_id.is_some() {
             depth + 1
         } else {
@@ -366,28 +342,20 @@ impl PersistentConnectionSidebar {
             }))
             .w_full()
             .h(row_height)
-            .border_l_2()
-            .border_color(if selected {
-                palette.selected_border
-            } else {
-                gpui::transparent_black()
-            })
+            .rounded(px(6.0))
             .pl(tree.base_padding + tree.indent * visual_depth)
             .pr_2()
             .gap_2()
             .items_center()
-            .cursor_pointer()
+            .cursor_default()
             .text_color(palette.foreground)
             .when(selected, |this| this.bg(palette.selected))
             .when(!selected, |this| {
                 this.hover(move |this| this.bg(palette.hover))
             })
             .when(!recent, |row| {
-                row.drag_over::<DragConnection>(move |this, _, _, _| {
-                    this.bg(palette.hover).border_color(palette.accent)
-                })
-                .on_drop(cx.listener(
-                    move |this, drag: &DragConnection, _, cx| {
+                row.drag_over::<DragConnection>(move |this, _, _, _| this.bg(palette.hover))
+                    .on_drop(cx.listener(move |this, drag: &DragConnection, _, cx| {
                         if let Some(workspace_id) = workspace_id {
                             this.set_workspace_collapsed(workspace_id, false, cx);
                         }
@@ -411,8 +379,7 @@ impl PersistentConnectionSidebar {
                             }
                         });
                         cx.notify();
-                    },
-                ))
+                    }))
             })
             .when(can_drag, |this| {
                 this.on_drag(drag, |drag, _, _, cx| {
@@ -511,16 +478,20 @@ mod tests {
         assert!(rows.contains("tree_connection_icon_slot(icon, palette)"));
         assert!(parts.contains("fn tree_connection_icon_slot"));
         assert!(parts.contains(".size(px(24.0))"));
-        assert!(parts.contains(".bg(palette.muted)"));
+        assert!(parts.contains(".bg(palette.muted.opacity(0.55))"));
     }
 
     #[test]
-    fn embedded_home_tree_adds_vertical_breathing_room_without_widening_docked_rows() {
+    fn every_tree_host_uses_the_shared_density_row_height() {
         let source = include_str!("rows.rs");
 
-        assert!(source.contains("if self.home_embedded"));
-        assert!(source.contains("tree.row_height + gpui::px(4.0)"));
-        assert!(source.contains("else {\n            tree.row_height"));
+        let implementation = source.split("#[cfg(test)]").next().unwrap();
+        assert_eq!(
+            implementation
+                .matches("let row_height = tree.row_height;")
+                .count(),
+            5
+        );
     }
 
     #[test]
@@ -550,9 +521,8 @@ mod tests {
         assert!(implementation.contains("Icon::new(IconName::Inbox)"));
         assert!(implementation.contains("Home.unassigned_connections"));
         assert!(implementation.contains("toggle_unassigned_connections"));
-        // 用顶部细边框划出与文件夹区的界限；边框不占布局高度，
-        // uniform_list 要求所有行等高，因此不能插入额外的分隔行。
-        assert!(implementation.contains("border_t_1()"));
+        // 分区用标题和留白区分，不插入额外分隔行，保证 uniform_list 等高。
+        assert!(!implementation.contains("border_t_1()"));
     }
 
     #[test]
@@ -571,7 +541,7 @@ mod tests {
         assert!(header.contains("home-tree-groups-header"));
         assert!(header.contains("Home.groups_section"));
         assert!(header.contains("Icon::new(IconName::FolderOpen)"));
-        assert!(header.contains("border_t_1()"));
+        assert!(!header.contains("border_t_1()"));
         assert!(header.contains("tree_count(count, palette)"));
         // 分区标题只是标签：不可折叠、不带 chevron。
         assert!(!header.contains("tree_chevron"));

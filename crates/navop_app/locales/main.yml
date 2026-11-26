@@ -330,6 +330,106 @@ Home:
     en: "Recent Connections"
     zh-CN: "最近连接"
     zh-HK: "最近連線"
+  tips_title:
+    en: "Tips"
+    zh-CN: "小技巧"
+    zh-HK: "小技巧"
+  tip_ssh:
+    en: "Type ssh user@host in search to connect straight away"
+    zh-CN: "搜索框输入 ssh user@host 可直达目标机器"
+    zh-HK: "搜尋框輸入 ssh user@host 可直達目標機器"
+  tip_quick_open:
+    en: "Press %{shortcut} to jump to any connection"
+    zh-CN: "按 %{shortcut} 可以快速跳到任意连接"
+    zh-HK: "按 %{shortcut} 可以快速跳到任意連線"
+  tip_group_filter:
+    en: "The filter in the toolbar narrows the list by group"
+    zh-CN: "右上角筛选器可按分组收窄列表"
+    zh-HK: "右上角篩選器可按分組收窄清單"
+  quick_actions:
+    en: "Quick actions"
+    zh-CN: "快捷操作"
+    zh-HK: "快捷操作"
+  quick_new_connection:
+    en: "New connection"
+    zh-CN: "新建连接"
+    zh-HK: "新建連線"
+  quick_new_connection_hint:
+    en: "SSH / database / RDP"
+    zh-CN: "SSH / 数据库 / RDP"
+    zh-HK: "SSH / 資料庫 / RDP"
+  quick_ssh:
+    en: "Quick SSH"
+    zh-CN: "快速 SSH"
+    zh-HK: "快速 SSH"
+  quick_ssh_hint:
+    en: "Type ssh user@host to connect"
+    zh-CN: "输入 ssh user@host 直接连接"
+    zh-HK: "輸入 ssh user@host 直接連線"
+  quick_notes:
+    en: "Open notes"
+    zh-CN: "打开笔记"
+    zh-HK: "開啟筆記"
+  quick_notes_hint:
+    en: "Docs and records"
+    zh-CN: "文档与记录"
+    zh-HK: "文件與記錄"
+  quick_ai_workbench:
+    en: "AI workbench"
+    zh-CN: "AI 工作台"
+    zh-HK: "AI 工作台"
+  quick_ai_workbench_hint:
+    en: "Let the assistant take it"
+    zh-CN: "让助手处理任务"
+    zh-HK: "讓助手處理任務"
+  continue_working:
+    en: "Continue working"
+    zh-CN: "继续工作"
+    zh-HK: "繼續工作"
+  continue_working_hint:
+    en: "Return to an open session or quickly open a recent connection."
+    zh-CN: "回到已打开的会话，或快速打开最近使用的连接。"
+    zh-HK: "回到已開啟的工作階段，或快速開啟最近使用的連線。"
+  active_sessions:
+    en: "Open sessions"
+    zh-CN: "已打开的会话"
+    zh-HK: "已開啟的工作階段"
+  no_active_sessions:
+    en: "No open sessions. Open a connection or a tool to start working."
+    zh-CN: "还没有打开的会话。打开连接或工具即可开始工作。"
+    zh-HK: "還沒有開啟的工作階段。開啟連線或工具即可開始工作。"
+  no_recent_connections:
+    en: "No recent connections"
+    zh-CN: "暂无最近使用的连接"
+    zh-HK: "暫無最近使用的連線"
+  resource_connections:
+    en: "Connections"
+    zh-CN: "连接"
+    zh-HK: "連線"
+  resource_database_objects:
+    en: "Database objects"
+    zh-CN: "数据库对象"
+    zh-HK: "資料庫物件"
+  manage_all_connections:
+    en: "Manage all connections"
+    zh-CN: "管理全部连接"
+    zh-HK: "管理全部連線"
+  back_to_home:
+    en: "Back to Home"
+    zh-CN: "返回主页"
+    zh-HK: "返回主頁"
+  connection_tree_in_sidebar:
+    en: "Browse the complete connection tree in the sidebar."
+    zh-CN: "请在左侧资源栏浏览完整的连接树。"
+    zh-HK: "請在左側資源欄瀏覽完整的連線樹。"
+  global_search_placeholder:
+    en: "Search sessions and connections, or type ssh user@host…"
+    zh-CN: "搜索会话、连接，或输入 ssh user@host 快速连接…"
+    zh-HK: "搜尋工作階段、連線，或輸入 ssh user@host 快速連線…"
+  global_search_empty:
+    en: "No matching open sessions or connections"
+    zh-CN: "没有匹配的已打开会话或连接"
+    zh-HK: "沒有符合的已開啟工作階段或連線"
   host_metrics_cpu:
     en: "CPU %{percent}%"
     zh-CN: "CPU %{percent}%"
@@ -3316,6 +3416,62 @@ Settings:
         en: Appearance
         zh-CN: 外观
         zh-HK: 外觀
+      application_section:
+        en: Application Appearance
+        zh-CN: 应用外观
+        zh-HK: 應用程式外觀
+      app_layout:
+        en: Application Layout
+        zh-CN: 应用布局
+        zh-HK: 應用程式佈局
+      app_layout_desc:
+        en: Choose the navigation style. Open connections and edited content are preserved when switching.
+        zh-CN: 选择应用导航方式，切换时已打开的连接与编辑内容保留。
+        zh-HK: 選擇應用程式導覽方式，切換時已開啟的連線與編輯內容保留。
+      layout_global:
+        en: Icon Resource Rail
+        zh-CN: 图标资源栏
+        zh-HK: 圖示資源欄
+      layout_global_desc:
+        en: Keep an icon rail on the left for switching resources.
+        zh-CN: 在窗口左侧固定图标资源栏，用图标切换资源。
+        zh-HK: 在視窗左側固定圖示資源欄，用圖示切換資源。
+      layout_home:
+        en: Home Navigation Menu
+        zh-CN: 主页导航菜单
+        zh-HK: 主頁導覽選單
+      layout_home_desc:
+        en: Switch resources through the navigation menu on the home page.
+        zh-CN: 通过主页中的导航菜单切换资源。
+        zh-HK: 透過主頁中的導覽選單切換資源。
+      layout_saved:
+        en: Layout switched; open connections and edited content were preserved.
+        zh-CN: 已切换；已打开的连接与编辑内容保留。
+        zh-HK: 已切換；已開啟的連線與編輯內容保留。
+      save_failed:
+        en: "Failed to save appearance settings: %{error}"
+        zh-CN: "外观设置保存失败：%{error}"
+        zh-HK: "外觀設定儲存失敗：%{error}"
+      interface_density:
+        en: Interface Density
+        zh-CN: 界面密度
+        zh-HK: 介面密度
+      interface_density_desc:
+        en: Adjust row heights and spacing for trees and toolbars without changing font sizes.
+        zh-CN: 调整树、工具栏等行高与间距，不改变字体大小。
+        zh-HK: 調整樹、工具列等行高與間距，不改變字型大小。
+      density_compact:
+        en: Compact
+        zh-CN: 紧凑
+        zh-HK: 緊湊
+      density_normal:
+        en: Normal
+        zh-CN: 正常
+        zh-HK: 正常
+      density_comfortable:
+        en: Comfortable
+        zh-CN: 舒适
+        zh-HK: 舒適
       dark_mode:
         en: Dark Mode
         zh-CN: 深色模式
@@ -4439,6 +4595,12 @@ Settings:
       en: AI
       zh-CN: AI
       zh-HK: AI
+
+  terminal:
+    title:
+      en: Terminal
+      zh-CN: 终端
+      zh-HK: 終端
 
   Ssh:
     title:

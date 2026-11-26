@@ -80,12 +80,26 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
     keybindings.extend(
         shortcuts_for(cx, action_id::TERMINAL_SEND_TAB, &["tab"])
             .into_iter()
-            .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, SendTab, Some(TERMINAL_CONTEXT), cx)),
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    SendTab,
+                    Some(TERMINAL_CONTEXT),
+                    cx,
+                )
+            }),
     );
     keybindings.extend(
         shortcuts_for(cx, action_id::TERMINAL_SEND_SHIFT_TAB, &["shift-tab"])
             .into_iter()
-            .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, SendShiftTab, Some(TERMINAL_CONTEXT), cx)),
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    SendShiftTab,
+                    Some(TERMINAL_CONTEXT),
+                    cx,
+                )
+            }),
     );
     // tmux 默认 prefix 是 Ctrl+B。终端内必须让这个 C0 字节透传到 PTY，
     // 不能被子栏切换等 app 级快捷键吞掉；否则用户无法使用 tmux 默认分屏/换窗键。
@@ -99,12 +113,26 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
     keybindings.extend(
         shortcuts_for(cx, action_id::TERMINAL_COPY, &[TERMINAL_COPY_SHORTCUT])
             .into_iter()
-            .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, Copy, Some(TERMINAL_CONTEXT), cx)),
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    Copy,
+                    Some(TERMINAL_CONTEXT),
+                    cx,
+                )
+            }),
     );
     keybindings.extend(
         shortcuts_for(cx, action_id::TERMINAL_PASTE, &terminal_paste_defaults())
             .into_iter()
-            .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, Paste, Some(TERMINAL_CONTEXT), cx)),
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    Paste,
+                    Some(TERMINAL_CONTEXT),
+                    cx,
+                )
+            }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -113,7 +141,14 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[TERMINAL_SELECT_ALL_SHORTCUT],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, SelectAll, Some(TERMINAL_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                SelectAll,
+                Some(TERMINAL_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -122,7 +157,14 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[TERMINAL_CLEAR_SCREEN_SHORTCUT],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ClearScreen, Some(TERMINAL_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                ClearScreen,
+                Some(TERMINAL_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -131,7 +173,14 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             TERMINAL_CLEAR_SELECTION_DEFAULTS,
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ClearSelection, Some(TERMINAL_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                ClearSelection,
+                Some(TERMINAL_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -182,7 +231,14 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[TERMINAL_TOGGLE_VI_MODE_SHORTCUT],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ToggleViMode, Some(TERMINAL_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                ToggleViMode,
+                Some(TERMINAL_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -191,7 +247,14 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &terminal_increase_font_defaults(),
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, IncreaseFont, Some(TERMINAL_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                IncreaseFont,
+                Some(TERMINAL_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -200,7 +263,14 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[terminal_platform_shortcut("cmd--", "ctrl--")],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, DecreaseFont, Some(TERMINAL_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                DecreaseFont,
+                Some(TERMINAL_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -209,7 +279,14 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[terminal_platform_shortcut("cmd-0", "ctrl-0")],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ResetFont, Some(TERMINAL_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                ResetFont,
+                Some(TERMINAL_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -218,7 +295,14 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[TERMINAL_SCROLL_LINE_UP_SHORTCUT],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ScrollLineUp, Some(TERMINAL_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                ScrollLineUp,
+                Some(TERMINAL_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -227,7 +311,14 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[TERMINAL_SCROLL_LINE_DOWN_SHORTCUT],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ScrollLineDown, Some(TERMINAL_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                ScrollLineDown,
+                Some(TERMINAL_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -236,7 +327,14 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[TERMINAL_SCROLL_PAGE_UP_SHORTCUT],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ScrollPageUp, Some(TERMINAL_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                ScrollPageUp,
+                Some(TERMINAL_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -245,7 +343,14 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[TERMINAL_SCROLL_PAGE_DOWN_SHORTCUT],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ScrollPageDown, Some(TERMINAL_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                ScrollPageDown,
+                Some(TERMINAL_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings
 }

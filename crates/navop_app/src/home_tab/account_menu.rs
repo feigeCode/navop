@@ -126,7 +126,7 @@ impl HomePage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let view = cx.entity();
-        let collapsed = self.sidebar_collapsed;
+        let collapsed = self.sidebar_collapsed || HomePage::uses_global_navigation_layout(cx);
         let trigger = AccountTrigger {
             avatar: self.current_user.as_ref().map(|user| {
                 (

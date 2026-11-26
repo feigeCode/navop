@@ -22,8 +22,6 @@ impl HomePage {
             .gap_1()
             .p_0p5()
             .rounded(px(8.0))
-            .border_1()
-            .border_color(cx.theme().border)
             .bg(cx.theme().background)
             .group_hover("", |style| style.opacity(1.0))
             .opacity(0.0)

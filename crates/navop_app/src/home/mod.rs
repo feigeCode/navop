@@ -1,8 +1,8 @@
 pub(crate) mod ai_workbench;
 mod ai_workbench_composer;
 pub(crate) mod connection_import_actions;
-pub(crate) mod connection_import_defaults;
 mod connection_import_database_conversion;
+pub(crate) mod connection_import_defaults;
 pub(crate) mod connection_import_draft;
 pub(crate) mod connection_import_draft_conversion;
 #[cfg(test)]

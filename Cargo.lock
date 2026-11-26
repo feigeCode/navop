@@ -8595,6 +8595,7 @@ dependencies = [
  "notify 7.0.0",
  "one-assets",
  "one-core",
+ "one-ui",
  "palette",
  "resvg",
  "rust-i18n",

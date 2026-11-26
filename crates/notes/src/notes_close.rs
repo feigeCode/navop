@@ -41,6 +41,10 @@ enum CloseSaveProgress {
 type CloseChoiceSender = Arc<Mutex<Option<oneshot::Sender<MarkdownCloseChoice>>>>;
 
 impl TabContent for NotesView {
+    fn set_external_primary_sidebar(&mut self, external: bool, _cx: &mut Context<Self>) {
+        self.set_external_sidebar(external);
+    }
+
     fn content_key(&self) -> &'static str {
         "Notes"
     }

@@ -972,12 +972,11 @@ fn default_migration_settings_enable_legacy_algorithms_only() {
 
 #[test]
 fn cleared_migration_defaults_leave_advanced_options_unset() {
-    let draft = EditableImportDraft::new(ssh_import("modern")).with_defaults(
-        ImportConnectionDefaults {
+    let draft =
+        EditableImportDraft::new(ssh_import("modern")).with_defaults(ImportConnectionDefaults {
             allow_legacy_algorithms: false,
             disable_shell_integration: false,
-        },
-    );
+        });
 
     let params = draft
         .to_stored_connection()

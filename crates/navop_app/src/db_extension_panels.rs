@@ -51,11 +51,7 @@ fn launch_context(context: &DatabasePanelContext) -> serde_json::Value {
 pub(crate) struct NavopDatabaseExtensionPanels;
 
 impl DatabaseExtensionPanelHost for NavopDatabaseExtensionPanels {
-    fn panels(
-        &self,
-        cx: &App,
-        context: &DatabasePanelContext,
-    ) -> Vec<DatabaseExtensionPanelSpec> {
+    fn panels(&self, cx: &App, context: &DatabasePanelContext) -> Vec<DatabaseExtensionPanelSpec> {
         let Some(catalog) = extension_runtime::global_catalog(cx) else {
             return Vec::new();
         };
