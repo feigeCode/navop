@@ -168,6 +168,16 @@ impl NotesView {
         self.external_sidebar = external;
     }
 
+    /// 页面自己画目录（外壳不接管）时，收起状态仍由顶部开关统一存放。
+    ///
+    /// 收起后只留编辑区，目录树不会销毁，重新展开还是原来那棵树和选中项。
+    pub fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        if self.sidebar_collapsed != collapsed {
+            self.sidebar_collapsed = collapsed;
+            cx.notify();
+        }
+    }
+
     pub fn set_external_sidebar_toggle_handler(
         &mut self,
         handler: Option<std::rc::Rc<dyn Fn(&gpui::Window, &mut gpui::App)>>,
@@ -390,6 +400,72 @@ mod external_markdown_tests {
         assert!(
             cx.debug_bounds("notes-sidebar-toggle-boundary").is_none(),
             "笔记目录不再画第二个折叠把手，统一由顶部按钮控制"
+        );
+    }
+
+    struct NotesPageTestWindow {
+        notes: Entity<NotesView>,
+    }
+
+    impl Render for NotesPageTestWindow {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            self.notes.clone()
+        }
+    }
+
+    #[gpui::test]
+    fn shell_toggle_collapses_and_restores_the_page_sidebar(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("shell-toggle.md");
+        std::fs::write(&path, "# Notes").unwrap();
+        let opened: std::rc::Rc<std::cell::RefCell<Option<Entity<NotesView>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let handle = opened.clone();
+        let window = cx.update(|cx| {
+            let window_bounds = Bounds::centered(None, size(px(1000.0), px(600.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let notes = cx.new(|cx| NotesView::new_for_markdown_file(path, window, cx));
+                    notes.update(cx, |notes, _| {
+                        notes.standalone_markdown = false;
+                        notes.external_sidebar = false;
+                    });
+                    *handle.borrow_mut() = Some(notes.clone());
+                    let test = cx.new(|_| NotesPageTestWindow { notes });
+                    cx.new(|cx| Root::new(test, window, cx))
+                },
+            )
+            .expect("test window opens")
+        });
+        let notes = opened.borrow().clone().expect("notes view opened");
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("notes-sidebar").is_some(),
+            "页面自己画目录时，目录面板必须真的挂在树上"
+        );
+
+        notes.update(&mut cx, |notes, cx| notes.set_sidebar_collapsed(true, cx));
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("notes-sidebar").is_none(),
+            "顶部开关收起后目录面板要让位，只留编辑区"
+        );
+
+        notes.update(&mut cx, |notes, cx| notes.set_sidebar_collapsed(false, cx));
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("notes-sidebar").is_some(),
+            "再次展开要恢复同一棵目录树，而不是重新建一个"
         );
     }
 

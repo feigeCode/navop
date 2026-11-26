@@ -6,7 +6,7 @@ use crate::persistent_connection_sidebar::{
 };
 use crate::resource_mount::{
     MountPreferences, MountVisibility, ResourceDeclaration, ResourceKind,
-    plan_mount_with_navigation_width,
+    plan_mount_with_navigation_width, resource_uses_connection_tree_state,
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -1826,7 +1826,8 @@ impl NavopApp {
                     let expanded = *expanded;
                     cx.defer(move |cx| {
                         app.update(cx, |app, cx| {
-                            app.set_connection_sidebar_expanded(expanded, cx);
+                            // 开关作用于当前标签的资源栏，不再一律算到连接树上。
+                            app.set_active_resource_sidebar_expanded(expanded, cx);
                         });
                     });
                 }
@@ -1998,16 +1999,69 @@ impl NavopApp {
             || self.hosts_database_tree(cx)
     }
 
+    /// 某个资源栏现在是展开还是收起。
+    ///
+    /// 连接树自己维护折叠位（`connection_sidebar_expanded`），其它资源栏读设置里
+    /// 各自的条目；没有记录时按展开算，和「新开的资源栏默认可见」一致。
+    fn resource_sidebar_expanded(&self, resource: ResourceKind, cx: &App) -> bool {
+        if resource_uses_connection_tree_state(resource) {
+            return self.connection_sidebar.read(cx).is_expanded();
+        }
+        AppSettings::global(cx)
+            .resource_sidebar_expanded
+            .get(crate::resource_mount::stable_resource_key(resource))
+            .copied()
+            .unwrap_or(true)
+    }
+
     pub(crate) fn toggle_application_resource(&mut self, cx: &mut Context<Self>) {
-        let expanded = !self.connection_sidebar.read(cx).is_expanded();
+        let expanded = {
+            let (resource, _, _) = self.active_resource(cx);
+            !self.resource_sidebar_expanded(resource, cx)
+        };
+        self.set_active_resource_sidebar_expanded(expanded, cx);
+    }
+
+    /// 把「当前标签的资源栏」设成展开/收起。
+    ///
+    /// 标签栏上的资源栏开关（`NavigationSidebarToggled`）也走这里：在数据库页收起的
+    /// 是对象树，在笔记页收起的是目录，不能一律算到连接树上，否则点了没反应。
+    pub(crate) fn set_active_resource_sidebar_expanded(
+        &mut self,
+        expanded: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let (resource, _, _) = self.active_resource(cx);
         if expanded {
             self.resource_overlay_dismissed = false;
         }
-        let external = self.external_primary_sidebar(cx);
-        self.tab_container.update(cx, |tabs, cx| {
-            tabs.prepare_external_primary_sidebar(external, cx)
-        });
-        self.set_connection_sidebar_expanded(expanded, cx);
+        if resource_uses_connection_tree_state(resource) {
+            let external = self.external_primary_sidebar(cx);
+            self.tab_container.update(cx, |tabs, cx| {
+                tabs.prepare_external_primary_sidebar(external, cx)
+            });
+            self.set_connection_sidebar_expanded(expanded, cx);
+            return;
+        }
+        self.persist_resource_sidebar_expanded(resource, expanded, cx);
+    }
+
+    /// 只翻转当前资源栏的展开位：其它资源栏各自的偏好保持原样。
+    fn persist_resource_sidebar_expanded(
+        &mut self,
+        resource: ResourceKind,
+        expanded: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let key = crate::resource_mount::stable_resource_key(resource);
+        if let Err(error) = AppSettings::try_update_and_save(cx, |settings| {
+            settings
+                .resource_sidebar_expanded
+                .insert(key.to_owned(), expanded);
+        }) {
+            tracing::warn!(resource = key, %error, "资源栏展开状态保存失败，仅保留本次会话中的调整");
+        }
+        cx.notify();
     }
 
     fn persist_connection_sidebar_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
@@ -2601,6 +2655,122 @@ mod tests {
         assert!(keybindings.contains("close_active_tab_default_shortcuts()"));
         assert!(refreshable_keybindings.contains("close_active_tab_default_shortcuts()"));
         assert!(close_tab_handler.contains("hp.close_active_tab(window, cx)"));
+    }
+
+    #[test]
+    fn every_resource_sidebar_keeps_its_own_expanded_state() {
+        let source = include_str!("navop_app.rs");
+        let render = source
+            .rsplit("impl Render for NavopApp")
+            .next()
+            .and_then(|render| render.split("#[cfg(test)]").next())
+            .expect("外壳渲染代码");
+
+        assert!(
+            !render.contains("desired_visible: self.connection_sidebar.read(cx).is_expanded()"),
+            "所有资源栏共用连接树的折叠位时，收起笔记目录会把数据库对象树一起收起来"
+        );
+        assert!(render.contains("desired_visible: self.resource_sidebar_expanded(resource, cx)"));
+
+        let helper = source
+            .split(
+                "fn resource_sidebar_expanded(&self, resource: ResourceKind, cx: &App) -> bool {",
+            )
+            .nth(1)
+            .and_then(|rest| rest.split("\n    }\n").next())
+            .expect("资源栏展开状态的读取实现");
+        assert!(helper.contains("resource_uses_connection_tree_state(resource)"));
+        assert!(helper.contains("self.connection_sidebar.read(cx).is_expanded()"));
+        assert!(helper.contains(".resource_sidebar_expanded"));
+        assert!(helper.contains("stable_resource_key(resource)"));
+        assert!(
+            helper.contains(".unwrap_or(true)"),
+            "没记录过的资源栏要默认展开，新资源不能一上来就是收起的"
+        );
+
+        let toggle = source
+            .split("pub(crate) fn toggle_application_resource(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    }\n").next())
+            .expect("资源栏开关实现");
+        assert!(toggle.contains("let (resource, _, _) = self.active_resource(cx);"));
+        assert!(toggle.contains("self.resource_sidebar_expanded(resource, cx)"));
+        assert!(
+            toggle.contains("self.set_active_resource_sidebar_expanded(expanded, cx)"),
+            "开关必须按当前资源落盘，不能写死连接树"
+        );
+
+        let setter = source
+            .split("pub(crate) fn set_active_resource_sidebar_expanded(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    }\n").next())
+            .expect("按资源设置展开状态的实现");
+        assert!(setter.contains("resource_uses_connection_tree_state(resource)"));
+        assert!(setter.contains("self.set_connection_sidebar_expanded(expanded, cx)"));
+        assert!(setter.contains("self.persist_resource_sidebar_expanded(resource, expanded, cx)"));
+
+        // 标签栏上的资源栏开关也要按当前资源走：数据库页点开关收起的是对象树，
+        // 一律交给连接树的话点了就没有任何反应。
+        let toggled_subscription = source
+            .split("TabContainerEvent::NavigationSidebarToggled { expanded } => {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n                TabContainerEvent::").next())
+            .expect("标签栏开关事件处理");
+        assert!(
+            toggled_subscription.contains("app.set_active_resource_sidebar_expanded(expanded, cx)")
+        );
+        assert!(
+            !toggled_subscription.contains("app.set_connection_sidebar_expanded(expanded, cx)")
+        );
+
+        let persist = source
+            .split("fn persist_resource_sidebar_expanded(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    }\n").next())
+            .expect("资源栏展开状态的保存实现");
+        assert!(persist.contains(".resource_sidebar_expanded"));
+        assert!(persist.contains(".insert(key.to_owned(), expanded)"));
+        assert!(
+            !persist.contains("settings.connection_sidebar_expanded"),
+            "非连接资源栏不能借连接树的折叠位落盘，否则它们的值还是同一个"
+        );
+    }
+
+    #[test]
+    fn notes_page_keeps_the_top_sidebar_toggle_when_the_shell_does_not_host_it() {
+        let source = include_str!("navop_app.rs");
+        let render = source
+            .rsplit("impl Render for NavopApp")
+            .next()
+            .and_then(|render| render.split("#[cfg(test)]").next())
+            .expect("外壳渲染代码");
+
+        // 主页布局不托管笔记目录，求解出来的可见性必然是 Hidden；顶部开关要退回
+        // 用页面自己的折叠位，否则笔记标签上这个按钮整块不可见。
+        assert!(
+            render.contains("let inline_notes_nav = (layout == AppLayout::HomeNavigation"),
+            "主页布局的笔记目录留在页面里，顶部开关得单独取折叠位"
+        );
+        assert!(render.contains("resource == ResourceKind::Notes"));
+        assert!(render.contains("plan.visibility == MountVisibility::Hidden"));
+        assert!(render.contains("self.resource_sidebar_expanded(ResourceKind::Notes, cx)"));
+        assert!(
+            render.contains("let inline_navigation = if has_resource {"),
+            "有面板托管时仍以求解出来的可见性为准"
+        );
+        assert!(render.contains("tabs.set_navigation_sidebar_toggle(inline_navigation, cx)"));
+        assert!(
+            render.contains("has_resource || inline_navigation.is_some()"),
+            "开关按钮的可用性要包含页面内部托管的资源栏"
+        );
+        assert!(
+            render.contains("notes.set_sidebar_collapsed(notes_collapsed, cx)"),
+            "笔记页得跟着顶部开关收起/展开目录"
+        );
+        assert!(
+            !render.contains("notes.set_sidebar_collapsed(!self."),
+            "闭包里不能再去借 App，要在闭包外先算好折叠位"
+        );
     }
 
     #[test]
@@ -3427,7 +3597,7 @@ impl Render for NavopApp {
             f32::from(window.viewport_size().width),
             navigation_width,
             &MountPreferences {
-                desired_visible: self.connection_sidebar.read(cx).is_expanded(),
+                desired_visible: self.resource_sidebar_expanded(resource, cx),
                 width: persisted_resource_width,
             },
         );
@@ -3515,6 +3685,14 @@ impl Render for NavopApp {
             plan.visibility,
             MountVisibility::Visible | MountVisibility::Collapsed | MountVisibility::Overlay
         );
+        // 主页布局里笔记目录留在页面内部，外壳不接管这块面板（`base_slot` 返回
+        // 空），于是顶部开关既没有面板可管、笔记页自己又不再画折叠把手，目录就
+        // 收不起来了。这里让顶部开关继续表达「笔记目录是否展开」，状态仍存在
+        // 按资源分开的那张表里，笔记页每帧把自己的目录跟着它同步。
+        let inline_notes_nav = (layout == AppLayout::HomeNavigation
+            && resource == ResourceKind::Notes
+            && plan.visibility == MountVisibility::Hidden)
+            .then(|| self.resource_sidebar_expanded(ResourceKind::Notes, cx));
         // 宿主模式在上面已经同步过，这里直接沿用，避免同一帧两套判定。
         // 主页标签下，标签栏的开关位用来收起/展开左侧应用菜单；
         // 其他标签仍交回资源栏，避免两个折叠对象争同一个按钮。
@@ -3543,9 +3721,19 @@ impl Render for NavopApp {
                 })
         })
         .flatten();
+        // 外壳接管面板时用求解出来的可见性；面板留在页面里时用页面自己的
+        // 折叠位，否则这一页的顶部开关会整块不可见。
+        let inline_navigation = if has_resource {
+            Some(resource_visible)
+        } else {
+            inline_notes_nav
+        };
         self.tab_container.update(cx, |tabs, cx| {
-            tabs.set_resource_sidebar_toggle_visible(has_resource, cx);
-            tabs.set_navigation_sidebar_toggle(has_resource.then_some(resource_visible), cx);
+            tabs.set_resource_sidebar_toggle_visible(
+                has_resource || inline_navigation.is_some(),
+                cx,
+            );
+            tabs.set_navigation_sidebar_toggle(inline_navigation, cx);
             tabs.set_home_menu_toggle(home_menu_expanded, cx);
             tabs.set_workbench_nav_toggle(workbench_nav, cx);
         });
@@ -3578,9 +3766,13 @@ impl Render for NavopApp {
             .into_any_element();
         if let Some(content) = self.tab_container.read(cx).active_content_snapshot() {
             if let Ok(notes) = content.view().downcast::<notes::NotesView>() {
+                // 目录宿主由外壳接管时页面不画侧栏；留在页面里时（主页布局）把
+                // 顶部开关的折叠位同步过去，让同一个按钮在两种宿主下都有效。
+                let notes_collapsed = !self.resource_sidebar_expanded(ResourceKind::Notes, cx);
                 notes.update(cx, |notes, cx| {
                     // A 的目录宿主不随折叠改变；收起后由顶部按钮重新展开。
                     notes.set_external_sidebar(external);
+                    notes.set_sidebar_collapsed(notes_collapsed, cx);
                     notes.set_external_sidebar_toggle_handler(
                         cx.try_global::<GlobalNavopApp>().map(|global| {
                             let app = global.app.clone();

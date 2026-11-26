@@ -125,7 +125,7 @@ impl NotesView {
             .debug_selector(|| "markdown-mode-toolbar".to_owned())
             .w_full()
             .min_w_0()
-            .h_9()
+            .h(crate::notes_render::NOTES_PANEL_HEADER_HEIGHT)
             .flex_shrink_0()
             .overflow_hidden()
             .px_2()

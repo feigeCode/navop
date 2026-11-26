@@ -1744,6 +1744,14 @@ pub struct AppSettings {
     pub home_navigation_menu_expanded: bool,
     #[serde(default = "default_true")]
     pub connection_sidebar_expanded: bool,
+    /// 每个资源栏各自的展开/收起偏好，键是资源栏的稳定键
+    /// （`resource_mount::stable_resource_key`）。
+    ///
+    /// 连接树仍由 `connection_sidebar_expanded` 管：树的折叠状态归树控件自己，
+    /// 这份表只管外壳托管的其它资源栏。分开存之后收起笔记目录不会顺带把数据库
+    /// 对象树、AI 会话列表一起收掉。
+    #[serde(default)]
+    pub resource_sidebar_expanded: std::collections::HashMap<String, bool>,
     #[serde(default)]
     pub connection_sidebar_tree_state: ConnectionSidebarTreeState,
     /// 是否启用SQL查询的自动保存功能
@@ -2207,6 +2215,7 @@ impl Default for AppSettings {
             connection_sort_order: ConnectionSortOrder::default(),
             home_navigation_menu_expanded: true,
             connection_sidebar_expanded: true,
+            resource_sidebar_expanded: std::collections::HashMap::new(),
             connection_sidebar_tree_state: ConnectionSidebarTreeState::default(),
             enable_sql_auto_save: true,
             sql_auto_save_interval: default_auto_save_interval(),
@@ -3928,6 +3937,40 @@ mod tests {
         assert_eq!(
             ConnectionSortOrder::Natural,
             ConnectionSortOrder::from_value("unknown")
+        );
+    }
+
+    #[test]
+    fn resource_sidebar_expanded_state_is_per_resource() {
+        // 老配置里没有这张表：读出来是空的，由外壳按「默认展开」兜底。
+        let legacy: AppSettings = serde_json::from_value(serde_json::json!({
+            "connection_sidebar_expanded": false
+        }))
+        .expect("旧配置应能读");
+        assert!(legacy.resource_sidebar_expanded.is_empty());
+
+        let mut settings = AppSettings::default();
+        // 连接树收起、笔记目录仍然收起自己那份，两者互不覆盖。
+        settings.connection_sidebar_expanded = false;
+        settings
+            .resource_sidebar_expanded
+            .insert("notes".to_owned(), false);
+        let saved = serde_json::to_value(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_value(saved).unwrap();
+        assert_eq!(
+            Some(&false),
+            restored.resource_sidebar_expanded.get("notes")
+        );
+        assert!(
+            restored
+                .resource_sidebar_expanded
+                .get("db_objects")
+                .is_none(),
+            "只收起的笔记目录不能顺带把数据库对象树也写成收起"
+        );
+        assert!(
+            !restored.connection_sidebar_expanded,
+            "连接树的折叠位仍然只由 connection_sidebar_expanded 表达"
         );
     }
 
