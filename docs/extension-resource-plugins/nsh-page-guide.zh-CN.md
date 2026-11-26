@@ -188,6 +188,13 @@ try {
 **取消**：仍然没有单独的 cancel API。页面被关闭（tab 关掉 / 扩展停用）时，
 宿主会取消所有在途调用并在有必要时补一次 close（open 了一半的资源会被回收）。
 
+**本地存储**：页面自己的键值数据走 nsh 的 `nsh/storage`，落盘在
+`<Navop 数据目录>/nsh/<nsh.json 的 id>/storage.json`（macOS 上是
+`~/Library/Application Support/navop/nsh/<id>/storage.json`）。宿主把
+`AppOptions.data_dir` 指到了自己的数据目录，所以页面数据跟着 Navop 的备份、
+迁移和卸载走；写是整份 `storage.json` 重写，别把大块数据塞进去（单 app 配额
+5 MB），也别让两个面板同时当同一个 key 的唯一写者。
+
 ## 4. 页面怎么拿数据
 
 宿主只给页面两条通道：
