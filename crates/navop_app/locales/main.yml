@@ -5461,6 +5461,14 @@ Settings:
       en: Select All Objects
       zh-CN: 全选对象
       zh-HK: 全選物件
+    database_refresh:
+      en: Refresh Current Database Panel
+      zh-CN: 刷新当前数据库面板
+      zh-HK: 重新整理目前資料庫面板
+    database_save_changes:
+      en: Save Table Data Changes
+      zh-CN: 保存表数据修改
+      zh-HK: 儲存表資料修改
     sql_run_query:
       en: Run Current Query
       zh-CN: 执行当前查询

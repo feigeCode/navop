@@ -1671,6 +1671,100 @@ async fn agent_retries_after_unknown_pseudo_tool_call() {
 }
 
 #[tokio::test]
+async fn agent_reports_empty_function_name_as_provider_protocol_error() {
+    let model = Arc::new(MockModelClient::new([ModelResponse::tool_call(
+        function_tool_call("c_empty", "", "{}"),
+    )]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new().with_tool(Arc::new(EchoTool)),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    let outcome = runtime
+        .run_turn_blocking(session.id(), "查询连接".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    assert!(
+        matches!(
+            outcome,
+            TaskOutcome::Failed { reason }
+                if reason.contains("<empty>") && reason.contains("protocol error")
+        ),
+        "空 function name 必须明确报告 Provider 协议错误"
+    );
+    assert_eq!(1, model.request_count(), "协议错误不应被重复回喂");
+}
+
+#[tokio::test]
+async fn unavailable_tool_preserves_raw_invalid_function_name() {
+    let model = Arc::new(MockModelClient::new([
+        ModelResponse::tool_call(function_tool_call("c_invalid", "___", "{}")),
+        ModelResponse::text("已改用可用工具。"),
+    ]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new().with_tool(Arc::new(EchoTool)),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    let outcome = runtime
+        .run_turn_blocking(session.id(), "查询连接".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    assert!(matches!(outcome, TaskOutcome::Completed { .. }));
+    let events = drain_events(&mut rx);
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ObservationAdded { observation, .. }
+                if !observation.success
+                    && observation.tool_name.as_str() == "invalid_tool_name"
+                    && observation.summary.contains("`___`")
+                    && !observation.summary.contains("`invalid_tool_name`")
+        )
+    }));
+}
+
+#[tokio::test]
+async fn agent_stops_when_same_unknown_tool_is_repeated_consecutively() {
+    let model = Arc::new(MockModelClient::new([
+        ModelResponse::tool_call(function_tool_call("c_missing_1", "missing_tool", "{}")),
+        ModelResponse::tool_call(function_tool_call("c_missing_2", "missing_tool", "{}")),
+        ModelResponse::text("不应走到这里。"),
+    ]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new().with_tool(Arc::new(EchoTool)),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    let outcome = runtime
+        .run_turn_blocking(session.id(), "查询连接".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    assert!(
+        matches!(
+            outcome,
+            TaskOutcome::Failed { reason }
+                if reason.contains("missing_tool") && reason.contains("consecutive")
+        ),
+        "连续重复同一未知工具应 fail fast"
+    );
+    assert_eq!(2, model.request_count(), "第二次重复后不应继续重试");
+}
+
+#[tokio::test]
 async fn system_prompt_lists_available_tools_and_json_rule() {
     let model = Arc::new(MockModelClient::new([ModelResponse::text("ok")]));
     let runtime = Runtime::new(RuntimeServices::new(
@@ -1692,7 +1786,8 @@ async fn system_prompt_lists_available_tools_and_json_rule() {
     assert!(system.contains("update_plan"));
     assert!(system.contains("delegate_task"));
     assert!(system.contains("JSON object"));
-    assert!(system.contains("`tool`"));
+    assert!(!system.contains("`tool`"));
+    assert!(!system.contains("generic pseudo-tool"));
 }
 
 #[tokio::test]

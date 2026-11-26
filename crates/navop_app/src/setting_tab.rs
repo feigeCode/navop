@@ -3399,6 +3399,20 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
+        keys_macos: &["f5"],
+        keys_other: &["f5"],
+        label_key: "Settings.Shortcuts.database_refresh",
+        action_id: Some(action_id::DB_REFRESH),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-s"],
+        keys_other: &["ctrl-s"],
+        label_key: "Settings.Shortcuts.database_save_changes",
+        action_id: Some(action_id::DB_SAVE_CHANGES),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
         keys_macos: &["cmd-enter", "ctrl-enter"],
         keys_other: &["cmd-enter", "ctrl-enter"],
         label_key: "Settings.Shortcuts.sql_run_query",

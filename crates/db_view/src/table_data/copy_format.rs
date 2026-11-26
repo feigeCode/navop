@@ -247,6 +247,30 @@ impl CopyFormatter {
         }
     }
 
+    /// 格式化一条记录为 JSON 对象，供记录阅读视图使用。
+    ///
+    /// 与批量 JSON 复制保持同一套标量判断：严格数字和布尔值保留类型，
+    /// 其余文本保持字符串，二进制值使用 `base64:` 表示。
+    pub fn record_json_value(
+        context: CopyFormatContext<'_>,
+        row_index: usize,
+    ) -> Option<serde_json::Value> {
+        let row = context.data.get(row_index)?;
+        let mut object = serde_json::Map::with_capacity(row.len());
+        for column_index in 0..row.len() {
+            let name = context
+                .columns
+                .get(column_index)
+                .map_or("_", SharedString::as_ref);
+            let value = Self::to_json_value(context.cell(row_index, column_index));
+            object.insert(
+                name.to_string(),
+                serde_json::from_str(&value).expect("record JSON value is valid JSON"),
+            );
+        }
+        Some(serde_json::Value::Object(object))
+    }
+
     fn format_tsv(context: CopyFormatContext<'_>) -> String {
         // 含分隔符/换行的值会转义，否则粘贴时会被当成列/行分隔符切开（issue #355）。
         encode_tsv_rows(context.data.iter().enumerate().map(|(row_index, row)| {

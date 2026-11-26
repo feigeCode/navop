@@ -40,6 +40,7 @@ uuid.workspace = true
 rust_xlsxwriter.workspace = true
 rust-i18n.workspace = true
 json5.workspace = true
+json_view.workspace = true
 image.workspace = true
 regex.workspace = true
 ropey.workspace = true
