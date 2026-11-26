@@ -750,7 +750,10 @@ impl Render for Editor {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_editor_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_editor_mouse_up))
             .on_scroll(cx.listener(Self::on_editor_scroll_wheel))
-            .p(px(d.editor_padding))
+            .px(px(d.editor_padding))
+            // 顶部留白只留内边距的一半：编辑器紧贴工具栏，正文不再从半空开始。
+            // 左右仍按 editor_padding 排，和工具条的左边距、块缩进保持同一套栅格。
+            .pt(px(d.editor_padding * 0.5))
             .pb(px(d.editor_padding
                 + scroll_trigger_padding
                 + scroll_beyond_bottom))

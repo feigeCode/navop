@@ -18,6 +18,12 @@ use one_assets::IconName;
 use rust_i18n::t;
 use std::path::{Path, PathBuf};
 
+/// 左栏表头与右侧 Markdown 工具栏共用这一个高度。
+///
+/// 两侧面板的分隔线要落在同一像素上，就不能让一边靠内边距凑、另一边写死
+/// `h_9()`：字体行高稍有变化，两条线就会错开。
+pub(crate) const NOTES_PANEL_HEADER_HEIGHT: gpui::Pixels = px(36.0);
+
 const NOTES_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(248.0);
 const NOTES_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(28.0);
 const NOTES_EXTERNAL_SIDEBAR_MIN_WIDTH: gpui::Pixels = px(220.0);
@@ -131,6 +137,7 @@ impl NotesView {
             .collect::<Vec<_>>();
         let rows_are_empty = rows.is_empty();
         v_flex()
+            .debug_selector(|| "notes-sidebar".to_owned())
             .relative()
             .bg(cx.theme().sidebar)
             .w(width)
@@ -249,7 +256,8 @@ impl NotesView {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .w_full()
-            .p_2()
+            .h(NOTES_PANEL_HEADER_HEIGHT)
+            .px_2()
             .gap_1()
             .border_b_1()
             .border_color(cx.theme().border)
@@ -552,6 +560,44 @@ mod tests {
     use super::{SidebarContextTarget, SidebarMenuAction, sidebar_menu_actions};
 
     #[test]
+    fn both_panels_share_one_header_height() {
+        let sidebar_source = include_str!("notes_render.rs");
+        let editor_source = include_str!("markdown_render.rs");
+        let sidebar = sidebar_source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("sidebar body before its tests");
+
+        let toolbar_start = sidebar.find("fn render_toolbar").expect("sidebar toolbar");
+        let toolbar_end = sidebar[toolbar_start..]
+            .find("fn render_row")
+            .map(|offset| toolbar_start + offset)
+            .expect("row renderer after the toolbar");
+        let toolbar = &sidebar[toolbar_start..toolbar_end];
+
+        assert!(
+            sidebar.contains("pub(crate) const NOTES_PANEL_HEADER_HEIGHT"),
+            "表头高度要有一个共享常量，否则两侧各写各的又会漂"
+        );
+        assert!(
+            toolbar.contains(".h(NOTES_PANEL_HEADER_HEIGHT)"),
+            "左栏表头必须钉在共享高度上"
+        );
+        assert!(
+            !toolbar.contains(".p_2()"),
+            "表头高度由内边距凑出来时会和右侧固定的工具栏高度对不齐"
+        );
+        assert!(
+            editor_source.contains(".h(crate::notes_render::NOTES_PANEL_HEADER_HEIGHT)"),
+            "右侧 Markdown 工具栏也要用同一个高度常量"
+        );
+        assert!(
+            !editor_source.contains(".h_9()"),
+            "工具栏高度不能再写死 h_9()，它和左侧表头不是同一个来源"
+        );
+    }
+
+    #[test]
     fn notes_content_is_bounded_by_the_active_tab_width() {
         let source = include_str!("notes_render.rs");
 
@@ -593,6 +639,46 @@ mod tests {
                 "NotesView root must keep {constraint} so intrinsic note content cannot squeeze window chrome"
             );
         }
+    }
+
+    #[test]
+    fn sidebar_collapse_follows_the_shell_toggle() {
+        let view = include_str!("notes_view.rs");
+        let setter_start = view
+            .find(
+                "pub fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>)",
+            )
+            .expect("笔记目录折叠位 setter");
+        let setter_end = view[setter_start..]
+            .find("\n    }\n")
+            .map(|offset| setter_start + offset)
+            .expect("setter end");
+        let setter = &view[setter_start..setter_end];
+
+        assert!(setter.contains("if self.sidebar_collapsed != collapsed"));
+        assert!(setter.contains("self.sidebar_collapsed = collapsed;"));
+        assert!(
+            setter.contains("cx.notify()"),
+            "折叠位变化必须通知重绘，否则顶部开关点了页面没反应"
+        );
+        for forbidden in ["self.sessions.remove", "self.rows.clear", "Self::base"] {
+            assert!(
+                !setter.contains(forbidden),
+                "收起目录只是不画它，不能销毁目录树或选中项"
+            );
+        }
+
+        let source = include_str!("notes_render.rs");
+        assert!(
+            source.contains(".debug_selector(|| \"notes-sidebar\".to_owned())"),
+            "目录面板需要稳定的调试选择器，测试才能判断它在不在"
+        );
+        let ready = source
+            .split("fn render_ready")
+            .nth(1)
+            .and_then(|rest| rest.split("fn render_sidebar").next())
+            .expect("ready renderer");
+        assert!(ready.contains("self.sidebar_collapsed"), "收起后只留编辑区");
     }
 
     #[test]

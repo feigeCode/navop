@@ -331,6 +331,14 @@ pub const fn stable_resource_key(resource: ResourceKind) -> &'static str {
     }
 }
 
+/// 该资源栏的折叠位是不是由业务控件自己维护。
+///
+/// 连接树（以及没有资源栏的空位）的展开状态归连接树控件，其余资源栏是外壳
+/// 托管的，各自在设置里存一份，互不影响。
+pub const fn resource_uses_connection_tree_state(resource: ResourceKind) -> bool {
+    matches!(resource, ResourceKind::Connections | ResourceKind::None)
+}
+
 /// 按布局与资源隔离宽度偏好，避免切换布局相互覆盖。
 pub fn stable_width_key(layout: AppLayout, resource: ResourceKind) -> String {
     let layout = match layout {
@@ -963,5 +971,29 @@ mod tests {
             stable_width_key(AppLayout::GlobalNavigation, ResourceKind::Connections),
             stable_width_key(AppLayout::GlobalNavigation, ResourceKind::Connections)
         );
+    }
+
+    #[test]
+    fn 只有连接树用控件自己的折叠位() {
+        for resource in [ResourceKind::Connections, ResourceKind::None] {
+            assert!(
+                resource_uses_connection_tree_state(resource),
+                "{resource:?} 应该沿用连接树的折叠位"
+            );
+        }
+        for resource in [
+            ResourceKind::Notes,
+            ResourceKind::AiSessions,
+            ResourceKind::SettingsCategories,
+            ResourceKind::DbObjects,
+            ResourceKind::RedisKeys,
+            ResourceKind::MongoCollections,
+            ResourceKind::RemoteFiles,
+        ] {
+            assert!(
+                !resource_uses_connection_tree_state(resource),
+                "{resource:?} 必须有自己独立的展开状态，否则收起一处会连带收起别处"
+            );
+        }
     }
 }
