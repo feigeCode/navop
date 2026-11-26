@@ -328,6 +328,19 @@ impl DatabaseTabView {
         self
     }
 
+    /// 只移动既有对象树的宿主，不重建连接、编辑器或 AI 工具面板。
+    pub fn set_external_sidebar(&mut self, external: bool, cx: &mut Context<Self>) {
+        let mode = if external {
+            DatabaseSidebarRenderMode::External
+        } else {
+            DatabaseSidebarRenderMode::Embedded
+        };
+        if self.sidebar_render_mode != mode {
+            self.sidebar_render_mode = mode;
+            cx.notify();
+        }
+    }
+
     pub fn new(
         workspace: Option<Workspace>,
         connection: StoredConnection,
@@ -972,6 +985,10 @@ impl Focusable for DatabaseTabView {
 impl EventEmitter<TabContentEvent> for DatabaseTabView {}
 
 impl TabContent for DatabaseTabView {
+    fn set_external_primary_sidebar(&mut self, external: bool, cx: &mut Context<Self>) {
+        self.set_external_sidebar(external, cx);
+    }
+
     fn content_key(&self) -> &'static str {
         "Database"
     }
@@ -1290,62 +1307,66 @@ impl Render for DatabaseTabView {
             .when(!is_connected_flag, |el: gpui::Div| {
                 el.child(self.render_connection_status(cx))
             })
-            .when(is_connected_flag, |el: gpui::Div| {
-                let border_color = cx.theme().border;
-                let tree_panel_size = self.tree_panel_size;
-                let bounds_view = view.clone();
+            .when(
+                is_connected_flag
+                    && self.sidebar_render_mode == DatabaseSidebarRenderMode::Embedded,
+                |el: gpui::Div| {
+                    let border_color = cx.theme().border;
+                    let tree_panel_size = self.tree_panel_size;
+                    let bounds_view = view.clone();
 
-                el.child(
-                    h_flex()
-                        .size_full()
-                        .on_prepaint(move |bounds, _, cx| {
-                            bounds_view.update(cx, |view, _| {
-                                view.bounds = bounds;
-                            });
-                        })
-                        .child(
-                            div()
-                                .relative()
-                                .h_full()
-                                .w(tree_panel_size)
-                                .flex_shrink_0()
-                                .border_r_1()
-                                .border_color(border_color)
-                                .child(self.db_tree_view.clone())
-                                .child(self.render_tree_resize_handle(window, cx)),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .h_full()
-                                .min_w_0()
-                                .child(self.render_workspace_content(cx)),
-                        )
-                        .when(sidebar_visible, |this| {
-                            this.child(
+                    el.child(
+                        h_flex()
+                            .size_full()
+                            .on_prepaint(move |bounds, _, cx| {
+                                bounds_view.update(cx, |view, _| {
+                                    view.bounds = bounds;
+                                });
+                            })
+                            .child(
                                 div()
                                     .relative()
                                     .h_full()
-                                    .w(sidebar_panel_size)
+                                    .w(tree_panel_size)
                                     .flex_shrink_0()
-                                    .overflow_hidden()
-                                    .child(self.render_sidebar_resize_handle(window, cx))
-                                    .child(self.sidebar.clone()),
+                                    .border_r_1()
+                                    .border_color(border_color)
+                                    .child(self.db_tree_view.clone())
+                                    .child(self.render_tree_resize_handle(window, cx)),
                             )
-                        })
-                        .when(!sidebar_visible, |this| {
-                            this.child(
+                            .child(
                                 div()
+                                    .flex_1()
                                     .h_full()
-                                    .w(TOOLBAR_WIDTH)
-                                    .flex_shrink_0()
-                                    .overflow_hidden()
-                                    .child(self.sidebar.clone()),
+                                    .min_w_0()
+                                    .child(self.render_workspace_content(cx)),
                             )
-                        })
-                        .child(ResizeEventHandler { view }),
-                )
-            })
+                            .when(sidebar_visible, |this| {
+                                this.child(
+                                    div()
+                                        .relative()
+                                        .h_full()
+                                        .w(sidebar_panel_size)
+                                        .flex_shrink_0()
+                                        .overflow_hidden()
+                                        .child(self.render_sidebar_resize_handle(window, cx))
+                                        .child(self.sidebar.clone()),
+                                )
+                            })
+                            .when(!sidebar_visible, |this| {
+                                this.child(
+                                    div()
+                                        .h_full()
+                                        .w(TOOLBAR_WIDTH)
+                                        .flex_shrink_0()
+                                        .overflow_hidden()
+                                        .child(self.sidebar.clone()),
+                                )
+                            })
+                            .child(ResizeEventHandler { view }),
+                    )
+                },
+            )
     }
 }
 

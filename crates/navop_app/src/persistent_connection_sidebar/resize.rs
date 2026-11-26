@@ -73,7 +73,7 @@ impl PersistentConnectionSidebar {
                 div()
                     .h_full()
                     .w(resize.visible_line)
-                    .bg(cx.theme().border)
+                    .bg(gpui::transparent_black())
                     .group_hover("persistent-connection-tree-resize", |this| {
                         this.bg(cx.theme().drag_border)
                     }),

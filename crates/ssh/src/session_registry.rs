@@ -3028,4 +3028,50 @@ mod tests {
             "fresh manager must carry the confirmed replacement host key"
         );
     }
+
+    #[tokio::test]
+    async fn service_retire_applies_unknown_host_confirmation_before_retry() {
+        let service = SshSessionService::new();
+        let initial_config = test_config("unknown-host-key.example");
+        let key = test_key(&initial_config, 1);
+
+        let initial_lease = service
+            .acquire(&key, initial_config.clone())
+            .await
+            .expect("initial lease should be created");
+        initial_lease.release();
+
+        // issue #587：用户接受未知主机后，ConnectionKey 不变；重试前必须淘汰旧 manager，
+        // 否则会继续使用没有 confirmed key 的 verifier，再次弹出同一指纹确认框。
+        let mut updated_config = initial_config;
+        let id = crate::HostKeyIdentity::new(
+            "unknown-host-key.example",
+            22,
+            crate::HostKeyRoute::Direct,
+        );
+        let details = crate::HostKeyDetails {
+            algorithm: "ssh-ed25519".to_string(),
+            fingerprint: "SHA256:first-seen".to_string(),
+        };
+        updated_config.host_key_verifier = updated_config
+            .host_key_verifier
+            .with_confirmed_key(id.clone(), details, true);
+
+        assert!(service.retire(&key).is_some());
+
+        let retried_lease = service
+            .acquire(&key, updated_config)
+            .await
+            .expect("retried lease should be created with the confirmation");
+        let algorithms = retried_lease
+            .manager()
+            .config()
+            .host_key_verifier
+            .known_host_key_algorithms(&id)
+            .expect("confirmed algorithms lookup should succeed");
+        assert!(
+            algorithms.iter().any(|algo| algo == "ssh-ed25519"),
+            "fresh manager must carry the first-seen key confirmation"
+        );
+    }
 }

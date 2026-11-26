@@ -2346,7 +2346,7 @@ impl RedisTreeView {
             .rounded(one_ui::theme_geometry().radius.xs)
             .when(is_selected, |this| this.bg(cx.theme().list_active))
             .when(!is_selected, |this| {
-                this.hover(|style| style.bg(cx.theme().list_hover))
+                this.hover(|style| style.bg(cx.theme().foreground.opacity(0.06)))
             })
             // 单击选中，双击展开/连接
             .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
@@ -2929,7 +2929,8 @@ impl Render for RedisTreeView {
 
         v_flex()
             .size_full()
-            .bg(cx.theme().background)
+            // 外壳托管的侧栏统一用面板灰，和连接树/数据库树同一层表面。
+            .bg(cx.theme().sidebar)
             .child(self.render_toolbar(window, cx))
             .child(
                 div()
@@ -3873,5 +3874,20 @@ mod tests {
             conn.set_in_db(4, "refresh:seed:b", "2", None).await?;
             Ok::<(), crate::RedisError>(())
         });
+    }
+
+    #[test]
+    fn 侧栏表面与行悬停跟随外壳面板色() {
+        let source = include_str!("redis_tree_view.rs");
+        assert!(
+            source.contains(
+                ".bg(cx.theme().sidebar)\n            .child(self.render_toolbar(window, cx))"
+            ),
+            "外壳托管的 Redis 树要铺面板灰，不能还是内容白"
+        );
+        assert!(
+            source.contains("this.hover(|style| style.bg(cx.theme().foreground.opacity(0.06)))"),
+            "灰底上 list_hover 几乎不可见，行悬停要用前景色叠层"
+        );
     }
 }

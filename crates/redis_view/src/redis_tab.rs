@@ -222,6 +222,18 @@ impl RedisTabView {
         self
     }
 
+    pub fn set_external_sidebar(&mut self, external: bool, cx: &mut Context<Self>) {
+        let mode = if external {
+            RedisSidebarRenderMode::External
+        } else {
+            RedisSidebarRenderMode::Embedded
+        };
+        if self.sidebar_render_mode != mode {
+            self.sidebar_render_mode = mode;
+            cx.notify();
+        }
+    }
+
     pub fn new(connection: StoredConnection, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let active_conn_id = connection.id;
         Self::new_with_active_conn(None, vec![connection], active_conn_id, window, cx)
@@ -444,6 +456,10 @@ impl Focusable for RedisTabView {
 impl EventEmitter<TabContentEvent> for RedisTabView {}
 
 impl TabContent for RedisTabView {
+    fn set_external_primary_sidebar(&mut self, external: bool, cx: &mut Context<Self>) {
+        self.set_external_sidebar(external, cx);
+    }
+
     fn content_key(&self) -> &'static str {
         "Redis"
     }

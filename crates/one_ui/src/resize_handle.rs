@@ -2,9 +2,10 @@ use std::{cell::Cell, rc::Rc};
 
 use crate::geometry;
 use gpui::{
-    AnyElement, App, Axis, Element, ElementId, Empty, Entity, GlobalElementId, InteractiveElement,
-    IntoElement, MouseDownEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render,
-    StatefulInteractiveElement, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, Axis, Element, ElementId, Empty, Entity, GlobalElementId,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement as _, Pixels, Point, Render, StatefulInteractiveElement, Styled as _, Window,
+    div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::ActiveTheme as _;
 
@@ -58,7 +59,10 @@ pub struct ResizeHandle<T: 'static, E: 'static + Render> {
     axis: Axis,
     drag_value: Option<Rc<T>>,
     placement: Option<HandlePlacement>,
+    inline: bool,
+    idle_line_color: Option<gpui::Hsla>,
     on_drag: Option<Rc<dyn Fn(&Point<Pixels>, &mut Window, &mut App) -> Entity<E>>>,
+    on_resize: Option<Rc<dyn Fn(Option<Point<Pixels>>, &mut Window, &mut App)>>,
 }
 
 impl<T: 'static, E: 'static + Render> ResizeHandle<T, E> {
@@ -67,8 +71,11 @@ impl<T: 'static, E: 'static + Render> ResizeHandle<T, E> {
         Self {
             id: id.clone(),
             on_drag: None,
+            on_resize: None,
             drag_value: None,
             placement: None,
+            inline: false,
+            idle_line_color: None,
             axis,
         }
     }
@@ -86,15 +93,41 @@ impl<T: 'static, E: 'static + Render> ResizeHandle<T, E> {
         self
     }
 
+    /// 连续调整尺寸。`Some(position)` 是启动或移动时的鼠标位置，`None` 表示结束。
+    /// 与 `on_drag` 的启动偏移分开，调用方必须用“当前点 − 启动点”计算位移。
+    pub fn on_resize(
+        mut self,
+        f: impl Fn(Option<Point<Pixels>>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_resize = Some(Rc::new(f));
+        self
+    }
+
     pub fn placement(mut self, placement: HandlePlacement) -> Self {
         self.placement = Some(placement);
+        self.inline = false;
+        self
+    }
+
+    /// 手柄作为正常文档流中的固定宽度抓取区，适合应用资源栏。
+    pub fn inline(mut self) -> Self {
+        self.inline = true;
+        self.placement = None;
+        self
+    }
+
+    /// 覆盖静止时的分隔线颜色；hover 和拖动仍使用主题反馈色。
+    pub fn idle_line_color(mut self, color: gpui::Hsla) -> Self {
+        self.idle_line_color = Some(color);
         self
     }
 }
 
 #[derive(Default, Debug, Clone)]
 struct ResizeHandleState {
-    active: Cell<bool>,
+    // GPUI 会克隆元素状态用于不同事件回调；必须共享 Cell，不能在 Clone 时复制布尔值。
+    active: Rc<Cell<bool>>,
+    pointer_origin: Rc<Cell<Option<Point<Pixels>>>>,
 }
 
 impl ResizeHandleState {
@@ -146,7 +179,7 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
             let bg_color = if state.is_active() {
                 cx.theme().drag_border
             } else {
-                cx.theme().border
+                self.idle_line_color.unwrap_or(cx.theme().border)
             };
 
             let is_horizontal = axis == Axis::Horizontal;
@@ -155,7 +188,7 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
                 .id(self.id.clone())
                 .debug_selector(move || band_selector(axis, placement).to_owned())
                 .occlude()
-                .absolute()
+                .when(!self.inline, |this| this.absolute())
                 .flex()
                 .flex_shrink_0()
                 .group("handle")
@@ -165,44 +198,65 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
                         move |_, position, window, cx| on_drag(&position, window, cx),
                     )
                 })
-                .map(|this| match placement {
-                    // 抓取区以边界为中心铺开：往边框外多铺一格（`mr/ml` 负边距），
-                    // 分隔线仍旧停在面板自己那一像素边框上。
-                    Some(HandlePlacement::Left) => this
-                        .cursor_col_resize()
-                        .top_0()
-                        .right_0()
-                        .mr(-handle_padding)
-                        .h_full()
-                        .w(hit_area)
-                        .justify_center(),
-                    Some(HandlePlacement::Right) => this
-                        .cursor_col_resize()
-                        .top_0()
-                        .left_0()
-                        .ml(-handle_padding)
-                        .h_full()
-                        .w(hit_area)
-                        .justify_center(),
-                    None => this
-                        .when(is_horizontal, |this| {
-                            this.cursor_col_resize()
-                                .top_0()
-                                .left_0()
-                                .ml(-handle_padding)
-                                .h_full()
-                                .w(hit_area)
-                                .justify_center()
-                        })
-                        .when(!is_horizontal, |this| {
-                            this.cursor_row_resize()
-                                .top_0()
-                                .left_0()
-                                .mt(-handle_padding)
-                                .w_full()
-                                .h(hit_area)
-                                .items_center()
-                        }),
+                .when_some(self.on_resize.clone(), |this, on_resize| {
+                    let state = state.clone();
+                    this.on_drag(ResizePanel, move |_, _, window, cx| {
+                        state.set_active(true);
+                        on_resize(Some(window.mouse_position()), window, cx);
+                        cx.new(|_| ResizePanel)
+                    })
+                })
+                .map(|this| {
+                    if self.inline {
+                        return this
+                            .when(is_horizontal, |this| {
+                                // 内联手柄排在面板之后、占一条抓取区宽度；分隔线贴右对齐，
+                                // 正好落在面板与内容的分界上（铺底色由调用方负责）。
+                                this.cursor_col_resize().h_full().w(hit_area).justify_end()
+                            })
+                            .when(!is_horizontal, |this| {
+                                this.cursor_row_resize().w_full().h(hit_area).items_center()
+                            });
+                    }
+                    match placement {
+                        // 抓取区以边界为中心铺开：往边框外多铺一格（`mr/ml` 负边距），
+                        // 分隔线仍旧停在面板自己那一像素边框上。
+                        Some(HandlePlacement::Left) => this
+                            .cursor_col_resize()
+                            .top_0()
+                            .right_0()
+                            .mr(-handle_padding)
+                            .h_full()
+                            .w(hit_area)
+                            .justify_center(),
+                        Some(HandlePlacement::Right) => this
+                            .cursor_col_resize()
+                            .top_0()
+                            .left_0()
+                            .ml(-handle_padding)
+                            .h_full()
+                            .w(hit_area)
+                            .justify_center(),
+                        None => this
+                            .when(is_horizontal, |this| {
+                                this.cursor_col_resize()
+                                    .top_0()
+                                    .left_0()
+                                    .ml(-handle_padding)
+                                    .h_full()
+                                    .w(hit_area)
+                                    .justify_center()
+                            })
+                            .when(!is_horizontal, |this| {
+                                this.cursor_row_resize()
+                                    .top_0()
+                                    .left_0()
+                                    .mt(-handle_padding)
+                                    .w_full()
+                                    .h(hit_area)
+                                    .items_center()
+                            }),
+                    }
                 })
                 .child(
                     div()
@@ -251,7 +305,10 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
             window.on_mouse_event({
                 let state = state.clone();
                 move |ev: &MouseDownEvent, phase, window, _| {
-                    if bounds.contains(&ev.position) && phase.bubble() {
+                    if ev.button == MouseButton::Left
+                        && bounds.contains(&ev.position)
+                        && phase.bubble()
+                    {
                         state.set_active(true);
                         window.refresh();
                     }
@@ -260,9 +317,27 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
 
             window.on_mouse_event({
                 let state = state.clone();
-                move |_: &MouseUpEvent, _, window, _| {
-                    if state.is_active() {
+                let on_resize = self.on_resize.clone();
+                move |ev: &MouseMoveEvent, _, window, cx| {
+                    if state.is_active()
+                        && ev.pressed_button == Some(MouseButton::Left)
+                        && let Some(on_resize) = &on_resize
+                    {
+                        on_resize(Some(ev.position), window, cx);
+                    }
+                }
+            });
+
+            window.on_mouse_event({
+                let state = state.clone();
+                let on_resize = self.on_resize.clone();
+                move |_: &MouseUpEvent, phase, window, cx| {
+                    if state.is_active() && phase.bubble() {
                         state.set_active(false);
+                        state.pointer_origin.set(None);
+                        if let Some(on_resize) = &on_resize {
+                            on_resize(None, window, cx);
+                        }
                         window.refresh();
                     }
                 }

@@ -38,14 +38,16 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if self.connection_layout == ConnectionLayout::Navigation {
+        if AppSettings::global(cx).app_layout == AppLayout::GlobalNavigation {
+            self.sync_sidebar_home_embedded(cx);
             return self.render_navigation_content(window, cx);
         }
+        self.sync_sidebar_home_embedded(cx);
         h_flex()
             .size_full()
             .min_w_0()
             .overflow_hidden()
-            .child(self.render_sidebar(window, cx))
+            // 应用菜单由 NavopApp 外壳跨页面持有，主页不能重复绘制。
             .child(
                 v_flex()
                     .flex_1()

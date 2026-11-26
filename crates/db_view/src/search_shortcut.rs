@@ -11,6 +11,9 @@ const MACOS_TABLE_DESIGNER_SHORTCUT: &str = "cmd-shift-d";
 const OTHER_TABLE_DESIGNER_SHORTCUT: &str = "ctrl-shift-d";
 const MACOS_SELECT_ALL_SHORTCUT: &str = "cmd-a";
 const OTHER_SELECT_ALL_SHORTCUT: &str = "ctrl-a";
+const REFRESH_SHORTCUT: &str = "f5";
+const MACOS_SAVE_SHORTCUT: &str = "cmd-s";
+const OTHER_SAVE_SHORTCUT: &str = "ctrl-s";
 
 gpui::actions!(
     db_search,
@@ -18,7 +21,9 @@ gpui::actions!(
         FocusSearchInput,
         OpenSelectedTableQuery,
         OpenTableDesigner,
-        SelectAllObjects
+        SelectAllObjects,
+        RefreshDatabasePanel,
+        SaveDatabaseChanges
     ]
 );
 
@@ -50,6 +55,14 @@ fn default_table_designer_shortcuts() -> [&'static str; 1] {
 
 fn default_select_all_shortcuts() -> [&'static str; 1] {
     default_select_all_shortcuts_for_platform(cfg!(target_os = "macos"))
+}
+
+fn default_refresh_shortcuts() -> [&'static str; 1] {
+    [REFRESH_SHORTCUT]
+}
+
+fn default_save_shortcuts() -> [&'static str; 1] {
+    default_save_shortcuts_for_platform(cfg!(target_os = "macos"))
 }
 
 fn default_search_shortcuts_for_platform(is_macos: bool) -> [&'static str; 1] {
@@ -84,11 +97,26 @@ fn default_select_all_shortcuts_for_platform(is_macos: bool) -> [&'static str; 1
     }
 }
 
+fn default_save_shortcuts_for_platform(is_macos: bool) -> [&'static str; 1] {
+    if is_macos {
+        [MACOS_SAVE_SHORTCUT]
+    } else {
+        [OTHER_SAVE_SHORTCUT]
+    }
+}
+
 fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
     let mut keybindings: Vec<KeyBinding> =
         shortcuts_for(cx, action_id::DB_FOCUS_SEARCH, &default_search_shortcuts())
             .into_iter()
-            .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, FocusSearchInput, Some(DB_SEARCH_CONTEXT), cx))
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    FocusSearchInput,
+                    Some(DB_SEARCH_CONTEXT),
+                    cx,
+                )
+            })
             .collect();
 
     keybindings.extend(
@@ -98,7 +126,14 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &default_table_query_shortcuts(),
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, OpenSelectedTableQuery, Some(DB_SEARCH_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                OpenSelectedTableQuery,
+                Some(DB_SEARCH_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -107,7 +142,14 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &default_table_designer_shortcuts(),
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, OpenTableDesigner, Some(DB_SEARCH_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                OpenTableDesigner,
+                Some(DB_SEARCH_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -116,7 +158,38 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &default_select_all_shortcuts(),
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, SelectAllObjects, Some(DB_SEARCH_CONTEXT), cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                SelectAllObjects,
+                Some(DB_SEARCH_CONTEXT),
+                cx,
+            )
+        }),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::DB_REFRESH, &default_refresh_shortcuts())
+            .into_iter()
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    RefreshDatabasePanel,
+                    Some(DB_SEARCH_CONTEXT),
+                    cx,
+                )
+            }),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::DB_SAVE_CHANGES, &default_save_shortcuts())
+            .into_iter()
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    SaveDatabaseChanges,
+                    Some(DB_SEARCH_CONTEXT),
+                    cx,
+                )
+            }),
     );
     keybindings
 }
@@ -150,12 +223,27 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         Some(DB_SEARCH_CONTEXT),
         SelectAllObjects,
     ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::DB_REFRESH,
+        &default_refresh_shortcuts(),
+        Some(DB_SEARCH_CONTEXT),
+        RefreshDatabasePanel,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::DB_SAVE_CHANGES,
+        &default_save_shortcuts(),
+        Some(DB_SEARCH_CONTEXT),
+        SaveDatabaseChanges,
+    ));
     keybindings
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
+        default_refresh_shortcuts, default_save_shortcuts_for_platform,
         default_search_shortcuts_for_platform, default_select_all_shortcuts_for_platform,
         default_table_designer_shortcuts_for_platform, default_table_query_shortcuts_for_platform,
     };
@@ -202,5 +290,16 @@ mod tests {
             ["ctrl-shift-d"],
             default_table_designer_shortcuts_for_platform(false)
         );
+    }
+
+    #[test]
+    fn database_refresh_uses_f5() {
+        assert_eq!(["f5"], default_refresh_shortcuts());
+    }
+
+    #[test]
+    fn database_save_uses_cmd_s_on_macos_and_ctrl_s_elsewhere() {
+        assert_eq!(["cmd-s"], default_save_shortcuts_for_platform(true));
+        assert_eq!(["ctrl-s"], default_save_shortcuts_for_platform(false));
     }
 }

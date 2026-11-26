@@ -3,11 +3,9 @@ use std::ops::Range;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement,
-    Styled, WindowControlArea, div, px, uniform_list,
+    Styled, div, px, uniform_list,
 };
-use gpui_component::{
-    Icon, InteractiveElementExt as _, Sizable, StyledExt, h_flex, input::Input, v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, StyledExt, h_flex, input::Input, v_flex};
 use one_assets::IconName;
 use one_core::settings::{AppSettings, ConnectionSortOrder};
 use one_ui::IconSize;
@@ -27,7 +25,7 @@ impl PersistentConnectionSidebar {
     pub(crate) fn render_home_tree(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
         self.home_embedded = true;
         self.home_navigation_layout = false;
-        self.render_tree_impl(None, false, cx)
+        self.render_tree_impl(None, cx)
     }
 
     pub(crate) fn render_home_navigation_tree(
@@ -37,13 +35,7 @@ impl PersistentConnectionSidebar {
     ) -> AnyElement {
         self.home_embedded = true;
         self.home_navigation_layout = true;
-        self.render_tree_impl(Some(width), false, cx)
-    }
-
-    /// 停靠渲染（docked=true 时树从窗口顶部开始，macOS 头部需避让红绿灯）。
-    pub(crate) fn render_docked_tree(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
-        self.home_embedded = false;
-        self.render_tree_impl(Some(self.tree_width), true, cx)
+        self.render_tree_impl(Some(width), cx)
     }
 
     pub(super) fn render_connection_tree(
@@ -53,20 +45,20 @@ impl PersistentConnectionSidebar {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         self.home_embedded = false;
-        self.render_tree_impl(Some(self.tree_width), false, cx)
+        self.render_tree_impl(Some(self.tree_width), cx)
     }
 
     /// width 为 Some 时按固定宽度停靠渲染（含 resize 手柄），None 时满宽嵌入主页。
-    fn render_tree_impl(
+    pub(super) fn render_tree_impl(
         &mut self,
         width: Option<gpui::Pixels>,
-        macos_titlebar_inset: bool,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let palette = self.palette(cx);
         let rows = self.tree_rows(cx);
         v_flex()
             .relative()
+            .debug_selector(|| "persistent-connection-resource".to_owned())
             .when_some(width, |tree, width| tree.w(width).min_w(width).max_w(width))
             .w_full()
             .h_full()
@@ -74,9 +66,14 @@ impl PersistentConnectionSidebar {
             .flex_shrink_0()
             .bg(palette.background)
             .text_color(palette.foreground)
+            // 外壳托管时左侧就是应用菜单，两者同属一个壳，再画分隔线会在壳中间留一道
+            // 接缝；只有嵌进内容画布的树才用左边线与画布分区。
+            .when(self.home_embedded && !self.home_navigation_layout, |tree| {
+                tree.border_l_1().border_color(palette.border)
+            })
             // 嵌入主页时隐藏树头部：页面标题行已提供计数与分组菜单，避免重复。
             .when(!self.home_embedded || self.home_navigation_layout, |tree| {
-                tree.child(self.render_tree_header(palette, macos_titlebar_inset, cx))
+                tree.child(self.render_tree_header(palette, cx))
             })
             // 嵌入主页时不渲染树内搜索框：主页工具栏的搜索与类型筛选直接驱动树，
             // 避免上下两个搜索框重复。
@@ -92,6 +89,7 @@ impl PersistentConnectionSidebar {
                     .h_full()
                     .min_h_0()
                     .min_w_0()
+                    .px_2()
                     .overflow_hidden()
                     .when(rows.is_empty(), |body| {
                         // 过滤空态：树内就地改筛选，不提供清除按钮（DESIGN §10）。
@@ -124,7 +122,8 @@ impl PersistentConnectionSidebar {
                         )
                     }),
             )
-            .when(width.is_some(), |tree| {
+            .when(width.is_some() && !self.home_navigation_layout, |tree| {
+                // 应用外壳统一渲染右侧拖动条，避免内外两套拖动事件抢占。
                 tree.child(self.render_tree_resize_handle(cx))
             })
             .into_any_element()
@@ -301,32 +300,37 @@ impl PersistentConnectionSidebar {
             .items_center()
             .px_2()
             .bg(palette.background)
-            .border_b_1()
-            // 右侧分隔统一由 resize 手柄的可见线承担，避免多段边框叠加产生拼接感。
-            .border_color(palette.border.opacity(0.6))
             .child(
-                Icon::new(IconName::Search)
-                    .with_size(IconSize::Micro)
-                    .text_color(palette.muted_foreground),
+                h_flex()
+                    .w_full()
+                    .h(px(30.0))
+                    .min_w_0()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(palette.border)
+                    .bg(cx.theme().background)
+                    .child(
+                        Icon::new(IconName::Search)
+                            .with_size(IconSize::Micro)
+                            .text_color(palette.muted_foreground),
+                    )
+                    .child(
+                        div().min_w_0().flex_1().child(
+                            Input::new(&self.search_input)
+                                .appearance(false)
+                                .cleanable(has_query)
+                                .text_color(palette.foreground),
+                        ),
+                    )
+                    .child(self.render_tree_filter_button(palette, cx)),
             )
-            .child(
-                div().min_w_0().flex_1().child(
-                    Input::new(&self.search_input)
-                        .appearance(false)
-                        .cleanable(has_query)
-                        .text_color(palette.foreground),
-                ),
-            )
-            .child(self.render_tree_filter_button(palette, cx))
             .into_any_element()
     }
 
-    fn render_tree_header(
-        &self,
-        palette: SidebarPalette,
-        macos_titlebar_inset: bool,
-        cx: &gpui::Context<Self>,
-    ) -> AnyElement {
+    fn render_tree_header(&self, palette: SidebarPalette, cx: &gpui::Context<Self>) -> AnyElement {
         let connection_count = {
             let home = self.home_page.read(cx);
             home.connections
@@ -343,38 +347,19 @@ impl PersistentConnectionSidebar {
         let home_for_batch = self.home_page.clone();
         let batch_active = self.home_page.read(cx).batch_mode_active();
         let view_for_actions = cx.entity();
-        let layout = one_ui::theme_geometry().layout;
-        // 停靠树的 header 从窗口左上角开始；macOS 红绿灯覆盖该区域，需左侧避让。
-        let titlebar_inset = cfg!(target_os = "macos") && macos_titlebar_inset;
+        // macOS 红绿灯避让由最左应用导航负责，连接树不再叠加避让。
         h_flex()
             .id("persistent-connection-header")
             .w_full()
-            .h(layout.embedded_panel_header)
+            .h(one_ui::theme_geometry().layout.panel_header)
             .flex_shrink_0()
             .pr_2()
-            .when(titlebar_inset, |header| {
-                header.pl(layout.macos_title_bar_content_padding)
-            })
-            .when(!titlebar_inset, |header| header.pl_2())
+            .pl_2()
             .items_center()
             .justify_between()
-            // On macOS the header continues the traffic-light strip. On
-            // Windows/Linux it belongs to the connection panel and should not
-            // create a dark title band across the top.
-            .bg(if cfg!(target_os = "macos") {
-                palette.rail_background
-            } else {
-                palette.background
-            })
+            // 连接列表位于正常 Tab 栏下方，header 属于资源面板，不再延续系统标题栏。
+            .bg(palette.background)
             .text_color(palette.foreground)
-            .border_b_1()
-            .border_color(palette.border.opacity(0.6))
-            .window_control_area(WindowControlArea::Drag)
-            .on_mouse_down(MouseButton::Left, |_, window, cx| {
-                window.start_window_move();
-                cx.stop_propagation();
-            })
-            .on_double_click(|_, window, _| window.titlebar_double_click())
             .child(
                 h_flex()
                     .min_w_0()
@@ -382,15 +367,12 @@ impl PersistentConnectionSidebar {
                     .items_center()
                     .child(
                         div()
-                            .text_sm()
+                            .text_base()
                             .font_semibold()
                             .child(t!("Connection.connection_list")),
                     )
                     .child(
                         div()
-                            .px_1p5()
-                            .rounded_full()
-                            .bg(palette.muted)
                             .text_xs()
                             .text_color(palette.muted_foreground)
                             .child(connection_count.to_string()),
@@ -415,10 +397,11 @@ impl PersistentConnectionSidebar {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn macos_connection_header_clears_the_traffic_lights() {
+    fn connection_header_does_not_duplicate_the_outer_navigation_traffic_light_inset() {
         let source = include_str!("tree.rs");
-        assert!(source.contains("cfg!(target_os = \"macos\")"));
-        assert!(source.contains("layout.macos_title_bar_content_padding"));
+        let implementation = source.split("#[cfg(test)]").next().unwrap();
+        assert!(!implementation.contains("layout.macos_title_bar_content_padding"));
+        assert!(!implementation.contains("titlebar_inset"));
     }
 
     #[test]
@@ -433,11 +416,11 @@ mod tests {
     }
 
     #[test]
-    fn connection_header_is_a_window_drag_region_with_interactive_actions_excluded() {
+    fn connection_header_below_tabs_is_not_a_window_drag_region() {
         let source = include_str!("tree.rs");
         let implementation = source.split("#[cfg(test)]").next().unwrap();
-        assert!(implementation.contains("window_control_area(WindowControlArea::Drag)"));
-        assert!(implementation.contains("window.start_window_move()"));
+        assert!(!implementation.contains("window_control_area(WindowControlArea::Drag)"));
+        assert!(!implementation.contains("window.start_window_move()"));
         assert!(
             implementation
                 .contains("on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())")
@@ -499,26 +482,26 @@ mod tests {
             .split("fn render_home_tree")
             .nth(1)
             .expect("home tree entry exists")
-            .split("fn render_docked_tree")
+            .split("fn render_home_navigation_tree")
+            .next()
+            .unwrap();
+        let navigation = implementation
+            .split("fn render_home_navigation_tree")
+            .nth(1)
+            .expect("home navigation tree entry exists")
+            .split("fn render_connection_tree")
             .next()
             .unwrap();
         let docked = implementation
-            .split("fn render_docked_tree")
+            .split("fn render_connection_tree")
             .nth(1)
             .expect("docked tree entry exists")
-            .split("fn render_connection_tree")
-            .next()
-            .unwrap();
-        let floating = implementation
-            .split("fn render_connection_tree")
-            .nth(1)
-            .expect("floating tree entry exists")
             .split("fn render_tree_impl")
             .next()
             .unwrap();
 
-        assert!(home.contains("self.home_embedded = true"));
+        assert!(home.contains("self.home_navigation_layout = false"));
+        assert!(navigation.contains("self.home_navigation_layout = true"));
         assert!(docked.contains("self.home_embedded = false"));
-        assert!(floating.contains("self.home_embedded = false"));
     }
 }

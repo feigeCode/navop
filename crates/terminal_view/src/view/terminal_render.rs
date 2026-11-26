@@ -308,20 +308,23 @@ impl TerminalView {
         let search_label = if search_shortcut.is_empty() {
             t!("Settings.search")
         } else {
-            t!("ContextMenu.search_with_shortcut", shortcut = search_shortcut)
+            t!(
+                "ContextMenu.search_with_shortcut",
+                shortcut = search_shortcut
+            )
         };
 
         let mut menu = menu
             // 搜索是只读操作，实时终端与回放都应可用，且不依赖键盘。
             .item(
                 PopupMenuItem::new(search_label)
-                .icon(IconName::Search)
-                .action(Box::new(SearchForward))
-                .on_click(move |_, window, cx| {
-                    let _ = view_search.update(cx, |this, cx| {
-                        this.open_search(window, cx);
-                    });
-                }),
+                    .icon(IconName::Search)
+                    .action(Box::new(SearchForward))
+                    .on_click(move |_, window, cx| {
+                        let _ = view_search.update(cx, |this, cx| {
+                            this.open_search(window, cx);
+                        });
+                    }),
             )
             .separator()
             // 复制

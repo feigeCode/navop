@@ -134,9 +134,17 @@ AgentRuntime:
     zh-CN: "待审批工具调用与 %{call_id} 不匹配"
     zh-HK: "待審批工具呼叫與 %{call_id} 不相符"
   unavailable_tool:
-    en: "The model requested unregistered tool `%{tool}`. Available tools: %{available}. Do not call the generic pseudo-tool `tool`; use an available tool name and provide arguments as a valid JSON object."
-    zh-CN: "模型请求了未注册工具 `%{tool}`。可用工具：%{available}。不要调用名为 `tool` 的通用伪工具；请改用可用工具名，且 arguments 必须是合法 JSON object。"
-    zh-HK: "模型請求了未註冊工具 `%{tool}`。可用工具：%{available}。不要呼叫名為 `tool` 的通用偽工具；請改用可用工具名稱，且 arguments 必須是合法 JSON object。"
+    en: "The model requested unregistered tool `%{tool}`. Use one of these exact available tool names: %{available}. Tool arguments must be a valid JSON object."
+    zh-CN: "模型请求了未注册工具 `%{tool}`。请改用以下可用工具名之一：%{available}。工具 arguments 必须是合法 JSON object。"
+    zh-HK: "模型請求了未註冊工具 `%{tool}`。請改用以下可用工具名稱之一：%{available}。工具 arguments 必須是合法 JSON object。"
+  empty_tool_name:
+    en: "The model/provider returned a tool call with an empty function name (`%{tool}`). This is a protocol error; no tool was executed. Use one of these exact available tool names: %{available}."
+    zh-CN: "模型/Provider 返回了 function name 为空的工具调用（`%{tool}`）。这是协议错误，未执行任何工具。请改用以下可用工具名之一：%{available}。"
+    zh-HK: "模型/Provider 傳回了 function name 為空的工具呼叫（`%{tool}`）。這是協議錯誤，未執行任何工具。請改用以下可用工具名稱之一：%{available}。"
+  repeated_unknown_tool:
+    en: "The model repeated unregistered tool `%{tool}` in consecutive responses. Stopped to avoid an invalid retry loop; this indicates anomalous model/provider tool output. Use one of these exact available tool names: %{available}."
+    zh-CN: "模型在连续响应中重复请求未注册工具 `%{tool}`。已停止以避免无效重试循环；这表示模型/Provider 的工具输出异常。请改用以下可用工具名之一：%{available}。"
+    zh-HK: "模型在連續回應中重複請求未註冊工具 `%{tool}`。已停止以避免無效重試循環；這表示模型/Provider 的工具輸出異常。請改用以下可用工具名稱之一：%{available}。"
   system_prompt:
     en: |-
       You are Navop's AI operations assistant. Decide autonomously how to act toward the user's goal: answer simple questions directly and concisely; call the appropriate tools when you need to query or operate on resources. For multi-step tasks, first call `update_plan` to list the steps and update their status as you progress (update after each completed step). Plan steps should describe the outcome to reach or verify, not a tool call, command, risk label, or isolated word to run directly. Use `delegate_task` to hand well-scoped subtasks to an isolated sub-agent; it is not a backend or Codex CLI selector. Do not force a plan for simple questions. When no tools are provided, answer directly and do not claim you will call a tool. When finished, give the final answer directly.
@@ -168,9 +176,9 @@ AgentRuntime:
     zh-CN: "目标"
     zh-HK: "目標"
   system_prompt_tool_section:
-    en: "\n\nAvailable function calling tools: %{names}. Only call the tool names listed here; do not call a generic pseudo-tool named `tool`. Tool arguments must be a valid JSON object."
-    zh-CN: "\n\n可用 function calling 工具名：%{names}。只能调用这里列出的工具名；不要调用名为 `tool` 的通用伪工具。工具 arguments 必须是合法 JSON object。"
-    zh-HK: "\n\n可用 function calling 工具名：%{names}。只能呼叫這裡列出的工具名；不要呼叫名為 `tool` 的通用偽工具。工具 arguments 必須是合法 JSON object。"
+    en: "\n\nAvailable function calling tools: %{names}. Use an exact function name from this list when calling a tool. Tool arguments must be a valid JSON object."
+    zh-CN: "\n\n可用 function calling 工具名：%{names}。调用工具时使用此列表中的完整 function name。工具 arguments 必须是合法 JSON object。"
+    zh-HK: "\n\n可用 function calling 工具名：%{names}。呼叫工具時使用此列表中的完整 function name。工具 arguments 必須是合法 JSON object。"
   system_prompt_extra_instruction:
     en: "\n\nAdditional instruction:\n%{instruction}"
     zh-CN: "\n\n附加指令：\n%{instruction}"

@@ -113,11 +113,13 @@ fn filter_bar_renders_every_type_with_a_measured_overflow_menu() {
     assert!(source.contains("ConnectionFilter::Extension"));
     assert!(source.contains("connection_type_navigation_icon"));
     assert!(source.contains("IconName::Apps"));
-    assert!(source.contains(".rounded(cx.theme().radius_full())"));
-    assert!(source.contains(".outline()"));
-    assert!(!source.contains(".ghost()"));
+    assert!(source.contains(".rounded_md()"));
+    assert!(source.contains(".ghost()"));
+    assert!(!source.contains(".outline()"));
+    assert!(!source.contains(".rounded(cx.theme().radius_full())"));
     assert!(source.contains("selected_filter_style(button, cx)"));
-    assert!(source.contains("SELECTED_BACKGROUND_OPACITY"));
+    assert!(source.contains("cx.theme().sidebar_accent"));
+    assert!(!source.contains("SELECTED_BACKGROUND_OPACITY"));
     assert!(source.contains("on_prepaint"));
     assert!(source.contains("on_children_prepainted"));
     assert!(source.contains("resolve_visible_count"));

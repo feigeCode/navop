@@ -34,7 +34,9 @@ use one_core::key_storage;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::license::Feature;
 use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
-use one_core::settings::{AppSettings, HomeConnectionLayout, SyncProvider};
+use one_core::settings::{
+    AppLayout, AppSettings, ConnectionManagementView, HomeConnectionLayout, SyncProvider,
+};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     ActiveConnections, ConnectionRepository, ConnectionType, CredentialResolutionError,
@@ -94,6 +96,26 @@ pub enum ConnectionLayout {
     Navigation,
 }
 
+impl From<ConnectionManagementView> for ConnectionLayout {
+    fn from(layout: ConnectionManagementView) -> Self {
+        match layout {
+            ConnectionManagementView::Card => Self::Card,
+            ConnectionManagementView::List => Self::List,
+            ConnectionManagementView::Tree => Self::Tree,
+        }
+    }
+}
+
+impl From<ConnectionLayout> for ConnectionManagementView {
+    fn from(layout: ConnectionLayout) -> Self {
+        match layout {
+            ConnectionLayout::Card | ConnectionLayout::Navigation => Self::Card,
+            ConnectionLayout::List => Self::List,
+            ConnectionLayout::Tree => Self::Tree,
+        }
+    }
+}
+
 impl From<HomeConnectionLayout> for ConnectionLayout {
     fn from(layout: HomeConnectionLayout) -> Self {
         match layout {
@@ -139,7 +161,8 @@ impl HomePage {
         sidebar: Entity<crate::persistent_connection_sidebar::PersistentConnectionSidebar>,
         cx: &mut Context<Self>,
     ) {
-        self.connection_sidebar = Some(sidebar);
+        self.sidebar_collapsed = !AppSettings::global(cx).home_navigation_menu_expanded;
+        self.connection_sidebar = Some(sidebar.clone());
         self.sync_sidebar_home_embedded(cx);
     }
 
@@ -167,8 +190,12 @@ impl HomePage {
         cx.notify();
     }
 
-    pub(crate) fn uses_global_navigation_layout(&self) -> bool {
-        self.connection_layout == ConnectionLayout::Navigation
+    pub(crate) fn home_sidebar_collapsed(&self) -> bool {
+        self.sidebar_collapsed
+    }
+
+    pub(crate) fn uses_global_navigation_layout(cx: &App) -> bool {
+        AppSettings::global(cx).app_layout == AppLayout::GlobalNavigation
     }
 }
 
@@ -179,6 +206,9 @@ pub struct HomePage {
     /// 连接类型筛选条的动态布局状态（可见类型数量按容器宽度实测决定）。
     connection_type_filter: connection_type_filter_bar::ConnectionTypeFilterBar,
     connection_layout: ConnectionLayout,
+    /// 全局导航布局中，主页与完整连接管理页共用同一份数据与标签状态。
+    pub(crate) navigation_connection_manager_open: bool,
+    search_placeholder: SharedString,
     sidebar_collapsed: bool,
     collapsed_groups: HashSet<Option<i64>>,
     recent_collapsed: bool,
@@ -300,7 +330,6 @@ mod sidebar_navigation;
 mod sync_route;
 mod team_permissions;
 mod toolbar;
-mod workbench;
 mod workspace;
 mod workspace_filter;
 

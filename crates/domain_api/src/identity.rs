@@ -41,8 +41,8 @@ impl AppIdentity {
         mcp_legacy_app_name: Some("onetcli"),
         mcp_update_channel: "stable",
         file_associations: &["db", "duckdb", "md", "cast"],
-        // `jms://` 是产品私有 scheme；`ssh://`/`sftp://` 需要用户在设置里启用后
-        // 才会真正写入系统关联（见 AppSettings::enabled_deeplink_schemes）。
+        // `jms://` 是产品私有 scheme，默认启用；`ssh://`/`sftp://` 以及关掉的
+        // `jms://` 都不会真正写入系统关联（见 AppSettings::enabled_deeplink_schemes）。
         url_schemes: &["jms", "ssh", "sftp"],
     };
 

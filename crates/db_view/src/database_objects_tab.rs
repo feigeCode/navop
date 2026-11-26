@@ -14,8 +14,8 @@ use crate::object_list_selection::{
     RowDragState, VisibleRowSpan, exceeds_drag_threshold, replace_with_span, select_all_rows,
 };
 use crate::search_shortcut::{
-    DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, SelectAllObjects,
-    focus_search_input,
+    DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, RefreshDatabasePanel,
+    SelectAllObjects, focus_search_input,
 };
 use crate::table_copy_menu::append_table_copy_items;
 use db::DbNodeType::QueryFolder;
@@ -322,6 +322,22 @@ impl DatabaseObjects {
         cx: &mut Context<Self>,
     ) {
         self.select_all_visible_rows(cx);
+    }
+
+    fn on_action_refresh_database_panel(
+        &mut self,
+        _: &RefreshDatabasePanel,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(node) = self.current_node.clone() else {
+            return;
+        };
+        let connection_id = node.connection_id.clone();
+        let global_state = cx.global::<GlobalDbState>().clone();
+        if let Some(config) = global_state.get_config(&connection_id) {
+            self.handle_node_selected(node, config, cx);
+        }
     }
 
     /// 行按下：区分单选、多选（Cmd/Ctrl）与 Shift 区间选择，并开启拖选待判定状态。
@@ -1593,6 +1609,7 @@ impl Render for DatabaseObjects {
             .on_action(cx.listener(Self::on_action_focus_search))
             .on_action(cx.listener(Self::on_action_open_selected_table_query))
             .on_action(cx.listener(Self::on_action_select_all_objects))
+            .on_action(cx.listener(Self::on_action_refresh_database_panel))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_panel_mouse_up))
             .child(
                 h_flex()

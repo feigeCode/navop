@@ -2951,6 +2951,21 @@ impl Terminal {
         .ok()
     }
 
+    /// 用户主动断开或重连时淘汰共享 transport 槽位。
+    ///
+    /// 仅 release 租约会让 registry 在空闲回收前继续复用旧 manager。普通
+    /// shell 无感，但堡垒机代理 shell 会保留上一次登录/资产选择状态，重连
+    /// 后可能直接回到旧菜单（issue #592）。其他页签持有的 lease 不受影响。
+    fn retire_shared_session_slot(&self, config: &SshTerminalConfig, cx: &App) {
+        let Some(service) = Self::ssh_session_service(cx) else {
+            return;
+        };
+        let Some(identity) = self.derive_shared_session_identity(config) else {
+            return;
+        };
+        let _ = service.retire(identity.connection_key());
+    }
+
     fn history_repository(cx: &mut Context<Self>) -> Option<Arc<TerminalCommandHistoryRepository>> {
         cx.try_global::<GlobalStorageState>()
             .and_then(|state| state.storage.get::<TerminalCommandHistoryRepository>())
@@ -5193,6 +5208,7 @@ impl Terminal {
             self.ssh_config = Some(base_config.clone());
 
             self.take_ssh_session_manager(cx);
+            self.retire_shared_session_slot(&base_config, cx);
 
             if self.ssh_credential_prompt_policy.requires_credentials() {
                 self.queue_ssh_credential_request(generation, cx);
@@ -5308,6 +5324,9 @@ impl Terminal {
             backend.shutdown();
         }
         self.take_ssh_session_manager(cx);
+        if let Some(config) = self.ssh_base_config.clone() {
+            self.retire_shared_session_slot(&config, cx);
+        }
         self.connection_state = ConnectionState::Disconnected { error: None };
         self.set_connection_active(false, cx);
         cx.emit(TerminalModelEvent::Wakeup);
@@ -5413,11 +5432,7 @@ impl Terminal {
         // 共享会话服务按 ConnectionKey 缓存 SshSessionManager，而 ConnectionKey
         // 不包含单次确认过的 confirmed_keys；若不先淘汰旧槽位，重试时会继续命中
         // 持有旧 HostKeyVerifier 的 manager，导致“更新并保存 / 仅此次信任”完全不生效。
-        if let Some(service) = Self::ssh_session_service(cx) {
-            if let Some(identity) = self.derive_shared_session_identity(&retry_config) {
-                let _ = service.retire(identity.connection_key());
-            }
-        }
+        self.retire_shared_session_slot(&retry_config, cx);
 
         if !self.start_ssh_connection_attempt(retry_config, responder, generation, cx) {
             self.connection_state = ConnectionState::Disconnected {
@@ -7573,7 +7588,11 @@ mod tests {
         command
             .arg("-i")
             .arg("-c")
-            .arg("print -r -- ${_ONETCLI_SHELL_INTEGRATED:-missing}")
+            // 非 tmux 会话的幂等标记值就是空串，不能用 `${VAR:-missing}` 判断集成是否加载。
+            .arg(
+                "if typeset -f __onetcli_precmd_zsh >/dev/null 2>&1; \
+                 then print -r -- integrated; else print -r -- missing; fi",
+            )
             .env("HOME", &home_dir);
         for (key, value) in env_pairs {
             command.env(key, value);
@@ -7584,7 +7603,7 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stdout.lines().any(|line| line == "1"),
+            stdout.lines().any(|line| line == "integrated"),
             "zsh 应加载生成的 .zshrc 并 source shell integration，stdout: {stdout:?}"
         );
         assert!(
@@ -8371,6 +8390,45 @@ mod tests {
 
         terminal.tmux.state = None;
         assert_eq!(terminal.current_working_dir(), Some("/old"));
+    }
+
+    #[test]
+    fn user_initiated_reconnect_and_disconnect_retire_shared_ssh_slots() {
+        let source = include_str!("terminal.rs");
+        let reconnect = source
+            .split_once("pub fn reconnect(")
+            .expect("SSH reconnect implementation should exist")
+            .1
+            .split_once("pub fn disconnect(")
+            .expect("reconnect body should end before disconnect")
+            .0;
+        let disconnect = source
+            .split_once("pub fn disconnect(")
+            .expect("SSH disconnect implementation should exist")
+            .1
+            .split_once("fn prepare_surface_for_reconnect(")
+            .expect("disconnect body should end before reconnect preparation")
+            .0;
+        let helper = source
+            .split_once("fn retire_shared_session_slot(")
+            .expect("shared-session retirement helper should exist")
+            .1
+            .split_once("\n    fn ")
+            .expect("retirement helper should have a following method")
+            .0;
+
+        assert!(
+            reconnect.contains("retire_shared_session_slot(&base_config, cx)"),
+            "manual reconnect must not reacquire the stale shared transport"
+        );
+        assert!(
+            disconnect.contains("retire_shared_session_slot(&config, cx)"),
+            "manual disconnect must evict the shared transport for the next reconnect"
+        );
+        assert!(
+            helper.contains("service.retire(identity.connection_key())"),
+            "the helper must retire the registry slot"
+        );
     }
 
     #[test]

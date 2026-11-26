@@ -21,6 +21,7 @@ use anyhow::{Context as _, Result, bail};
 use base64::Engine as _;
 use gpui::{App, Window};
 use gpui_component::{WindowExt as _, notification::Notification};
+use one_core::settings::AppSettings;
 use one_core::storage::{
     PreferredOpenMode, SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding,
     StoredTerminalType,
@@ -216,6 +217,22 @@ struct JumpDeepLinkNotification;
 
 /// 打开 `jms://` 深链接；任何失败都只提示「无法打开」，不回显链接内容。
 pub(crate) fn open_jump_deeplink(raw: &str, window: &mut Window, cx: &mut App) {
+    // 开关关掉后既不再注册系统关联，也在这里拒绝已被系统送进来的链接。
+    if !AppSettings::global(cx).deeplink_scheme_enabled(AppSettings::PRIVATE_DEEPLINK_SCHEME) {
+        window.push_notification(
+            Notification::warning(
+                t!(
+                    "Common.deeplink_scheme_disabled",
+                    scheme = AppSettings::PRIVATE_DEEPLINK_SCHEME
+                )
+                .to_string(),
+            )
+            .id::<JumpDeepLinkNotification>()
+            .autohide(true),
+            cx,
+        );
+        return;
+    }
     if let Err(error) = try_open_jump_deeplink(raw, window, cx) {
         tracing::warn!(error = %error, "failed to open JumpServer deep link");
         window.push_notification(

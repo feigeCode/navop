@@ -44,7 +44,6 @@ impl HomePage {
                     self.add_extensions_tab(window, cx);
                 }
             }
-            NavigationApplication::Settings => self.add_settings_tab(window, cx),
         }
     }
 }

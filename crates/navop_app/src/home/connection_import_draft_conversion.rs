@@ -196,8 +196,11 @@ fn to_ssh_connection(
     let username = draft.username.trim().to_string();
     let auth_method = edited_ssh_auth_method(draft, &imported.auth_method)?;
     let prompt_username = username.is_empty().then_some(true);
-    let prompt_password = matches!(&auth_method, SshAuthMethod::Password { password } if password.is_empty()).then_some(true);
-    let params = SshParams { otp: None,
+    let prompt_password =
+        matches!(&auth_method, SshAuthMethod::Password { password } if password.is_empty())
+            .then_some(true);
+    let params = SshParams {
+        otp: None,
         remote_file: None,
         sftp_default_directory: None,
         disabled_jump_server: None,

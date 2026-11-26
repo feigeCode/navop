@@ -2,7 +2,8 @@
 //!
 //! 实现已迁入 [`app_kit::file_association`]：接管哪些扩展名由各产品的
 //! `AppIdentity::file_associations` 决定。URL scheme 还要叠加用户开关：
-//! `jms://` 始终注册，`ssh://`/`sftp://` 等通用 scheme 只有用户启用后才写进系统。
+//! `jms://` 默认启用，`ssh://`/`sftp://` 等通用 scheme 默认关闭；只有开关打开
+//! 的 scheme 才会写进系统，关掉的会从系统里摘除。
 
 /// 按当前设置重新注册关联（设置里切换协议开关后调用）。
 pub(crate) fn schedule_registration(cx: &mut gpui::App) {

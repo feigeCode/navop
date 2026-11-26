@@ -106,8 +106,10 @@ fn connection_identity_and_hover_icons_share_a_consistent_scale() {
     assert!(visuals.contains("Self::Card => IconSize::Large"));
     for source in [card_content, list_item] {
         assert!(source.contains(".bg(cx.theme().muted)"));
-        assert!(source.contains(".border_color(cx.theme().border)"));
+        assert!(source.contains(".rounded(px(8.0))"));
     }
+    // 图标槽只保留底色，外层卡片/列表才承载边界。
+    assert!(!card_content.contains(".border_1()"));
     for source in [list_actions, card_actions] {
         assert!(source.contains(".with_size(IconSize::Small)"));
         assert!(source.contains(".mono()"));
@@ -160,14 +162,24 @@ fn home_sidebar_refinement_contracts() {
     assert!(nav.contains("active_bg"));
     assert!(nav.contains(".focus_visible("));
     assert!(nav.contains(".on_key_down("));
+    assert!(nav.contains("GlobalHomePage"));
+    assert!(nav.contains("home_tab_id"));
+    assert!(nav.contains("window.defer(cx, move |window, cx|"));
+    assert!(!nav.contains(".pinned_tabs()"));
+    assert!(nav.contains("render_settings_entry("));
+    assert!(nav.contains("active_key == Some(\"Settings\")"));
+    assert!(!nav.contains(".active_content_snapshot()"));
     assert!(!nav.contains("SidebarMenuItem::new"));
     // 功能图标统一线性单色；Home 用自有线稿资源；会话日志用 SquareTerminal 线性资源
     assert!(nav.contains("NAVOP_HOME_LINE_ICON"));
     assert!(nav.contains(".mono()"));
     assert!(applications.contains("IconName::SquareTerminal"));
     assert!(!applications.contains("IconName::Terminal,"));
-    // 侧栏右边线读 sidebar_border，非通用 border
-    assert!(sidebar.contains("sidebar_border"));
+    // 应用导航跟随统一外壳调色板，不自行叠加右边线。
+    assert!(sidebar.contains("chrome_palette.rail"));
+    assert!(sidebar.contains("chrome_palette.menu"));
+    assert!(!sidebar.contains("border_r_1()"));
+    assert!(!sidebar.contains("sidebar_border"));
     assert!(!sidebar.contains("cx.theme().border"));
     // 卡片：非选中 hover 才生效，selected+hover 保留选中组合
     assert!(card.contains(".when(!is_selected, |this|"));
@@ -288,7 +300,7 @@ fn embedded_tree_reuses_home_search_and_filter_without_own_search_box() {
     // 树内搜索框与树头部都仅在非嵌入（停靠/浮动）时渲染
     for marker in [
         "tree.child(self.render_tree_search(palette, cx))",
-        "tree.child(self.render_tree_header(palette, macos_titlebar_inset, cx))",
+        "tree.child(self.render_tree_header(palette, cx))",
     ] {
         let render_at = implementation.find(marker).expect("渲染点存在");
         let mut window_start = render_at.saturating_sub(160);
@@ -310,7 +322,13 @@ fn home_toolbar_uses_a_continuous_secondary_action_strip() {
     let toolbar = include_str!("../toolbar.rs");
 
     // 搜索框之后只有一条连续工具带，不再给筛选和视图各套一个输入框式外框。
-    assert_eq!(toolbar.matches(".bg(cx.theme().muted)").count(), 1);
+    assert_eq!(
+        toolbar
+            .matches(".bg(cx.theme().input_background())")
+            .count(),
+        1
+    );
+    assert_eq!(toolbar.matches(".bg(cx.theme().muted)").count(), 0);
     assert!(toolbar.contains("render_sort_button(cx)"));
     assert!(toolbar.contains("render_layout_button(cx)"));
     assert!(toolbar.contains("render_batch_toggle(cx)"));
@@ -326,7 +344,7 @@ fn home_heading_hosts_the_horizontal_type_filter_bar() {
     let toolbar = include_str!("../toolbar.rs");
 
     // 平铺筛选条挂在「连接」标题右侧，Tree 布局也提供同一标题行；
-    // 全局导航布局的右侧标题行同样复用筛选条（工具栏入口已移除）。
+    // 全局导航连接管理页的标题行同样复用筛选条（工具栏入口已移除）。
     assert!(
         content
             .matches("render_connection_type_filter_bar(window, cx)")
@@ -334,7 +352,7 @@ fn home_heading_hosts_the_horizontal_type_filter_bar() {
             >= 2
     );
     assert!(content.contains("render_tree_content_heading"));
-    assert!(content.contains("render_navigation_heading"));
+    assert!(content.contains("render_navigation_search_heading"));
     assert!(!toolbar.contains("render_home_type_filter"));
     // 筛选项来自共享清单（All + 内置类型 + 扩展贡献），保留图标与单色线稿风格。
     assert!(bar.contains("filter_targets"));
@@ -347,12 +365,12 @@ fn home_heading_hosts_the_horizontal_type_filter_bar() {
     assert!(bar.contains("on_children_prepainted"));
     assert!(bar.contains("resolve_visible_count"));
     assert!(bar.contains("home-type-filter-more"));
-    // chip 与「更多」都使用主题 full radius，形成胶囊外观。
-    assert!(bar.matches(".rounded(cx.theme().radius_full())").count() >= 2);
-    // 选中态有明显区分（浅蓝底、蓝字、蓝边）。
-    assert!(bar.contains(".outline()"));
-    assert!(!bar.contains(".ghost()"));
-    assert!(bar.contains(".primary()"));
+    // chip 使用低强调小圆角；选中态与侧栏一致，不抢占品牌蓝焦点。
+    assert!(bar.contains(".rounded_md()"));
+    assert!(bar.contains(".ghost()"));
+    assert!(!bar.contains(".outline()"));
+    assert!(!bar.contains(".primary()"));
+    assert!(bar.contains("cx.theme().sidebar_accent"));
 }
 
 #[test]
@@ -372,7 +390,7 @@ fn home_toolbar_uses_monochrome_icons_and_visual_separators() {
 }
 
 #[test]
-fn new_connection_is_the_primary_home_action() {
+fn new_connection_uses_a_quiet_outline_action() {
     let toolbar = include_str!("../toolbar.rs");
     let new_connection = toolbar
         .split("Button::new(\"new-connect-button\")")
@@ -382,16 +400,16 @@ fn new_connection_is_the_primary_home_action() {
         .next()
         .expect("new connection button has a responsive label");
 
-    assert!(new_connection.contains(".primary()"));
-    assert!(!new_connection.contains(".outline()"));
+    assert!(new_connection.contains(".outline()"));
+    assert!(!new_connection.contains(".primary()"));
 }
 
 #[test]
-fn home_search_keeps_a_comfortable_desktop_width() {
+fn home_search_does_not_impose_a_wide_desktop_minimum() {
     let toolbar = include_str!("../toolbar.rs");
 
-    assert!(toolbar.contains("window.bounds().size.width > px(1400.0)"));
-    assert!(toolbar.contains("search.min_w(gpui::rems(46.0))"));
+    assert!(toolbar.contains(".flex_1()"));
+    assert!(!toolbar.contains("search.min_w(gpui::rems(46.0))"));
     assert!(toolbar.contains(".min_w(gpui::rems(4.0))"));
 }
 
@@ -420,7 +438,7 @@ fn workspace_filter_exposes_its_active_state() {
 }
 
 #[test]
-fn global_navigation_layout_combines_connection_tree_recent_connections_and_apps() {
+fn global_navigation_home_prioritizes_work_and_separates_connection_management() {
     let settings = include_str!("../../../../../crates/core/src/settings.rs");
     let home = include_str!("../home_layout.rs");
     let content = include_str!("../content.rs");
@@ -429,10 +447,88 @@ fn global_navigation_layout_combines_connection_tree_recent_connections_and_apps
 
     assert!(settings.contains("Navigation"));
     assert!(home.contains("render_navigation_content"));
-    assert!(app.contains("docked_tree = sidebar_expanded"));
+    assert!(app.contains("plan_mount_with_navigation_width("));
+    assert!(app.contains("render_global_navigation"));
     assert!(content.contains("render_navigation_home_content"));
-    assert!(content.contains("render_application_workbench(window, cx)"));
+    assert!(content.contains("render_active_session_list"));
+    assert!(content.contains("render_compact_recent_connections"));
+    assert!(content.contains("render_navigation_connection_manager"));
+    assert!(content.contains("self.navigation_connection_manager_open"));
+    let navigation_home = content
+        .split("fn render_navigation_home_content")
+        .nth(1)
+        .expect("navigation home exists")
+        .split("fn visible_navigation_sessions")
+        .next()
+        .expect("navigation home has an end marker");
+    assert!(!navigation_home.contains("render_application_workbench"));
+    assert!(!navigation_home.contains("render_navigation_status_panel"));
     assert!(tree.contains("self.home_navigation_layout"));
+}
+
+#[test]
+fn feedback_preserves_native_home_and_settings_sidebars() {
+    let home = include_str!("../home_layout.rs");
+    let app = include_str!("../../navop_app.rs");
+    let sidebar = include_str!("../sidebar.rs");
+    assert!(!home.contains("render_sidebar_for_active("));
+    assert!(app.contains("render_sidebar_for_active(active_key, window, cx)"));
+    let render = app.split("impl Render for NavopApp {").nth(1).unwrap();
+    assert!(
+        render.contains("|| active_key == Some(\"Home\")"),
+        "B 的应用菜单只在主页显示，A 保留跨页图标导航"
+    );
+    assert!(app.contains("settings.set_external_categories(false)"));
+    assert!(app.contains(".id(\"application-tab-bar\")"));
+    assert!(
+        app.contains("gpui_component::v_flex()\n            .size_full()\n            .relative()"),
+        "贯通 Tab 槽位必须由纵向根布局分配真实高度，不能靠裸绝对定位子元素撑开"
+    );
+    assert!(app.contains("workspace.top(one_ui::theme_geometry().layout.tab_bar)"));
+    assert!(
+        app.contains(".children(full_width_tab_bar)"),
+        "主页导航模式必须把完整 Tab 栏挂到外壳顶部"
+    );
+    assert!(app.contains("layout == AppLayout::HomeNavigation || global_navigation.is_none()"));
+    assert!(!sidebar.contains("macos-navigation-traffic-light-inset"));
+    assert!(!sidebar.contains(".mt(one_ui::theme_geometry().layout.tab_bar)"));
+    assert!(app.contains(
+        "MountVisibility::Visible | MountVisibility::Collapsed | MountVisibility::Overlay"
+    ));
+    assert!(!app.contains("let has_resource = plan.width.is_some()"));
+    assert!(app.contains("home.read(cx).navigation_connection_manager_open"));
+    assert!(app.contains(".when(layout == AppLayout::HomeNavigation, |menu| menu.h_full())"));
+    assert!(app.contains(".when_some(home_menu, |host, menu| host.child(menu))"));
+    let resource_mount = include_str!("../../resource_mount.rs");
+    assert!(
+        resource_mount
+            .contains("ResourceKind::Connections => active.is_ssh_workspace && !active.is_local")
+    );
+    assert!(app.contains("if plan.width.is_some() {"));
+    assert!(app.contains("tabs.set_tab_bar_bg_color(chrome_palette.tab_bar, cx)"));
+    assert!(app.contains("tabs.set_active_tab_bg_color(chrome_palette.content, cx)"));
+    assert!(app.contains("macos-navigation-traffic-light-inset"));
+    assert!(
+        !app.contains("home-navigation-traffic-light-inset"),
+        "主页布局的 Tab 栏已经贯通顶部并自带红绿灯避让区，侧栏里再留一层 title_bar 高度只是空白"
+    );
+    assert!(app.contains("chrome_palette.rail"));
+    assert!(app.contains("chrome_palette.menu"));
+    assert!(sidebar.contains("chrome_palette.rail"));
+    assert!(sidebar.contains("chrome_palette.menu"));
+    let sidebar = include_str!("../sidebar.rs");
+    let implementation = sidebar.split("impl HomePage {").nth(1).unwrap();
+    assert!(implementation.starts_with("\n    /// 首页导航侧栏"));
+    assert!(implementation.contains("v_flex()"));
+    assert!(implementation.contains(".h_full()"));
+    assert!(!sidebar.contains("h_flex()\n            .h_full()"));
+    let content = include_str!("../content.rs");
+    assert_eq!(
+        content.matches("crate::navop_app::GlobalNavopApp").count(),
+        2
+    );
+    let toolbar = include_str!("../toolbar.rs");
+    assert!(toolbar.contains("self.search_placeholder != placeholder"));
 }
 
 #[test]
@@ -442,7 +538,7 @@ fn recent_section_does_not_participate_in_search() {
     assert!(content.contains("最近区不参与搜索"));
     // 分组内容区:有搜索词时最近区直接清空。
     assert!(content.contains("let recent = if query.is_empty() {"));
-    // 导航主页:最近区始终按空搜索词取值,渲染仍受 query.is_empty() 门控。
+    // 导航主页：紧凑最近区只在无搜索词时渲染，且始终按空搜索词取值。
     let navigation = content
         .split("fn render_navigation_home_content")
         .nth(1)
@@ -755,5 +851,274 @@ fn host_metrics_are_wired_only_to_the_list_view() {
     assert!(
         host_metrics.contains("refresh_host_metrics(cx)"),
         "一个探测槽释放后必须继续排队剩余连接"
+    );
+}
+
+#[test]
+fn home_menu_toggle_reuses_the_tab_bar_toggle_slot() {
+    let app = include_str!("../../navop_app.rs");
+    let tabs = include_str!("../../../../core/src/tab_container.rs");
+
+    assert!(
+        app.contains("tabs.set_home_menu_toggle(home_menu_expanded, cx)"),
+        "主页标签要把标签栏那个开关位交给应用菜单"
+    );
+    assert!(
+        app.contains("TabContainerEvent::HomeMenuToggled { expanded }"),
+        "标签栏开关的点击要回到应用层去折叠/展开应用菜单"
+    );
+    assert!(
+        app.contains("home.set_sidebar_expanded(expanded, cx)"),
+        "事件回传后按目标状态落地，不能自己再取反一次"
+    );
+    assert!(
+        tabs.contains("home_menu_expanded") && tabs.contains("TabContainerEvent::HomeMenuToggled"),
+        "开关仍由 TabContainer 统一渲染在红绿灯右侧、Home 按钮左侧"
+    );
+    assert!(
+        !app.contains("home-navigation-sidebar-toggle")
+            && !include_str!("../toolbar.rs").contains("home-toolbar-sidebar-toggle"),
+        "开关只保留标签栏一处，避让带和工具栏都不再重复"
+    );
+}
+
+/// 外壳托管资源面板时，拖动条要压在面板右缘上（不占布局宽度、不留缝），
+/// 面板底色也不能被终端主题的侧栏色顶掉，否则又和图标栏、标签栏不一致。
+#[test]
+fn shell_resource_resize_gutter_matches_the_panel_surface() {
+    let app = include_str!("../../navop_app.rs");
+
+    assert!(
+        app.contains(".placement(one_ui::resize_handle::HandlePlacement::Left)"),
+        "外壳资源列的抓取区要贴在面板右缘，不再占一条 13px 的布局宽度"
+    );
+    // 缩进会随外壳结构微调，比较时压掉空白，只认代码形状。
+    let compact = app.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        compact.contains("gpui::div() .relative() .flex_shrink_0() .h_full() .w(px(width)) .child(rendered) .child(resize)"),
+        "面板与抓取区要放进同一个相对定位容器"
+    );
+    assert!(
+        !app.contains("column_background"),
+        "抓取区不再单独铺底：它压在面板边框上，面板和内容直接相接"
+    );
+
+    let sync = app
+        .split("fn sync_connection_sidebar_theme(")
+        .nth(1)
+        .expect("连接面板主题同步");
+    assert!(
+        sync.contains("if AppSettings::global(cx).app_layout == AppLayout::HomeNavigation {"),
+        "应用菜单布局下连接面板属于外壳，不跟终端主题换色"
+    );
+    assert!(sync.contains("sidebar.set_terminal_palette(None, cx)"));
+}
+
+#[test]
+fn 数据库类对象树由外壳托管并复用同一套折叠与底色() {
+    let app = include_str!("../../navop_app.rs");
+
+    // 宿主模式每帧先同步，数据库页不能自己再画一份内嵌树。
+    assert!(
+        app.contains("let external = self.external_primary_sidebar(cx);"),
+        "外壳要按资源算宿主模式，而不是只看布局"
+    );
+    assert!(
+        app.contains("tabs.set_external_primary_sidebar(external, cx)"),
+        "读 sidebar_contributions 之前必须先切宿主模式"
+    );
+    let helper = app
+        .split("fn hosts_database_tree(&self, cx: &App) -> bool {")
+        .nth(1)
+        .expect("数据库树宿主判定");
+    assert!(helper.contains(
+        "ResourceKind::DbObjects | ResourceKind::RedisKeys | ResourceKind::MongoCollections"
+    ));
+
+    // 折叠只让外壳不画，不能把宿主切回业务内部，否则折叠后树又冒出来。
+    let toggle = app
+        .split("pub(crate) fn toggle_application_resource(")
+        .nth(1)
+        .expect("资源栏开关");
+    assert!(toggle.contains("let external = self.external_primary_sidebar(cx);"));
+    assert!(!toggle.contains("external && expanded"));
+
+    // 面板右缘不再自己描边，底色与连接面板一致；抓取区也跟着铺面板底色。
+    let resource = app
+        .split("ResourceKind::DbObjects | ResourceKind::RedisKeys | ResourceKind::MongoCollections => {")
+        .nth(1)
+        .expect("数据库资源容器");
+    assert!(resource.contains(".bg(cx.theme().sidebar)"));
+    assert!(
+        !resource.contains(".border_r_1()"),
+        "数据库面板右缘会和外层分隔线叠成双重接缝"
+    );
+}
+
+/// 主页首屏只有「继续工作 + 最近连接」时会显得空，快捷操作卡片负责补第一屏，
+/// 四条入口都必须能真的把人送到对应位置，而不只是装饰。
+#[test]
+fn home_navigation_offers_quick_action_tiles() {
+    let content = include_str!("../content.rs");
+    assert!(content.contains("body = body.child(self.render_navigation_quick_actions(cx));"));
+    assert!(content.contains("fn render_navigation_quick_actions("));
+    assert!(content.contains(".id(\"home-navigation-quick-actions\")"));
+
+    for (id, icon) in [
+        ("home-quick-new-connection", "IconName::Plus"),
+        ("home-quick-ssh", "IconName::SquareTerminal"),
+        ("home-quick-notes", "IconName::NotesLine"),
+        ("home-quick-ai-workbench", "IconName::AILine"),
+    ] {
+        assert!(content.contains(id), "缺少快捷操作 {id}");
+        assert!(content.contains(icon), "缺少图标 {icon}");
+    }
+
+    // 新建连接走既有对话框；快速 SSH 直接预填搜索框；笔记与 AI 走应用导航。
+    assert!(content.contains("home.show_new_connection_dialog(None, window, cx)"));
+    assert!(content.contains("input.set_value(\"ssh \", window, cx);"));
+    assert!(content.contains("input.focus(window, cx);"));
+    assert!(content.contains("NavigationApplication::Notes"));
+    assert!(content.contains("NavigationApplication::AiWorkbench"));
+
+    // 文案走本地化键，不能在渲染代码里写死中文。
+    for key in [
+        "Home.quick_new_connection",
+        "Home.quick_new_connection_hint",
+        "Home.quick_ssh",
+        "Home.quick_ssh_hint",
+        "Home.quick_notes",
+        "Home.quick_notes_hint",
+        "Home.quick_ai_workbench",
+    ] {
+        assert!(content.contains(key), "缺少文案键 {key}");
+    }
+}
+
+/// 用户反馈首屏「还是太空」：最近连接放宽，再补分组概览与用法提示，
+/// 且这些区块都必须能点进真实入口，不能只是装饰。
+#[test]
+fn home_navigation_fills_the_first_screen_below_recent_connections() {
+    let content = include_str!("../content.rs");
+
+    // 最近连接从 4 条放宽到 8 条。
+    assert!(
+        content.contains(
+            "recent::recent_connections(&self.connections, &self.selected_filter, \"\", 8)"
+        )
+    );
+
+    // 分组概览：点一下带分组过滤进连接管理。
+    assert!(content.contains("if self.has_named_groups(cx) {"));
+    assert!(content.contains("fn render_navigation_groups("));
+    assert!(content.contains("home.filtered_workspace_ids.insert(workspace_id);"));
+    assert!(content.contains("home.navigation_connection_manager_open = true;"));
+    assert!(content.contains("\"home-navigation-groups\""));
+
+    // 用法提示：快捷键文案取自真实键位绑定，不写死。
+    assert!(content.contains("body = body.child(self.render_navigation_tips(cx));"));
+    assert!(content.contains("fn render_navigation_tips("));
+    assert!(content.contains("action_id::HOME_QUICK_OPEN"));
+    assert!(content.contains("\"home-navigation-tips\""));
+}
+
+/// 「浮动侧边栏」开关：打开后连接树浮在内容之上（不占宽度），
+/// 点内容区或打开连接后收起。新外壳曾经把这个开关的浮动语义丢了。
+#[gpui::test]
+fn floating_connection_tree_overlays_the_content(cx: &mut gpui::TestAppContext) {
+    let shell = include_str!("../../navop_app.rs");
+    assert!(
+        shell.contains("let floating_connection = resource == ResourceKind::Connections"),
+        "浮动开关不能只对主页布局生效，图标栏布局也要走同一条路径"
+    );
+    assert!(shell.contains("self.connection_sidebar.read(cx).is_auto_hide_tree()"));
+    assert!(
+        shell.contains("sidebar.render_floating_tree(px(navigation_width), window, cx)"),
+        "浮动连接树应由 render_floating_tree 画成圆角卡片"
+    );
+    assert!(
+        shell.contains("this.set_connection_sidebar_expanded(false, cx);"),
+        "点内容区应把浮动树收回"
+    );
+
+    let sidebar = include_str!("../../persistent_connection_sidebar/mod.rs");
+    assert!(
+        sidebar.contains("is_auto_hide_tree"),
+        "浮动开关必须仍由连接树状态驱动"
+    );
+    assert!(
+        sidebar.contains("left: Pixels,"),
+        "浮动卡片的位置由外壳传入，不能写死贴左边缘"
+    );
+    let _ = cx;
+}
+
+/// AI 工作台会话导航栏的开关：工具条里那个与标签栏同图标的按钮已经去掉，
+/// 标签栏开关在 AI 标签下改驱动工作台的会话导航栏，避免两个入口抢同一件事。
+#[gpui::test]
+fn ai_workbench_reuses_the_tab_bar_nav_toggle(cx: &mut gpui::TestAppContext) {
+    let shell = include_str!("../../navop_app.rs");
+    assert!(
+        shell.contains("active_key == Some(\"AiWorkbench\")"),
+        "只有 AI 工作台标签才把开关位转给工作台"
+    );
+    assert!(
+        shell.contains("tabs.set_workbench_nav_toggle(workbench_nav, cx);"),
+        "工作台折叠状态要下传给标签栏"
+    );
+    assert!(
+        shell.contains("TabContainerEvent::WorkbenchNavToggled { expanded } =>"),
+        "标签栏的点击要能回到工作台"
+    );
+    assert!(
+        shell.contains("ai.set_session_nav_collapsed(!expanded, cx)"),
+        "事件回来时要按目标状态设置而不是再翻一次"
+    );
+
+    let tabs = include_str!("../../../../core/src/tab_container.rs");
+    assert!(
+        tabs.contains("workbench_nav\n                    .or(home_menu_expanded)")
+            || tabs.contains("workbench_nav.or(home_menu_expanded)"),
+        "工作台导航栏优先表达开关状态"
+    );
+    assert!(
+        tabs.contains("pub fn set_workbench_nav_toggle"),
+        "要有下传入口"
+    );
+
+    let agent_view = include_str!("../../../../ai_chat_view/src/agent_view.rs");
+    assert!(
+        !agent_view.contains("workbench-toolbar-nav-toggle"),
+        "聊天工具条里的导航栏开关已移除，不再有重复入口"
+    );
+    let _ = cx;
+}
+
+/// 侧栏顶部品牌区不能只有一行文字：展开时是 logo + 字标，折叠时只留居中 logo。
+#[test]
+fn home_sidebar_brand_area_renders_the_navop_logo() {
+    let sidebar = include_str!("../sidebar.rs");
+    assert!(
+        sidebar.contains("home-sidebar-brand"),
+        "品牌区要有稳定 id，方便调试与定位"
+    );
+    assert!(
+        sidebar.contains("gpui::img(crate::NAVOP_LOGO_ASSET_PATH)"),
+        "品牌区要渲染内嵌的 Navop logo，而不是只有文字"
+    );
+    assert!(
+        sidebar.contains(".child(\"Navop\")"),
+        "展开态保留 Navop 字标，logo 不能把品牌名顶掉"
+    );
+    assert!(
+        sidebar.contains("justify_center()"),
+        "折叠态只有 58px，logo 必须居中，否则会被裁掉"
+    );
+
+    let source = include_str!("../../lib.rs");
+    assert!(
+        source.contains("NAVOP_LOGO_ASSET_PATH")
+            && source.contains("resources/branding/navop-logo.png"),
+        "logo 资源要真正注册进 AppAssets，否则运行时只会渲染空白"
     );
 }

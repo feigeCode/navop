@@ -34,36 +34,45 @@ pub(crate) use connection_share::connection_full_info_text;
 #[derive(Clone, Copy)]
 pub(super) struct SidebarPalette {
     pub background: Hsla,
-    pub rail_background: Hsla,
     pub foreground: Hsla,
     pub muted: Hsla,
     pub hover: Hsla,
     pub selected: Hsla,
-    pub selected_border: Hsla,
     pub muted_foreground: Hsla,
     pub border: Hsla,
-    pub accent: Hsla,
 }
 
 impl SidebarPalette {
-    fn app(cx: &gpui::App) -> Self {
+    fn app(sidebar: &PersistentConnectionSidebar, cx: &gpui::App) -> Self {
         use gpui_component::ActiveTheme as _;
 
-        // 与主窗口背景统一，停靠时侧栏不再像独立拼接的面板。
-        let background = cx.theme().background;
+        let dark_mode = cx.theme().is_dark();
+        // 外壳托管的连接列表面板比图标栏/Tab 栏（外壳 token）亮一档：
+        // 和右边白色内容拉开层次，又不至于和左侧 52px 图标栏糊成同一块灰。
+        let background = if sidebar.home_navigation_layout {
+            cx.theme().sidebar
+        } else if sidebar.home_embedded {
+            // 嵌入主页内容里的树仍是内容表面，跟随主页画布。
+            crate::chrome_palette::chrome_palette(cx).content
+        } else {
+            cx.theme().sidebar
+        };
         Self {
             background,
-            rail_background: shade(background, cx.theme().is_dark()),
             foreground: cx.theme().sidebar_foreground,
             // sidebar_accent 已变为主页导航选中浅蓝；连接树行的 hover/徽标底保持中性，
             // 不随主页侧栏主题补丁变色（refinement §5.3）。
             muted: cx.theme().muted,
-            hover: cx.theme().list_hover,
+            // 行悬停落在面板底色上：外壳灰下内容表面的中性 hover 几乎看不出来，
+            // 所以壳里改用「贴着底色抬一层」的色调。
+            hover: if sidebar.home_navigation_layout {
+                hover_tint(background, dark_mode)
+            } else {
+                cx.theme().list_hover
+            },
             selected: cx.theme().list_active,
-            selected_border: cx.theme().list_active_border,
             muted_foreground: cx.theme().muted_foreground,
             border: cx.theme().sidebar_border,
-            accent: cx.theme().sidebar_primary,
         }
     }
 }
@@ -72,29 +81,25 @@ impl From<domain_api::SidebarColors> for SidebarPalette {
     fn from(colors: domain_api::SidebarColors) -> Self {
         Self {
             background: colors.background,
-            rail_background: shade(colors.background, true),
             foreground: colors.foreground,
             muted: colors.muted,
             hover: colors.muted,
             selected: hsla(colors.accent.h, colors.accent.s, colors.accent.l, 0.18),
-            selected_border: colors.accent,
             muted_foreground: colors.muted_foreground,
             border: colors.border,
-            accent: colors.accent,
         }
     }
 }
 
-/// Slightly darken a background color so the tree header stays visually
-/// distinct from the connection panel without turning nearly black in dark
-/// terminal themes.
-fn shade(color: Hsla, dark_mode: bool) -> Hsla {
-    let amount = if dark_mode { -0.02 } else { -0.015 };
+/// 行悬停底色：贴着面板底色抬一层——浅色壳上加深、深色壳上提亮。
+/// 内容表面的中性 `list_hover` 落在外壳灰上几乎看不出变化，需要单独推导。
+fn hover_tint(background: Hsla, dark_mode: bool) -> Hsla {
+    let amount = if dark_mode { 0.035 } else { -0.028 };
     hsla(
-        color.h,
-        color.s,
-        (color.l + amount).clamp(0.0, 1.0),
-        color.a,
+        background.h,
+        background.s,
+        (background.l + amount).clamp(0.0, 1.0),
+        background.a,
     )
 }
 
@@ -186,11 +191,11 @@ impl gpui::Render for PersistentConnectionSidebar {
 impl PersistentConnectionSidebar {
     /// Render the connection tree as a floating card that overlays the main
     /// content instead of occupying flex space, so expanding it no longer
-    /// squeezes the terminal. The caller (NavopApp) positions it at the
-    /// left window edge, below the tab bar, and collapses it when the
-    /// terminal regains focus.
+    /// squeezes the terminal. 调用方（外壳）用 `left` 把它摆到应用菜单右缘，
+    /// 并负责在点击内容区或打开连接后收起。
     pub(crate) fn render_floating_tree(
         &mut self,
+        left: Pixels,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -215,7 +220,7 @@ impl PersistentConnectionSidebar {
                 .absolute()
                 .top(top)
                 .bottom_0()
-                .left_0()
+                .left(left)
                 .w(self.tree_width + pad)
                 // 浮动侧边栏覆盖在内容区之上：occlude 让命中测试在侧边栏处终止，
                 // 避免滚轮/鼠标事件穿透到下方的 tab 内容区（否则终端等会跟着滚动）。
@@ -292,14 +297,6 @@ impl PersistentConnectionSidebar {
         }
     }
 
-    pub(crate) fn set_home_navigation_layout(&mut self, cx: &mut Context<Self>) {
-        if !self.home_embedded || !self.home_navigation_layout {
-            self.home_embedded = true;
-            self.home_navigation_layout = true;
-            cx.notify();
-        }
-    }
-
     pub(crate) fn set_tree_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
         if self.tree_expanded != expanded {
             self.tree_expanded = expanded;
@@ -315,13 +312,21 @@ impl PersistentConnectionSidebar {
         self.auto_hide_tree
     }
 
-    /// 非自动隐藏模式下，连接树作为与终端并排的分割面板渲染，而不是浮层。
-    pub(crate) fn render_docked_connection_tree(
+    /// 同一个连接树 Entity 由外壳按资源计划换宿主；不创建第二棵树或重新加载连接。
+    pub(crate) fn render_application_resource(
         &mut self,
-        _window: &mut Window,
+        width: gpui::Pixels,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.render_docked_tree(cx)
+        if one_core::settings::AppSettings::global(cx).app_layout
+            == one_core::settings::AppLayout::GlobalNavigation
+        {
+            self.home_embedded = true;
+            self.home_navigation_layout = true;
+            self.render_tree_impl(Some(width), cx)
+        } else {
+            self.render_home_navigation_tree(width, cx)
+        }
     }
 
     #[cfg(feature = "shell")]
@@ -338,7 +343,7 @@ impl PersistentConnectionSidebar {
         if let Some(palette) = self.terminal_palette {
             return palette;
         }
-        SidebarPalette::app(cx)
+        SidebarPalette::app(self, cx)
     }
 }
 
@@ -378,15 +383,24 @@ mod tests {
     }
 
     #[test]
-    fn docked_tree_unifies_with_window_background_and_uses_single_divider() {
+    fn connection_tree_separates_home_layers_without_stacked_borders() {
         let implementation = include_str!("mod.rs");
         let tree = include_str!("tree.rs");
         let tree_implementation = tree.split("#[cfg(test)]").next().unwrap();
 
-        // 停靠时侧栏背景与主窗口背景统一，减少拼接感
-        assert!(implementation.contains("cx.theme().background"));
-        // 右侧分隔统一由 resize 手柄的可见线承担，各分段不再叠加 border_r
+        // 外壳托管的连接列表面板比壳亮一档（sidebar token），右侧内容才保持白底；
+        // 嵌入主页内容里的树才跟随内容表面。
+        assert!(implementation.contains("if sidebar.home_navigation_layout {"));
+        assert!(implementation.contains("cx.theme().sidebar"));
+        assert!(implementation.contains("crate::chrome_palette::chrome_palette(cx).content"));
+        assert!(implementation.contains("SidebarPalette::app(self, cx)"));
+        // 外壳灰上的行悬停要贴着底色抬一层，内容表面的 list_hover 在这里看不见。
+        assert!(implementation.contains("hover_tint(background, dark_mode)"));
         assert!(!tree_implementation.contains(".border_r_1()"));
+        assert!(!tree_implementation.contains(".border_b_1()"));
+        // 外壳托管时左侧是应用菜单、同属一个壳，不画内部接缝；嵌进画布的树才用左边线。
+        assert!(tree_implementation.contains("self.home_embedded && !self.home_navigation_layout"));
+        assert!(tree_implementation.contains("tree.border_l_1().border_color(palette.border)"));
     }
 
     #[test]
@@ -400,11 +414,9 @@ mod tests {
         assert!(!content.contains("render_home_tree(cx)"));
         // Tree 布局经 set_home_embedded 让侧栏以子实体输出主页树；
         // 全局导航布局由 home_navigation_layout 单独驱动，不走该入口。
-        assert!(
-            content.contains(
-                "set_home_embedded(self.connection_layout == ConnectionLayout::Tree, cx)"
-            )
-        );
+        assert!(content.contains("sidebar.set_home_embedded("));
+        assert!(content.contains("self.connection_layout == ConnectionLayout::Tree"));
+        assert!(content.contains("!HomePage::uses_global_navigation_layout(cx)"));
         assert!(implementation.contains("impl gpui::Render for PersistentConnectionSidebar"));
         assert!(implementation.contains("self.home_embedded"));
     }

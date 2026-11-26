@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 
 const STATE_FILE: &str = "target/state.json";
-const ACCENT_LIGHTNESS_THRESHOLD: f32 = 0.62;
 const ACCENT_HOVER_AMOUNT: f32 = 0.1;
 const ACCENT_ACTIVE_AMOUNT: f32 = 0.1;
 const CUSTOM_SELECTION_ALPHA: f32 = 0.25;
@@ -204,6 +203,22 @@ fn find_theme(name: &str, mode: ThemeMode, registry: &ThemeRegistry) -> Option<R
         .cloned()
 }
 
+fn contrast_ratio(first: gpui::Hsla, second: gpui::Hsla) -> f32 {
+    fn luminance(color: gpui::Hsla) -> f32 {
+        let rgb: gpui::Rgba = color.into();
+        let linearize = |channel: f32| {
+            if channel <= 0.03928 {
+                channel / 12.92
+            } else {
+                ((channel + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linearize(rgb.r) + 0.7152 * linearize(rgb.g) + 0.0722 * linearize(rgb.b)
+    }
+    let (light, dark) = (luminance(first), luminance(second));
+    (light.max(dark) + 0.05) / (light.min(dark) + 0.05)
+}
+
 pub fn apply_custom_accent(settings: &AppSettings, cx: &mut App) {
     if !settings.custom_accent_enabled {
         return;
@@ -211,10 +226,12 @@ pub fn apply_custom_accent(settings: &AppSettings, cx: &mut App) {
     let Ok(accent) = try_parse_color(&settings.custom_accent_color) else {
         return;
     };
-    let foreground = if accent.l > ACCENT_LIGHTNESS_THRESHOLD {
-        hsla(0., 0., 0.08, 1.0)
+    let light = hsla(0., 0., 1.0, 1.0);
+    let dark = hsla(0., 0., 0.08, 1.0);
+    let foreground = if contrast_ratio(light, accent) >= contrast_ratio(dark, accent) {
+        light
     } else {
-        hsla(0., 0., 1.0, 1.0)
+        dark
     };
     let theme = Theme::global_mut(cx);
     theme.primary = accent;
@@ -225,14 +242,15 @@ pub fn apply_custom_accent(settings: &AppSettings, cx: &mut App) {
     theme.button_primary_hover = theme.primary_hover;
     theme.button_primary_active = theme.primary_active;
     theme.button_primary_foreground = foreground;
-    theme.accent = accent;
-    theme.accent_foreground = foreground;
+    theme.accent = accent.opacity(0.12);
+    theme.accent_foreground = theme.foreground;
     theme.ring = accent;
     theme.list_active_border = accent;
     theme.table_active_border = accent;
     theme.drag_border = accent;
-    theme.sidebar_primary = accent;
-    theme.sidebar_primary_foreground = foreground;
+    // 外壳选中态使用低对比弱底，沿用页面的 sidebar_primary 前景。
+    theme.sidebar_accent = accent.opacity(0.12);
+    theme.sidebar_accent_foreground = theme.sidebar_foreground;
     theme.selection = accent;
     theme.selection.a = CUSTOM_SELECTION_ALPHA;
 }
@@ -300,10 +318,10 @@ mod tests {
                 gpui_component::Theme::global(cx).primary,
                 gpui_component::Theme::global(cx).ring
             );
-            assert_eq!(
-                gpui_component::Theme::global(cx).primary,
-                gpui_component::Theme::global(cx).sidebar_primary
-            );
+            let theme = gpui_component::Theme::global(cx);
+            assert_eq!(theme.accent, theme.primary.opacity(0.12));
+            assert_eq!(theme.accent_foreground, theme.foreground);
+            assert!(super::contrast_ratio(theme.primary_foreground, theme.primary) >= 3.0);
         });
     }
 
@@ -336,6 +354,76 @@ mod tests {
             let theme = gpui_component::Theme::global(cx);
             assert!((theme.background.a - 0.6).abs() <= f32::EPSILON);
             assert_eq!(1.0, theme.foreground.a);
+        });
+    }
+
+    /// 外壳三处（应用菜单/Tab 栏/标题栏）必须同色 —— 这是产品对 Navop 主题的
+    /// 硬性要求，浅色与深色都要成立；同时保持
+    /// 「内容 > 画布 > 资源面板 > 外壳」的层次，否则面板会和画布糊成一片
+    /// （深色下 active tab 也会消失）。
+    #[gpui::test]
+    fn navop_surfaces_share_one_shell_and_keep_three_step_depth(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            super::load_bundled(cx);
+
+            for mode in ["light", "dark"] {
+                let settings = crate::settings::AppSettings {
+                    theme_mode: mode.to_string(),
+                    ..Default::default()
+                };
+                super::apply_appearance(&settings, cx);
+
+                let theme = gpui_component::Theme::global(cx);
+                assert_eq!(
+                    theme.tab_bar, theme.title_bar,
+                    "{mode}: 标题栏必须与外壳同色"
+                );
+                assert_eq!(
+                    theme.tab_bar, theme.status_bar,
+                    "{mode}: 状态栏必须与外壳同色"
+                );
+                // 连接/数据库等资源面板比外壳亮一档：两者同色时左侧图标栏和面板
+                // 会糊成一块灰，用户分不出边界。
+                assert_ne!(
+                    theme.sidebar, theme.tab_bar,
+                    "{mode}: 资源面板必须与外壳区分开"
+                );
+
+                let luminance = |color: gpui::Hsla| {
+                    let rgba: gpui::Rgba = color.into();
+                    let linearize = |channel: f32| {
+                        if channel <= 0.03928 {
+                            channel / 12.92
+                        } else {
+                            ((channel + 0.055) / 1.055).powf(2.4)
+                        }
+                    };
+                    0.2126 * linearize(rgba.r)
+                        + 0.7152 * linearize(rgba.g)
+                        + 0.0722 * linearize(rgba.b)
+                };
+                assert!(
+                    luminance(theme.background) > luminance(theme.muted),
+                    "{mode}: 内容表面必须亮于内容画布"
+                );
+                // 浅色是「外壳 < 面板 < 画布 < 内容」，深色反过来是
+                // 「外壳 < 画布 < 面板 < 内容」：只要求面板与画布都夹在外壳和内容之间，
+                // 且两者互不相同，层次就不会糊。
+                let shell = luminance(theme.tab_bar);
+                let panel = luminance(theme.sidebar);
+                let canvas = luminance(theme.muted);
+                let content = luminance(theme.background);
+                assert!(
+                    panel > shell && canvas > shell,
+                    "{mode}: 资源面板与内容画布都必须亮于外壳"
+                );
+                assert!(
+                    content > panel && content > canvas,
+                    "{mode}: 内容表面必须最亮"
+                );
+                assert_ne!(panel, canvas, "{mode}: 资源面板与内容画布必须区分开");
+            }
         });
     }
 

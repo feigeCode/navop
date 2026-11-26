@@ -183,6 +183,18 @@ impl MongoTabView {
         self
     }
 
+    pub fn set_external_sidebar(&mut self, external: bool, cx: &mut Context<Self>) {
+        let mode = if external {
+            MongoSidebarRenderMode::External
+        } else {
+            MongoSidebarRenderMode::Embedded
+        };
+        if self.sidebar_render_mode != mode {
+            self.sidebar_render_mode = mode;
+            cx.notify();
+        }
+    }
+
     fn active_connection(&self) -> Option<&StoredConnection> {
         self.active_connection_id.and_then(|id| {
             self.connections
@@ -279,6 +291,10 @@ impl Focusable for MongoTabView {
 impl EventEmitter<TabContentEvent> for MongoTabView {}
 
 impl TabContent for MongoTabView {
+    fn set_external_primary_sidebar(&mut self, external: bool, cx: &mut Context<Self>) {
+        self.set_external_sidebar(external, cx);
+    }
+
     fn content_key(&self) -> &'static str {
         "MongoDB"
     }

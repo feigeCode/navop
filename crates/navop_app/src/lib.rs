@@ -16,6 +16,7 @@ mod auth;
 
 mod ai_chat_acp;
 mod app_init;
+mod chrome_palette;
 mod connection_deeplink;
 mod connection_sort;
 mod connection_type_menu;
@@ -54,6 +55,7 @@ mod personal_sync_runtime_tests;
 mod personal_sync_status;
 mod product;
 mod public_mcp_runtime;
+mod resource_mount;
 mod screenshot_safe;
 mod setting_tab;
 mod settings;
@@ -88,6 +90,9 @@ pub struct AppAssets {
 }
 
 pub(crate) const NAVOP_ICON_ASSET_PATH: &str = "navop/app-icon.png";
+
+/// 首页侧栏品牌区展示的圆角 logo（96px，避免为一个小小的标题加载 1024px 原图占显存）。
+pub(crate) const NAVOP_LOGO_ASSET_PATH: &str = "navop/logo.png";
 
 /// Navop 自带品牌图标(TDengine/MQTT)。
 ///
@@ -279,6 +284,12 @@ impl AssetSource for AppAssets {
             ))));
         }
 
+        if path == NAVOP_LOGO_ASSET_PATH {
+            return Ok(Some(std::borrow::Cow::Borrowed(include_bytes!(
+                "../../../resources/branding/navop-logo.png"
+            ))));
+        }
+
         if let Some(asset) = navop_brand_icon(path) {
             return Ok(Some(asset));
         }
@@ -366,11 +377,27 @@ fn report_single_instance_failure(message: &str) {
 ///
 /// 三个应用 crate 各自定义自己的 `Product`（身份、领域包、初始化），这里只负责
 /// 与产品无关的启动流程：环境文件、路径、单实例、窗口、平台集成。
+/// 把 panic 写进应用日志：macOS 的崩溃报告只有地址没有信息，鼠标事件里
+/// 逃出边界（`panic_cannot_unwind`）还会直接 abort，日志是唯一能拿到 panic
+/// 文本与调用栈的地方。默认 hook 仍然保留，终端里照样能看到原文。
+fn install_panic_logger() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(
+            target: "navop_app::panic",
+            "panic: {info}\nbacktrace:\n{}",
+            std::backtrace::Backtrace::force_capture()
+        );
+        default_hook(info);
+    }));
+}
+
 pub fn run_with<P>(product: P, version: &'static str)
 where
     P: domain_api::Product + 'static,
 {
     env_file::load_env_files();
+    install_panic_logger();
 
     // 身份必须先于一切按产品派生的行为（数据目录、密钥链、MCP 发现、更新 feed）
     // 确定；全量产品也走这条路径，避免维护两套启动顺序。
@@ -1449,5 +1476,26 @@ mod quit_prompt_localization_tests {
                 "Tray.close_message_app",
             );
         }
+    }
+}
+
+/// 侧栏品牌区读取的 logo 必须真能从内嵌资源加载出来，否则界面只会剩一片空白。
+#[cfg(test)]
+mod sidebar_logo_asset_tests {
+    use super::{AppAssets, NAVOP_LOGO_ASSET_PATH};
+    use gpui::AssetSource as _;
+
+    #[test]
+    fn sidebar_logo_is_embedded_in_app_assets() {
+        let assets = AppAssets::new();
+        let bytes = assets
+            .load(NAVOP_LOGO_ASSET_PATH)
+            .expect("logo asset load")
+            .expect("logo asset should be embedded");
+
+        assert!(
+            bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "侧栏 logo 必须是可解码的 PNG"
+        );
     }
 }

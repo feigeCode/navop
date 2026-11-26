@@ -2614,6 +2614,18 @@ TableDataGrid:
     en: "Column: Value"
     zh-CN: "列：值"
     zh-HK: "欄：值"
+  record_json:
+    en: View selected record as JSON
+    zh-CN: 以 JSON 查看选中记录
+    zh-HK: 以 JSON 檢視選中記錄
+  record_json_title:
+    en: "Record %{row} as JSON"
+    zh-CN: "记录 %{row} · JSON"
+    zh-HK: "記錄 %{row} · JSON"
+  record_json_select_one:
+    en: Select exactly one record first
+    zh-CN: 请先选中一条记录
+    zh-HK: 請先選中一筆記錄
   vertical_record:
     en: "Record %{index}"
     zh-CN: "记录 %{index}"

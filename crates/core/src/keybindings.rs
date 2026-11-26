@@ -26,6 +26,8 @@ pub mod action_id {
     pub const DB_OPEN_TABLE_QUERY: &str = "db.open_table_query";
     pub const DB_OPEN_TABLE_DESIGNER: &str = "db.open_table_designer";
     pub const DB_SELECT_ALL_OBJECTS: &str = "db.select_all_objects";
+    pub const DB_REFRESH: &str = "db.refresh";
+    pub const DB_SAVE_CHANGES: &str = "db.save_changes";
     pub const SQL_RUN_QUERY: &str = "sql.run_query";
     pub const SQL_RUN_ALL_QUERY: &str = "sql.run_all_query";
     pub const SQL_TOGGLE_COMMENT: &str = "sql.toggle_comment";

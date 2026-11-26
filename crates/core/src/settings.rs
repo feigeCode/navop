@@ -124,6 +124,63 @@ pub enum MasterKeyStorage {
     LocalFile,
 }
 
+/// 应用外壳与连接管理视图是两个独立维度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppLayout {
+    #[default]
+    GlobalNavigation,
+    HomeNavigation,
+}
+
+/// 界面密度只调整几何间距，不改变字体大小。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppearanceDensity {
+    Compact,
+    #[default]
+    Normal,
+    Comfortable,
+}
+
+/// 仅影响连接管理页；Tree 仅在 HomeNavigation 下使用独立资源栏。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectionManagementView {
+    #[default]
+    Card,
+    List,
+    Tree,
+}
+
+fn legacy_management_view() -> ConnectionManagementView {
+    ConnectionManagementView::Card
+}
+
+fn default_resource_widths() -> std::collections::HashMap<String, f32> {
+    [
+        ("connections".to_owned(), 260.0),
+        ("settings.categories".to_owned(), 220.0),
+        ("notes.directory".to_owned(), 260.0),
+        ("ai.sessions".to_owned(), 260.0),
+        ("db.objects".to_owned(), 260.0),
+        ("redis.keys".to_owned(), 260.0),
+        ("mongo.collections".to_owned(), 260.0),
+    ]
+    .into_iter()
+    .collect()
+}
+
+impl From<HomeConnectionLayout> for ConnectionManagementView {
+    fn from(value: HomeConnectionLayout) -> Self {
+        match value {
+            HomeConnectionLayout::List => Self::List,
+            HomeConnectionLayout::Tree => Self::Tree,
+            HomeConnectionLayout::Card | HomeConnectionLayout::Navigation => Self::Card,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HomeConnectionLayout {
@@ -1632,12 +1689,18 @@ pub struct AppSettings {
     pub large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode,
     #[serde(default)]
     pub startup_default_page: StartupDefaultPage,
-    /// 除私有 `jms://` 外允许 Navop 接管的通用 URL scheme。
+    /// 允许 Navop 接管的通用 URL scheme（`ssh://`、`sftp://` 等）。
     ///
-    /// 空集合（默认）表示只接管 `jms://`。启用的 scheme 才会注册到系统，
+    /// 空集合（默认）表示不接管任何通用 scheme。启用的 scheme 才会注册到系统，
     /// 避免默认抢走终端、文件管理器的既有 `ssh://`、`sftp://` 关联。
     #[serde(default)]
     pub deeplink_schemes: Vec<String>,
+    /// 是否接管私有 `jms://` 深链接（JumpServer）。
+    ///
+    /// 这是 Navop 自有的协议，默认开启；用户可在「设置 → SSH → 链接协议」里
+    /// 关掉，关掉后既不再注册系统关联，也会拒绝打开 `jms://` 链接。
+    #[serde(default = "default_true")]
+    pub jump_deeplink_enabled: bool,
     /// 是否要求每次启动时输入主密钥后才能访问已保存的连接
     #[serde(default)]
     pub require_master_key_on_startup: bool,
@@ -1647,8 +1710,20 @@ pub struct AppSettings {
     /// 自动解锁时主密钥的保存位置
     #[serde(default)]
     pub master_key_storage: MasterKeyStorage,
+    /// 应用外壳与连接管理页是两个独立维度。
+    #[serde(default)]
+    pub app_layout: AppLayout,
+    /// 界面密度只调整几何间距，不改变字体大小。
+    #[serde(default)]
+    pub interface_density: AppearanceDensity,
+    /// Card/List/Tree 仅决定连接管理页，不决定应用外壳。
+    #[serde(default = "legacy_management_view")]
+    pub connection_management_view: ConnectionManagementView,
     #[serde(default)]
     pub home_connection_layout: HomeConnectionLayout,
+    /// 资源宽度使用稳定资源键，避免 EntityId 变化后丢失偏好。
+    #[serde(default = "default_resource_widths")]
+    pub resource_widths: std::collections::HashMap<String, f32>,
     /// 首页是否显示「最近连接」分组
     #[serde(default = "default_true")]
     pub home_show_recent_connections: bool,
@@ -1664,6 +1739,9 @@ pub struct AppSettings {
     /// 连接列表排序方式
     #[serde(default)]
     pub connection_sort_order: ConnectionSortOrder,
+    /// B 的应用菜单宽度独立持久化，不与连接资源栏折叠混用。
+    #[serde(default = "default_true")]
+    pub home_navigation_menu_expanded: bool,
     #[serde(default = "default_true")]
     pub connection_sidebar_expanded: bool,
     #[serde(default)]
@@ -2114,14 +2192,20 @@ impl Default for AppSettings {
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             startup_default_page: StartupDefaultPage::default(),
             deeplink_schemes: Vec::new(),
+            jump_deeplink_enabled: true,
             require_master_key_on_startup: false,
             portable_remember_master_key: false,
             master_key_storage: MasterKeyStorage::SystemCredentialStore,
+            app_layout: AppLayout::default(),
+            connection_management_view: ConnectionManagementView::default(),
+            resource_widths: default_resource_widths(),
             home_connection_layout: HomeConnectionLayout::default(),
+            interface_density: AppearanceDensity::default(),
             home_show_recent_connections: true,
             home_show_host_metrics: true,
             monitored_connection_ids: BTreeSet::new(),
             connection_sort_order: ConnectionSortOrder::default(),
+            home_navigation_menu_expanded: true,
             connection_sidebar_expanded: true,
             connection_sidebar_tree_state: ConnectionSidebarTreeState::default(),
             enable_sql_auto_save: true,
@@ -2206,21 +2290,25 @@ impl AppSettings {
         )
     }
 
-    /// Navop 私有、始终启用的深链接 scheme（JumpServer）。
+    /// Navop 私有深链接 scheme（JumpServer），默认启用。
     pub const PRIVATE_DEEPLINK_SCHEME: &'static str = "jms";
 
-    /// 该 scheme 是否允许打开深链接；`jms://` 始终允许。
+    /// 该 scheme 是否允许打开深链接；`jms://` 由用户开关控制，默认开启。
     pub fn deeplink_scheme_enabled(&self, scheme: &str) -> bool {
-        scheme.eq_ignore_ascii_case(Self::PRIVATE_DEEPLINK_SCHEME)
-            || self
-                .deeplink_schemes
-                .iter()
-                .any(|enabled| enabled.eq_ignore_ascii_case(scheme))
+        if scheme.eq_ignore_ascii_case(Self::PRIVATE_DEEPLINK_SCHEME) {
+            return self.jump_deeplink_enabled;
+        }
+        self.deeplink_schemes
+            .iter()
+            .any(|enabled| enabled.eq_ignore_ascii_case(scheme))
     }
 
-    /// 需要注册到系统的全部 scheme：私有 scheme 始终在最前，其余按用户启用。
+    /// 需要注册到系统的全部 scheme：私有 scheme 启用时在最前，其余按用户启用。
     pub fn enabled_deeplink_schemes(&self) -> Vec<String> {
-        let mut schemes = vec![Self::PRIVATE_DEEPLINK_SCHEME.to_string()];
+        let mut schemes = Vec::new();
+        if self.jump_deeplink_enabled {
+            schemes.push(Self::PRIVATE_DEEPLINK_SCHEME.to_string());
+        }
         for scheme in &self.deeplink_schemes {
             let scheme = scheme.trim();
             if scheme.is_empty()
@@ -2235,10 +2323,14 @@ impl AppSettings {
         schemes
     }
 
-    /// 启用/停用某个通用 scheme；私有 `jms://` 不受设置影响。
+    /// 启用/停用某个 scheme；私有 `jms://` 写进独立开关，默认开启。
     pub fn set_deeplink_scheme_enabled(&mut self, scheme: &str, enabled: bool) {
         let scheme = scheme.trim();
-        if scheme.is_empty() || scheme.eq_ignore_ascii_case(Self::PRIVATE_DEEPLINK_SCHEME) {
+        if scheme.is_empty() {
+            return;
+        }
+        if scheme.eq_ignore_ascii_case(Self::PRIVATE_DEEPLINK_SCHEME) {
+            self.jump_deeplink_enabled = enabled;
             return;
         }
         self.deeplink_schemes
@@ -2352,6 +2444,36 @@ impl AppSettings {
         cx.set_global(settings);
     }
 
+    /// 新设置先成功落盘再广播，避免多窗口拿到一份并未保存的状态。
+    pub fn try_update_and_save(
+        cx: &mut App,
+        update: impl FnOnce(&mut AppSettings),
+    ) -> Result<(), String> {
+        let mut settings = Self::current(cx);
+        update(&mut settings);
+        settings.normalize_font_settings();
+        settings.normalize_appearance_settings();
+        settings.normalize_terminal_settings();
+        settings.try_save()?;
+        cx.set_global(settings);
+        Ok(())
+    }
+
+    pub fn try_save(&self) -> Result<(), String> {
+        if crate::app_paths::initialized_paths().is_none() {
+            return Err("应用路径尚未初始化，不能保存设置".to_owned());
+        }
+        if LOAD_DEGRADED.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("设置文件加载失败，本次运行拒绝覆盖原设置".to_owned());
+        }
+        let path = Self::config_path().ok_or_else(|| "无法确定设置路径".to_owned())?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let content = serde_json::to_string_pretty(self).map_err(|error| error.to_string())?;
+        write_settings_atomically(&path, &content).map_err(|error| error.to_string())
+    }
+
     pub fn update_and_save(cx: &mut App, update: impl FnOnce(&mut AppSettings)) {
         let mut settings = Self::current(cx);
         update(&mut settings);
@@ -2451,7 +2573,11 @@ impl AppSettings {
 
     fn load_from(path: &Path) -> Self {
         match std::fs::read_to_string(path) {
-            Ok(content) => match serde_json::from_str::<Self>(&content) {
+            Ok(content) => match serde_json::from_str::<serde_json::Value>(&content)
+                .map_err(serde_json::Error::into)
+                .and_then(|value| migrate_layout_settings(value).map_err(serde_json::Error::into))
+                .and_then(|value| serde_json::from_value::<Self>(value))
+            {
                 Ok(mut settings) => {
                     info!("Settings loaded from {:?}", path);
                     settings.migrate_legacy_mcp_toolsets();
@@ -2631,6 +2757,45 @@ impl AppSettings {
 ///
 /// 备份保留多代（`settings.json.bak`、`.bak.1`、`.bak.2`）：只留一代时，坏掉的默认值
 /// 被启动期连续 save 两次就会把仅有的好配置顶掉，之后再无回滚可能。
+/// 只在字段缺失时迁移，避免覆盖用户已经显式保存的新设置。
+fn migrate_layout_settings(
+    mut value: serde_json::Value,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let Some(object) = value.as_object_mut() else {
+        return Ok(value);
+    };
+    let legacy = object
+        .get("home_connection_layout")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    if !matches!(
+        object.get("app_layout").and_then(serde_json::Value::as_str),
+        Some("global_navigation" | "home_navigation")
+    ) {
+        object.insert(
+            "app_layout".to_owned(),
+            serde_json::Value::String("global_navigation".to_owned()),
+        );
+    }
+    if !matches!(
+        object
+            .get("connection_management_view")
+            .and_then(serde_json::Value::as_str),
+        Some("card" | "list" | "tree")
+    ) {
+        let management = match legacy.as_str() {
+            Some("list") => "list",
+            Some("tree") => "tree",
+            _ => "card",
+        };
+        object.insert(
+            "connection_management_view".to_owned(),
+            serde_json::Value::String(management.to_owned()),
+        );
+    }
+    Ok(value)
+}
+
 fn write_settings_atomically(path: &Path, content: &str) -> std::io::Result<()> {
     let file_name = path
         .file_name()
@@ -2709,21 +2874,22 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AiChatBackendSelection, AiChatSettings, AiChatToolExecutionMode, AppSettings,
-        CloseButtonBehavior, ConnectionSortOrder, CustomFont, DEFAULT_AI_REQUEST_TIMEOUT_SECS,
-        DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
-        DEFAULT_TERMINAL_THEME, HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
-        LocalTerminalProfileKind, LocalTerminalProfileSettings, LogLevel,
-        MAX_AI_REQUEST_TIMEOUT_SECS, MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MAX_RECENT_WORKSPACE_ROOTS,
-        MAX_REMEMBERED_ACP_SESSIONS, MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState,
-        MarkdownDefaultViewMode, MasterKeyStorage, McpPermissionMode, McpServerMode,
-        PersonalSyncBackendKind, RemoteFileOpenMode, SidebarPlacement, SqlFormatSettings,
-        SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider, TabDoubleClickAction,
-        TableViewMode, TerminalDesktopNotificationDuration, TerminalDesktopNotificationMode,
-        UpdateChannel, UpdateMirror, default_grid_font_fallback_families,
-        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
-        is_installed_font_family, monospace_font_options,
-        resolve_installed_grid_monospace_font_family,
+        AiChatBackendSelection, AiChatSettings, AiChatToolExecutionMode, AppLayout, AppSettings,
+        AppearanceDensity, CloseButtonBehavior, ConnectionManagementView, ConnectionSortOrder,
+        CustomFont, DEFAULT_AI_REQUEST_TIMEOUT_SECS, DEFAULT_MCP_APPROVAL_TIMEOUT_MS,
+        DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT, DEFAULT_TERMINAL_THEME, HomeConnectionLayout,
+        LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
+        LocalTerminalProfileSettings, LogLevel, MAX_AI_REQUEST_TIMEOUT_SECS,
+        MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MAX_RECENT_WORKSPACE_ROOTS, MAX_REMEMBERED_ACP_SESSIONS,
+        MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, MarkdownDefaultViewMode, MasterKeyStorage,
+        McpPermissionMode, McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode,
+        SidebarPlacement, SqlFormatSettings, SqlIndentStyle, SqlKeywordCase, StartupDefaultPage,
+        SyncProvider, TabDoubleClickAction, TableViewMode, TerminalDesktopNotificationDuration,
+        TerminalDesktopNotificationMode, UpdateChannel, UpdateMirror,
+        default_grid_font_fallback_families, default_grid_monospace_font_family,
+        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
+        migrate_layout_settings, monospace_font_options,
+        resolve_installed_grid_monospace_font_family, write_settings_atomically,
     };
 
     #[test]
@@ -2732,9 +2898,36 @@ mod tests {
     }
 
     #[test]
-    fn deeplink_schemes_default_to_the_private_scheme_only() {
+    fn interface_density_defaults_to_normal_and_round_trips() {
+        let legacy: AppSettings = serde_json::from_str("{}").expect("旧配置应保持兼容");
+        assert_eq!(legacy.interface_density, AppearanceDensity::Normal);
+        assert_eq!(
+            AppSettings::default().interface_density,
+            AppearanceDensity::Normal
+        );
+
+        for (density, serialized) in [
+            (AppearanceDensity::Compact, "compact"),
+            (AppearanceDensity::Normal, "normal"),
+            (AppearanceDensity::Comfortable, "comfortable"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(density).expect("序列化密度"),
+                serde_json::json!(serialized)
+            );
+            let settings: AppSettings = serde_json::from_value(serde_json::json!({
+                "interface_density": serialized,
+            }))
+            .expect("反序列化密度");
+            assert_eq!(settings.interface_density, density);
+        }
+    }
+
+    #[test]
+    fn deeplink_schemes_default_to_jms_only() {
         let settings = AppSettings::default();
         assert!(settings.deeplink_schemes.is_empty());
+        assert!(settings.jump_deeplink_enabled);
         assert!(settings.deeplink_scheme_enabled("jms"));
         assert!(!settings.deeplink_scheme_enabled("ssh"));
         assert!(!settings.deeplink_scheme_enabled("sftp"));
@@ -2749,7 +2942,7 @@ mod tests {
         settings.set_deeplink_scheme_enabled("ssh", true);
         assert!(settings.deeplink_scheme_enabled("ssh"));
         assert!(settings.deeplink_scheme_enabled("SFTP"));
-        // 重新启用只是刷新位置，不会重复；私有 scheme 永远在最前。
+        // 重新启用只是刷新位置，不会重复；私有 scheme 启用时在最前。
         assert_eq!(
             vec!["jms".to_string(), "sftp".to_string(), "ssh".to_string()],
             settings.enabled_deeplink_schemes()
@@ -2762,19 +2955,32 @@ mod tests {
             settings.enabled_deeplink_schemes()
         );
 
-        // 私有 scheme 不能被设置关掉。
+        // 私有 scheme 也能被设置关掉，并从注册清单里消失。
         settings.set_deeplink_scheme_enabled("jms", false);
+        assert!(!settings.deeplink_scheme_enabled("jms"));
+        assert_eq!(
+            vec!["sftp".to_string()],
+            settings.enabled_deeplink_schemes()
+        );
+
+        settings.set_deeplink_scheme_enabled("JMS", true);
         assert!(settings.deeplink_scheme_enabled("jms"));
+        assert_eq!(
+            vec!["jms".to_string(), "sftp".to_string()],
+            settings.enabled_deeplink_schemes()
+        );
     }
 
     #[test]
     fn deeplink_schemes_round_trip_through_json() {
         let mut settings = AppSettings::default();
         settings.set_deeplink_scheme_enabled("sftp", true);
+        settings.set_deeplink_scheme_enabled("jms", false);
         let json = serde_json::to_string(&settings).expect("serialize");
         let restored: AppSettings = serde_json::from_str(&json).expect("deserialize");
         assert!(restored.deeplink_scheme_enabled("sftp"));
         assert!(!restored.deeplink_scheme_enabled("ssh"));
+        assert!(!restored.deeplink_scheme_enabled("jms"));
 
         let legacy: AppSettings =
             serde_json::from_str("{}").expect("missing field falls back to the default");
@@ -4903,5 +5109,70 @@ mod tests {
 
         let legacy: AppSettings = serde_json::from_str("{}").expect("空对象也应可解析");
         assert_eq!(None, legacy.update_mirror);
+    }
+
+    #[test]
+    fn legacy_layout_migrates_once_to_global_navigation() {
+        for (legacy, expected) in [
+            ("card", ConnectionManagementView::Card),
+            ("list", ConnectionManagementView::List),
+            ("tree", ConnectionManagementView::Tree),
+            ("navigation", ConnectionManagementView::Card),
+        ] {
+            let value = serde_json::json!({"home_connection_layout": legacy});
+            let migrated = migrate_layout_settings(value).expect("迁移失败");
+            let settings: AppSettings = serde_json::from_value(migrated).expect("解析失败");
+            assert_eq!(AppLayout::GlobalNavigation, settings.app_layout);
+            assert_eq!(expected, settings.connection_management_view);
+        }
+    }
+
+    #[test]
+    fn unknown_layout_values_fall_back_without_resetting_management_view() {
+        let migrated = migrate_layout_settings(serde_json::json!({
+            "app_layout": "unknown",
+            "connection_management_view": "list"
+        }))
+        .unwrap();
+        assert_eq!(migrated["app_layout"], "global_navigation");
+        assert_eq!(migrated["connection_management_view"], "list");
+    }
+
+    #[test]
+    fn failed_settings_write_preserves_existing_file() {
+        let root = std::env::temp_dir().join(format!(
+            "navop-settings-failed-write-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        std::fs::write(&path, "original-settings").unwrap();
+        std::fs::create_dir(root.join(format!("settings.json.{}.tmp", std::process::id())))
+            .unwrap();
+
+        assert!(write_settings_atomically(&path, "new-settings").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original-settings");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn new_layout_does_not_change_when_management_view_changes() {
+        let value = serde_json::json!({
+            "home_connection_layout": "navigation",
+            "app_layout": "home_navigation",
+            "connection_management_view": "list"
+        });
+        let migrated = migrate_layout_settings(value).expect("迁移失败");
+        let settings: AppSettings = serde_json::from_value(migrated).expect("解析失败");
+        assert_eq!(AppLayout::HomeNavigation, settings.app_layout);
+        assert_eq!(
+            ConnectionManagementView::List,
+            settings.connection_management_view
+        );
+        assert_eq!(260.0, settings.resource_widths["connections"]);
     }
 }

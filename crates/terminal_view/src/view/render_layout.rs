@@ -165,23 +165,21 @@ impl TerminalView {
                 .left
                 .map(|panel| self.render_internal_tool_panel(panel, SidebarPlacement::Left, cx))
                 .or_else(|| {
-                    extension_layout.left.map(|id| {
-                        self.render_extension_tool_panel(id, SidebarPlacement::Left, cx)
-                    })
+                    extension_layout
+                        .left
+                        .map(|id| self.render_extension_tool_panel(id, SidebarPlacement::Left, cx))
                 }),
             right_panel: layout
                 .right
                 .map(|panel| self.render_internal_tool_panel(panel, SidebarPlacement::Right, cx))
                 .or_else(|| {
-                    extension_layout.right.map(|id| {
-                        self.render_extension_tool_panel(id, SidebarPlacement::Right, cx)
-                    })
+                    extension_layout
+                        .right
+                        .map(|id| self.render_extension_tool_panel(id, SidebarPlacement::Right, cx))
                 }),
             bottom_panel: layout
                 .bottom
-                .map(|panel| {
-                    self.render_internal_tool_panel(panel, SidebarPlacement::Bottom, cx)
-                })
+                .map(|panel| self.render_internal_tool_panel(panel, SidebarPlacement::Bottom, cx))
                 .or_else(|| {
                     extension_layout.bottom.map(|id| {
                         self.render_extension_tool_panel(id, SidebarPlacement::Bottom, cx)
