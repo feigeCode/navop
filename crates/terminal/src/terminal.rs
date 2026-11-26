@@ -7588,7 +7588,11 @@ mod tests {
         command
             .arg("-i")
             .arg("-c")
-            .arg("print -r -- ${_ONETCLI_SHELL_INTEGRATED:-missing}")
+            // 非 tmux 会话的幂等标记值就是空串，不能用 `${VAR:-missing}` 判断集成是否加载。
+            .arg(
+                "if typeset -f __onetcli_precmd_zsh >/dev/null 2>&1; \
+                 then print -r -- integrated; else print -r -- missing; fi",
+            )
             .env("HOME", &home_dir);
         for (key, value) in env_pairs {
             command.env(key, value);
@@ -7599,7 +7603,7 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stdout.lines().any(|line| line == "1"),
+            stdout.lines().any(|line| line == "integrated"),
             "zsh 应加载生成的 .zshrc 并 source shell integration，stdout: {stdout:?}"
         );
         assert!(
