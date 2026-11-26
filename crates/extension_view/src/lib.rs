@@ -31,6 +31,8 @@ pub use shell::{
 pub use view::{ExtensionManagerMode, ExtensionManagerView};
 
 #[cfg(test)]
+mod composite_marketplace_tests;
+#[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 

@@ -47,6 +47,7 @@ impl TerminalExtensionPanelHost for NavopTerminalExtensionPanels {
                 title: SharedString::new(panel.title.clone()),
                 icon_path: panel.icon_path.clone(),
                 order: panel.order,
+                placement: crate::extension_panels::sidebar_placement(panel.placement),
             })
             .collect()
     }

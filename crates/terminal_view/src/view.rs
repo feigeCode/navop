@@ -48,8 +48,8 @@ pub(crate) use workspace_support::{TerminalPaneEvent, TerminalWorkspaceSidebarSn
 
 use crate::addon::{
     AddonManager, CustomHighlightAddon, SearchAddon, TerminalAddonFrameContext,
-    TerminalAddonMouseContext, TerminalSearchDirection, find_terminal_search_match,
-    register_default_addons,
+    TerminalAddonMouseContext, TerminalSearchDirection, TerminalSearchOptions,
+    TerminalSearchToggle, find_terminal_search_match, register_default_addons,
 };
 use crate::broadcast_input::BroadcastClientId;
 use crate::broadcast_registry::{broadcast_input_registry, init_broadcast_input_registry};

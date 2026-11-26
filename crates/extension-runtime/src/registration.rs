@@ -462,6 +462,7 @@ impl ExtensionRuntimeCatalog {
                     .or(app.icon.as_deref())
                     .map(|icon| resolve_extension_path(&manifest.manifest_dir, icon)),
                 anchor: panel.anchor.clone(),
+                placement: panel.placement,
                 order: panel.order,
                 when_clause: panel.when.clone().filter(|w| !w.trim().is_empty()),
                 entry_path: resolve_extension_path(&manifest.manifest_dir, &app.entry),

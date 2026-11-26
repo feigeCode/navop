@@ -61,6 +61,10 @@ nsh 扩展的 `extension.json` 用 `contributes.shellApp` 声明 app，不再用
   `"terminal-sidebar"`（终端侧栏，默认）或 `"db-sidebar"`（数据库侧栏），
   `order` 排序，`when` 可选过滤（数据库侧栏可写
   `connection.type == "database"`、`connection.params.db_type == "mysql"`）。
+  `placement` 声明**默认停靠位置**：`"left"` / `"right"`（缺省）/ `"bottom"`。
+  终端侧栏按面板的声明落到左 / 右 / 下三边，用户之后仍可用面板菜单移动；
+  数据库页签里 `left` / `right` 表示面板在内容区哪一侧，`bottom` 渲染成
+  内容区下方的通栏面板（此时侧栏只剩工具条）。
   入口复用 `shellApp.entry`，宿主以 `host.params.surface == "panel"` +
   `panel: <id>` + `anchor: <锚点>` 起独立 AppView 实例。声明面板的扩展必须
   有 `shellApp`（安装期校验）。

@@ -152,4 +152,19 @@ impl TerminalView {
         }
         Ok(())
     }
+
+    pub(super) fn set_search_options(&mut self, options: TerminalSearchOptions) -> Result<()> {
+        let changed = if let Some(search) = self.addon_manager.get_as_mut::<SearchAddon>("search") {
+            search
+                .set_options(options)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            true
+        } else {
+            false
+        };
+        if changed {
+            self.invalidate_terminal_searches();
+        }
+        Ok(())
+    }
 }

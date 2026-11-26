@@ -22,6 +22,7 @@ use gpui::{
 use gpui_component::{ActiveTheme, Icon, Selectable, Size, h_flex, v_flex};
 use one_assets::IconName;
 use one_core::layout::TOOLBAR_WIDTH;
+use one_core::sidebar_contribution::SidebarPlacement;
 use one_core::storage::StoredConnection;
 use one_ui::{IconButton, IconSize as OneIconSize};
 use rust_i18n::t;
@@ -225,6 +226,26 @@ impl DatabaseSidebar {
 
     pub fn is_panel_visible(&self) -> bool {
         self.active_panel.is_some() || self.active_extension.is_some()
+    }
+
+    /// 当前扩展面板声明的停靠位置；内建面板始终右侧。
+    pub fn active_extension_placement(&self) -> Option<SidebarPlacement> {
+        let active = self.active_extension.as_ref()?;
+        self.extension_panels
+            .iter()
+            .find(|entry| &entry.id == active)
+            .map(|entry| entry.placement)
+    }
+
+    /// 停靠在底部的扩展面板内容：面板不再嵌在侧栏里，而是由数据库页签
+    /// 渲染成内容区下方的通栏面板（侧栏此时只剩工具条）。
+    pub fn bottom_extension_panel(&self) -> Option<(SharedString, SharedString, gpui::AnyView)> {
+        if self.active_extension_placement() != Some(SidebarPlacement::Bottom) {
+            return None;
+        }
+        let active = self.active_extension.as_ref()?;
+        let entry = self.extension_panels.iter().find(|entry| &entry.id == active)?;
+        Some((entry.id.clone(), entry.title.clone(), entry.view.clone()?))
     }
 
     /// 按宿主提供的规格对齐扩展面板（保留已建视图）。
@@ -481,6 +502,24 @@ impl DatabaseSidebar {
                 )
                 .children(buttons)
             })
+            .when(one_core::extension_marketplace::is_available(cx), |this| {
+                this.child(
+                    div()
+                        .w(gpui::px(16.0))
+                        .h(gpui::px(1.0))
+                        .my_1()
+                        .bg(border_color),
+                )
+                .child(
+                    IconButton::new("database-sidebar-add-extension", IconName::Plus)
+                        .hit_size(Size::Size(one_ui::theme_geometry().layout.global_rail_item))
+                        .glyph_size(OneIconSize::Medium)
+                        .tooltip(t!("DatabaseSidebar.add_extension_panel").to_string())
+                        .on_click(|_, window, cx| {
+                            one_core::extension_marketplace::open_composite(window, cx);
+                        }),
+                )
+            })
             .into_any_element()
     }
 
@@ -559,7 +598,11 @@ impl Render for DatabaseSidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg_color = cx.theme().background;
         let active_panel = self.active_panel;
-        let active_extension = self.active_extension.clone();
+        let active_extension = match self.active_extension_placement() {
+            // 底部面板由页签渲染，侧栏只保留工具条。
+            Some(SidebarPlacement::Bottom) => None,
+            _ => self.active_extension.clone(),
+        };
         let visible = active_panel.is_some() || active_extension.is_some();
 
         h_flex()
@@ -588,23 +631,66 @@ impl Render for DatabaseSidebar {
 
 #[cfg(test)]
 mod tests {
-    /// 扩展面板的三处接线：工具栏按钮、面板渲染分支、宿主规格同步。
+    /// `include_str!` 会把本测试模块也读进来；断言必须只看测试模块之前的
+    /// 生产代码，否则「测试里写了这串字面量」会让断言恒真（字面量自指）。
+    fn production_source(source: &'static str) -> &'static str {
+        source.split("#[cfg(test)]").next().unwrap_or(source)
+    }
+
+    /// 侧栏「+」入口：工具栏按钮指向宿主注册的复合扩展市场动作。
     ///
     /// 用结构断言而不是渲染断言：真实渲染需要 nsh 视图，这里只保证接线不会
     /// 被后续重构顺手删掉（终端侧栏用的是同一套办法）。
     #[test]
+    fn marketplace_plus_button_is_wired_to_the_host_opener() {
+        let source = production_source(include_str!("mod.rs"));
+        assert!(
+            source.contains(r#"IconButton::new("database-sidebar-add-extension""#),
+            "数据库侧栏缺「+」入口，或按钮 id 被改成了别的"
+        );
+        assert!(source.contains("one_core::extension_marketplace::open_composite(window, cx)"));
+        assert!(source.contains("one_core::extension_marketplace::is_available(cx)"));
+    }
+
+    #[test]
     fn extension_panels_are_wired_into_toolbar_render_and_sync() {
-        let source = include_str!("mod.rs");
-        assert!(source.contains("database-sidebar-ext-"), "工具栏缺扩展按钮");
+        let source = production_source(include_str!("mod.rs"));
+        assert!(
+            source.contains(r#"format!("database-sidebar-ext-{}", entry.id)"#),
+            "工具栏缺扩展按钮"
+        );
         assert!(source.contains("fn render_extension_panel("), "缺面板渲染分支");
         assert!(source.contains("self.sync_extension_panels(cx)"), "缺同步调用");
         assert!(
-            source.contains("self.active_panel.is_some() || self.active_extension.is_some()"),
+            source.contains("let visible = active_panel.is_some() || active_extension.is_some();"),
             "可见性判断没有纳入扩展面板"
         );
 
+        // 构造时补一次规格同步（`database_tab.rs` 的测试模块里没有这串字面量）。
         let tab = include_str!("../database_tab.rs");
         assert!(tab.contains("sync_extension_panels(cx)"), "构造时没有同步规格");
+    }
+
+    #[test]
+    fn bottom_placement_moves_the_extension_panel_out_of_the_rail() {
+        let source = production_source(include_str!("mod.rs"));
+        assert!(source.contains("fn active_extension_placement("));
+        assert!(source.contains("fn bottom_extension_panel("));
+        assert!(
+            source.contains("Some(SidebarPlacement::Bottom) => None"),
+            "底部停靠时侧栏不应再内嵌渲染面板"
+        );
+
+        let tab = include_str!("../database_tab.rs");
+        assert!(tab.contains("fn render_bottom_extension_panel("));
+        assert!(tab.contains("fn render_side_sidebar("));
+        assert!(tab.contains("active_extension_placement()"));
+        // 外置侧栏模式下侧栏由宿主 dock 持有，底部面板只能由页签自己渲染，
+        // 否则两侧都以为对方会画，面板就彻底不可见。
+        assert!(
+            tab.contains("bottom_extension_panel()"),
+            "外置侧栏模式没有渲染底部扩展面板"
+        );
     }
 
     /// 回归：发消息会先发 `TurnStarted`，侧栏不能把它当成「关闭」。

@@ -4,7 +4,8 @@ use std::path::PathBuf;
 ///
 /// 面板是同一 nsh app 的附加 surface：入口复用 app 的 entry，宿主以
 /// `host.params.surface = "panel"` + `host.params.panel = <id>` 启动独立的
-/// AppView 实例。`anchor` 决定挂到宿主哪个 UI 锚点（当前仅终端侧边栏）。
+/// AppView 实例。`anchor` 决定挂到宿主哪个 UI 锚点（终端 / 数据库侧边栏），
+/// `placement` 决定默认停靠在哪一边（左 / 右 / 下）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredPanelContribution {
     pub extension_id: String,
@@ -17,6 +18,8 @@ pub struct RegisteredPanelContribution {
     pub icon_path: Option<PathBuf>,
     /// 宿主 UI 锚点（`terminal-sidebar` / `db-sidebar`）。
     pub anchor: String,
+    /// 面板默认停靠位置（清单 `panels[].placement`，缺省右侧）。
+    pub placement: crate::extension::manifest::PanelPlacement,
     /// 同锚点内排序权重，小的在前。
     pub order: i64,
     /// 显示条件（when 子句），空串恒可见。

@@ -83,6 +83,22 @@ impl ExtensionManagerView {
         cx.notify();
     }
 
+    /// 切换到扩展市场并只看复合扩展。
+    ///
+    /// 供终端 / 数据库侧栏的「+」入口复用：页签复用时不会重建视图，因此
+    /// 无论新建还是已打开，都要清掉旧的搜索词与「有更新」过滤，避免目标
+    /// 扩展被旧条件遮住。
+    pub fn show_composite_marketplace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = ExtensionManagerMode::Marketplace;
+        self.updates_only = false;
+        self.selected_kind = Some(ExtensionKind::Composite);
+        self.search.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
+        self.ensure_marketplace_loaded(cx);
+        cx.notify();
+    }
+
     pub(crate) fn set_mode(&mut self, mode: ExtensionManagerMode, cx: &mut Context<Self>) {
         self.mode = mode;
         // 已安装列表无法判断更新状态，切回已安装页签时关闭“有更新”过滤

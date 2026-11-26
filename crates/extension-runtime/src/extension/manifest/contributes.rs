@@ -10,7 +10,7 @@ mod shell;
 pub use shell::{ShellAppContrib, ShellHostModule};
 #[path = "contributes/panels.rs"]
 mod panels;
-pub use panels::PanelContrib;
+pub use panels::{PanelContrib, PanelPlacement};
 #[path = "contributes/tools.rs"]
 mod tools;
 pub use tools::{ToolAnnotations, ToolContrib, ToolRisk};

@@ -730,6 +730,22 @@ Settings:
     en: Press Enter for next, Shift+Enter for previous
     zh-CN: 按 Enter 跳到下一个，按 Shift+Enter 跳到上一个
     zh-HK: 按 Enter 跳到下一個，按 Shift+Enter 跳到上一個
+  search_match_case:
+    en: Match case
+    zh-CN: 区分大小写
+    zh-HK: 區分大小寫
+  search_whole_word:
+    en: Match whole word
+    zh-CN: 全词匹配
+    zh-HK: 全詞匹配
+  search_regex:
+    en: Use regular expression
+    zh-CN: 使用正则表达式
+    zh-HK: 使用正則表達式
+  search_regex_invalid:
+    en: Invalid regular expression
+    zh-CN: 正则表达式无效
+    zh-HK: 正則表達式無效
   font_size:
     en: Font Size
     zh-CN: 字体大小
@@ -1900,6 +1916,10 @@ Sidebar:
     en: Remove from Sidebar
     zh-CN: 从侧边栏移除
     zh-HK: 從側邊欄移除
+  add_extension_panel:
+    en: Add extension panel
+    zh-CN: 添加扩展面板
+    zh-HK: 添加擴展面板
 
 # Telnet 连接
 Telnet:

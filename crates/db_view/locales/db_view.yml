@@ -4255,6 +4255,10 @@ Compare:
     zh-HK: "INSERT: %{insert} | UPDATE: %{update} | DELETE: %{delete} | DDL: %{ddl} | 總計: %{total}"
 
 DatabaseSidebar:
+  add_extension_panel:
+    en: Add extension panel
+    zh-CN: 添加扩展面板
+    zh-HK: 添加擴展面板
   close_extension:
     en: Close panel
     zh-CN: 关闭面板

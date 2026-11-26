@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{AnyView, App, SharedString};
+use one_core::sidebar_contribution::SidebarPlacement;
 
 use crate::TerminalColors;
 
@@ -25,6 +26,9 @@ pub struct ExtensionPanelSpec {
     pub icon_path: Option<PathBuf>,
     /// 排序权重（清单 `panels[].order`，越小越靠前）。
     pub order: i64,
+    /// 默认停靠位置（清单 `panels[].placement`），只在面板首次出现时生效；
+    /// 用户之后手动移动过的位置优先。
+    pub placement: SidebarPlacement,
 }
 
 /// 终端扩展面板宿主：由 navop_app 实现。

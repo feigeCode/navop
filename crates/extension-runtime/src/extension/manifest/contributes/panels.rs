@@ -8,6 +8,18 @@ use serde::{Deserialize, Serialize};
 ///
 /// 锚点可选终端侧边栏（`anchor: "terminal-sidebar"`，默认）或数据库侧边栏
 /// （`anchor: "db-sidebar"`）。
+/// 面板在宿主侧栏的默认停靠位置。
+///
+/// 用户之后仍可通过面板菜单移动；这里只决定第一次打开时落在哪一边。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PanelPlacement {
+    Left,
+    #[default]
+    Right,
+    Bottom,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
 pub struct PanelContrib {
     /// 面板 id（扩展内唯一），进入 `host.params.panel` 与持久化 key。
@@ -22,6 +34,9 @@ pub struct PanelContrib {
     /// 同锚点内的排序权重，小的在前。
     #[serde(default)]
     pub order: i64,
+    /// 默认停靠位置：`left` / `right`（默认）/ `bottom`。
+    #[serde(default)]
+    pub placement: PanelPlacement,
     /// 显示条件（when 子句），空串恒可见。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<String>,

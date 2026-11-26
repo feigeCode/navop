@@ -73,6 +73,7 @@ fn temporary_connection_with_runtime_target(
 struct TerminalSearchCompletion {
     generation: u64,
     pattern: String,
+    options: TerminalSearchOptions,
     previous_match: Option<std::ops::RangeInclusive<AlacPoint>>,
     result: Option<std::ops::RangeInclusive<AlacPoint>>,
     display_offset: Option<usize>,
@@ -480,6 +481,7 @@ impl TerminalView {
             Some(TerminalSearchCompletion {
                 generation,
                 pattern: request.pattern,
+                options: request.options,
                 previous_match: request.current_match,
                 result,
                 display_offset,
@@ -501,6 +503,7 @@ impl TerminalView {
                             .is_some_and(|search| {
                                 search.apply_search_result(
                                     &completion.pattern,
+                                    completion.options,
                                     &completion.previous_match,
                                     completion.result,
                                 )
