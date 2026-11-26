@@ -490,7 +490,6 @@ fn feedback_preserves_native_home_and_settings_sidebars() {
         "主页导航模式必须把完整 Tab 栏挂到外壳顶部"
     );
     assert!(app.contains("layout == AppLayout::HomeNavigation || global_navigation.is_none()"));
-    assert!(app.contains("layout == AppLayout::HomeNavigation, |navigation|"));
     assert!(!sidebar.contains("macos-navigation-traffic-light-inset"));
     assert!(!sidebar.contains(".mt(one_ui::theme_geometry().layout.tab_bar)"));
     assert!(app.contains(
@@ -509,7 +508,10 @@ fn feedback_preserves_native_home_and_settings_sidebars() {
     assert!(app.contains("tabs.set_tab_bar_bg_color(chrome_palette.tab_bar, cx)"));
     assert!(app.contains("tabs.set_active_tab_bg_color(chrome_palette.content, cx)"));
     assert!(app.contains("macos-navigation-traffic-light-inset"));
-    assert!(app.contains("home-navigation-traffic-light-inset"));
+    assert!(
+        !app.contains("home-navigation-traffic-light-inset"),
+        "主页布局的 Tab 栏已经贯通顶部并自带红绿灯避让区，侧栏里再留一层 title_bar 高度只是空白"
+    );
     assert!(app.contains("chrome_palette.rail"));
     assert!(app.contains("chrome_palette.menu"));
     assert!(sidebar.contains("chrome_palette.rail"));
@@ -1090,4 +1092,33 @@ fn ai_workbench_reuses_the_tab_bar_nav_toggle(cx: &mut gpui::TestAppContext) {
         "聊天工具条里的导航栏开关已移除，不再有重复入口"
     );
     let _ = cx;
+}
+
+/// 侧栏顶部品牌区不能只有一行文字：展开时是 logo + 字标，折叠时只留居中 logo。
+#[test]
+fn home_sidebar_brand_area_renders_the_navop_logo() {
+    let sidebar = include_str!("../sidebar.rs");
+    assert!(
+        sidebar.contains("home-sidebar-brand"),
+        "品牌区要有稳定 id，方便调试与定位"
+    );
+    assert!(
+        sidebar.contains("gpui::img(crate::NAVOP_LOGO_ASSET_PATH)"),
+        "品牌区要渲染内嵌的 Navop logo，而不是只有文字"
+    );
+    assert!(
+        sidebar.contains(".child(\"Navop\")"),
+        "展开态保留 Navop 字标，logo 不能把品牌名顶掉"
+    );
+    assert!(
+        sidebar.contains("justify_center()"),
+        "折叠态只有 58px，logo 必须居中，否则会被裁掉"
+    );
+
+    let source = include_str!("../../lib.rs");
+    assert!(
+        source.contains("NAVOP_LOGO_ASSET_PATH")
+            && source.contains("resources/branding/navop-logo.png"),
+        "logo 资源要真正注册进 AppAssets，否则运行时只会渲染空白"
+    );
 }

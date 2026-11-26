@@ -3379,18 +3379,10 @@ impl Render for NavopApp {
                             .bg(chrome_palette.rail),
                     )
                 })
-                .when(layout == AppLayout::HomeNavigation, |navigation| {
-                    navigation.child(
-                        div()
-                            .id("home-navigation-traffic-light-inset")
-                            .debug_selector(|| "home-navigation-traffic-light-inset".to_owned())
-                            .w_full()
-                            .h(one_ui::theme_geometry().layout.title_bar)
-                            .flex_shrink_0()
-                            .bg(chrome_palette.menu)
-                            .window_control_area(gpui::WindowControlArea::Drag),
-                    )
-                })
+                // 主页布局的 Tab 栏贯通整个窗口，红绿灯避让已经在 Tab 栏内部
+                // （`set_macos_titlebar_inset`）预留过；侧栏列再从下方让出一层
+                // title_bar 高度，等于把品牌区和导航整段往下推了 38px，顶部
+                // 只剩一片空白。这里不再重复留白，侧栏直接贴着 Tab 栏开始。
                 .child(navigation)
                 .into_any_element()
         });

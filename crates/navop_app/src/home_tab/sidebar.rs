@@ -49,16 +49,33 @@ impl HomePage {
                     .h_full()
                     .overflow_hidden()
                     .when(!global, |navigation| {
+                        // 品牌区：折叠时只留居中 logo，展开时是 logo + 字标，
+                        // 让标题行不再是一行孤零零的文字。
+                        let collapsed = self.sidebar_collapsed;
                         navigation.child(
                             h_flex()
-                                .h(px(52.0))
+                                .id("home-sidebar-brand")
+                                .h(px(46.0))
                                 .flex_shrink_0()
                                 .items_center()
-                                .px_5()
-                                .text_base()
-                                .font_semibold()
-                                .text_color(cx.theme().sidebar_foreground)
-                                .child("Navop"),
+                                .gap_2()
+                                .when(collapsed, |brand| brand.justify_center())
+                                .when(!collapsed, |brand| brand.px_4())
+                                .child(
+                                    gpui::img(crate::NAVOP_LOGO_ASSET_PATH)
+                                        .w(px(if collapsed { 26.0 } else { 28.0 }))
+                                        .h(px(if collapsed { 26.0 } else { 28.0 }))
+                                        .flex_shrink_0(),
+                                )
+                                .when(!collapsed, |brand| {
+                                    brand.child(
+                                        div()
+                                            .text_base()
+                                            .font_semibold()
+                                            .text_color(cx.theme().sidebar_foreground)
+                                            .child("Navop"),
+                                    )
+                                }),
                         )
                     })
                     .child(

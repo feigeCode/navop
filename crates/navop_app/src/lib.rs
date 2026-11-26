@@ -91,6 +91,9 @@ pub struct AppAssets {
 
 pub(crate) const NAVOP_ICON_ASSET_PATH: &str = "navop/app-icon.png";
 
+/// 首页侧栏品牌区展示的圆角 logo（96px，避免为一个小小的标题加载 1024px 原图占显存）。
+pub(crate) const NAVOP_LOGO_ASSET_PATH: &str = "navop/logo.png";
+
 /// Navop 自带品牌图标(TDengine/MQTT)。
 ///
 /// 外部 gpui-component 的 `IconName` 无法在本仓库扩展变体,这些 SVG
@@ -278,6 +281,12 @@ impl AssetSource for AppAssets {
         if path == NAVOP_ICON_ASSET_PATH {
             return Ok(Some(std::borrow::Cow::Borrowed(include_bytes!(
                 "../../../resources/navop-icon.png"
+            ))));
+        }
+
+        if path == NAVOP_LOGO_ASSET_PATH {
+            return Ok(Some(std::borrow::Cow::Borrowed(include_bytes!(
+                "../../../resources/branding/navop-logo.png"
             ))));
         }
 
@@ -1467,5 +1476,26 @@ mod quit_prompt_localization_tests {
                 "Tray.close_message_app",
             );
         }
+    }
+}
+
+/// 侧栏品牌区读取的 logo 必须真能从内嵌资源加载出来，否则界面只会剩一片空白。
+#[cfg(test)]
+mod sidebar_logo_asset_tests {
+    use super::{AppAssets, NAVOP_LOGO_ASSET_PATH};
+    use gpui::AssetSource as _;
+
+    #[test]
+    fn sidebar_logo_is_embedded_in_app_assets() {
+        let assets = AppAssets::new();
+        let bytes = assets
+            .load(NAVOP_LOGO_ASSET_PATH)
+            .expect("logo asset load")
+            .expect("logo asset should be embedded");
+
+        assert!(
+            bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "侧栏 logo 必须是可解码的 PNG"
+        );
     }
 }
