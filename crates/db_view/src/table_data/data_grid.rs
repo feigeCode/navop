@@ -4855,7 +4855,7 @@ impl DataGrid {
             .child(
                 Button::new("record-json")
                     .with_size(Size::Medium)
-                    .label("JSON")
+                    .icon(IconName::Json)
                     .tooltip(t!("TableDataGrid.record_json").to_string())
                     .disabled(loading || !single_record_selected)
                     .on_click(cx.listener(Self::handle_view_record_json)),
@@ -5850,6 +5850,22 @@ mod tests {
         let source = include_str!("data_grid.rs");
         assert_dialog_callback_and_buttons(source, "fn show_text_editor_dialog(");
         assert_dialog_callback_and_buttons(source, "fn show_sql_editor_dialog(");
+    }
+
+    #[test]
+    fn record_json_toolbar_entry_uses_the_json_icon() {
+        let source = include_str!("data_grid.rs");
+        let start = source
+            .find("Button::new(\"record-json\")")
+            .expect("record JSON button exists");
+        let rest = &source[start..];
+        let end = rest
+            .find(".on_click(cx.listener(Self::handle_view_record_json))")
+            .expect("record JSON button binds its click handler");
+        let button = &rest[..end];
+
+        assert!(button.contains(".icon(IconName::Json)"));
+        assert!(!button.contains(".label("));
     }
 
     fn assert_dialog_callback_and_buttons(source: &str, marker: &str) {
