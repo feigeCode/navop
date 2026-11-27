@@ -13,3 +13,6 @@ mcp_approval.workspace = true
 public_mcp.workspace = true
 tool_runtime.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
