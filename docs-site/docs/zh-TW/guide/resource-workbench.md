@@ -1,6 +1,6 @@
 # 原生資源工作台
 
-原生資源工作台（Native Resource Workbench）是 Navop 為擴充功能提供的一類原生介面：擴充功能在 manifest 中宣告資源、集合、表格、詳情頁與操作，宿主以原生 GPUI 渲染出可瀏覽、可操作的工作台，擴充功能不需要自帶 UI。首個以此機制發布的是 Docker 擴充功能。
+原生資源工作台（Native Resource Workbench）是 Navop 為擴充功能提供的一類原生介面：擴充功能在 manifest 中宣告資源、集合、表格、詳情頁與操作，宿主以原生 GPUI 渲染出可瀏覽、可操作的工作台，擴充功能不需要自帶 UI。Docker、Elasticsearch 等擴充功能都使用此機制。
 
 ![擴充功能市集](/images/extension.png)
 
@@ -12,13 +12,14 @@
 
 ## Docker 工作台
 
-安裝 Docker 擴充功能後，新增 Docker 連線並填寫本機 socket（預設 `unix://~/.docker/run/docker.sock`，也可用 `unix:///var/run/docker.sock`）。工作台提供：
+安裝 Docker 擴充功能後，新增 Docker 連線並填寫本機 socket（預設 `unix://~/.docker/run/docker.sock`，也可用 `unix:///var/run/docker.sock`），或改用遠端 TCP/TLS 守護程序；Unix socket 僅支援 macOS/Linux，Windows 應使用遠端連線。工作台提供：
 
-- 引擎總覽：容器、映像、磁碟與執行階段資源用量。
-- 容器：清單瀏覽，啟動、停止、重啟與刪除，檢視處理程序與檔案系統變更。
+- 引擎總覽：引擎版本，容器、映像、磁碟區與網路數量，以及磁碟與執行階段資源用量。
+- 容器：清單瀏覽，啟動、停止、重啟與刪除；詳情可檢視處理程序、統計、檔案系統變更、掛載與 inspect。
 - 映像：映像清單與非同步拉取。
-- 日誌：容器日誌檢視器，支援 tail 行數控制。
-- 終端：進入容器執行命令的 exec 終端。
+- 磁碟區與網路：瀏覽與檢視詳情。
+- 日誌：容器日誌檢視器，支援 tail 行數與跟隨重新整理。
+- 終端：進入容器執行命令的 exec 終端，內嵌的是宿主原生終端，不是模擬終端。
 
 刪除容器、停止執行中的服務等操作會影響真實環境，執行前請確認目標容器與影響範圍。
 

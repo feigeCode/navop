@@ -4,7 +4,7 @@
 
 ## 擴充類型
 
-資料庫驅動增加連線類型；ACP Agent 接入外部 Agent；匯入擴充讀取其他應用程式；遠端桌面擴充提供 RDP/VNC；語言擴充加入介面語系；原生資源工作台擴充（如 Docker）由宿主渲染集合、詳情頁與操作介面。市場頁提供「有更新」篩選，可只看有可更新版本的擴充。
+資料庫驅動增加連線類型；ACP Agent 接入外部 Agent；匯入擴充讀取其他應用程式；遠端桌面擴充提供 RDP/VNC；語言擴充加入介面語系；原生資源工作台擴充（如 Docker）由宿主渲染集合、詳情頁與操作介面；複合擴充把多個面板打包成同一個套件，面板會出現在終端、資料庫或筆記側邊欄。市場頁提供「有更新」篩選，可只看有可更新版本的擴充。
 
 相容清單中的產品名稱不代表驅動已安裝，建立連線前先檢查市場項目、平台和 Navop 版本。
 
@@ -13,8 +13,8 @@
 第一方擴充在 [navop-extensions](https://github.com/feigeCode/navop-extensions) 倉庫獨立建置與發佈，市場中的官方擴充均來自該倉庫。目前目錄依類型分組如下：
 
 - **資料庫驅動**：TDengine、DuckDB、Redis、MongoDB（4.2+ / 3.6 / 3.2–3.4 三檔）、達夢 DM、金倉 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB、神通 Oscar，以及免 Oracle Instant Client 的純 Go Oracle 驅動。
-- **中介軟體**：MQTT（訂閱、訊息、發佈三個檢視，支援 SSH 通道）。
-- **原生資源工作台**：Docker（引擎總覽、容器與映像管理、日誌、處理程序、檔案系統變更與 exec 終端），由宿主原生渲染集合、詳情頁與操作。
+- **中介軟體**：MQTT（訂閱、訊息、發佈等檢視，支援 SSH 通道）、RocketMQ（Topic、訂閱群組與訊息）、Elasticsearch 9（叢集總覽、索引與文件搜尋）。
+- **原生資源工作台**：Docker（引擎總覽、容器與映像管理、日誌、處理程序、檔案系統變更與 exec 終端），由宿主原生渲染集合、詳情頁與操作；以及複合面板，例如「伺服器日誌」（底部通欄，按連線 tail 或 grep 遠端日誌檔）與「伺服器容器」（右側頁籤：處理程序、容器、映像、磁碟區、網路、Compose、Kubernetes）。
 - **遠端桌面 Provider**：RDP、VNC。
 - **ACP Agent**：Codex、Claude Code、OpenCode。
 - **連線匯入**：SecureCRT、Xshell、WindTerm、OpenSSH config、Navicat、DBeaver、JetBrains DataGrip、MongoDB Compass、Redis Desktop、TablePlus。
@@ -31,6 +31,14 @@
 Navop 啟動後會在背景檢查擴充市場並與已安裝版本比對，發現新版本時彈出通知，可直接跳轉到擴充市場查看更新；同一批更新僅提醒一次。市場頁的「有更新」篩選可只顯示可更新擴充。
 
 異常時先停用再啟用或重新載入，接著檢查日誌和相容版本。正式任務進行中不要更新正在使用的驅動。
+
+## 擴充面板與停靠位置
+
+manifest 可以宣告擴充面板停靠在左側、右側或底部，預設為右側；手動拖動後以手動位置為準。資料庫底部面板會佔滿內容區寬度，高度可拖動調整。側邊欄的「+」會直接打開擴充市場，且只顯示複合擴充。
+
+## 外掛 AI 工具
+
+以 nsh 執行時建置的外掛可宣告 `contributes.tools`，把工具提供給內建 Agent 與外部 MCP 用戶端。工具預設關閉：可依擴充啟用、停用單一工具，並設定逾時、結果上限與風險確認。外掛頁籤也能在右側顯示 AI 側邊欄，預設收起、可拖寬。
 
 ## 本機與離線包
 

@@ -4,7 +4,7 @@ AI 工作台把模型對話放在真實資料庫、終端、檔案和 Notes 旁�
 
 ## 設定 LLM Provider
 
-在設定新增 Provider，填寫名稱、API key、base URL、API version 等欄位，再載入模型或加入自訂模型。可啟用、停用、編輯、刪除並設定預設 Provider。企業代理或相容介面要先確認協定與資料政策。
+在設定新增 Provider，填寫名稱、API key、base URL、API version 等欄位，再載入模型或加入自訂模型。可啟用、停用、編輯、刪除並設定預設 Provider。OpenCode Go 使用獨立的 `x-opencode-session` 工作階段標頭，自訂 Provider 也可附加請求標頭。企業代理或相容介面要先確認協定與資料政策。
 
 API key 不得貼入對話、畫面或報告。修改 base URL 前確認目標可信。歷史訊息數、temperature 和 max tokens 可依上下文、成本與穩定性調整。
 

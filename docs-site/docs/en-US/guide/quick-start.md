@@ -18,7 +18,8 @@ Download Navop from the [download center](https://navop.dev/en-US/extensions). I
 
 - **Home:** manage database, SSH, Redis, MongoDB, and remote desktop connections in grid or tree view, with recent connections and batch actions.
 - **Database workspace:** SQL editor, table data, table design, ER diagrams, import/export, schema comparison, and data transfer.
-- **SSH workspace:** terminals, split panes, quick commands, broadcast input, SFTP, remote file editing, and server monitoring.
+- **Monitor:** CPU, memory, disk, and network state for SSH hosts with resource monitoring enabled, toggled per connection, refreshing every 5, 15, or 30 seconds.
+- **SSH workspace:** terminals, tmux panes, splits, quick commands, broadcast input, SFTP, remote file editing, and terminal notifications.
 - **Remote access:** port forwarding, RDP/VNC remote desktops, serial, and Telnet.
 - **Notes and AI:** local Markdown preview and editing; AI can generate, explain, and troubleshoot in SQL, result, and terminal context.
 - **Extensions and collaboration:** install database drivers, ACP agents, remote desktop providers, and language packs; manage team spaces and shared connections.

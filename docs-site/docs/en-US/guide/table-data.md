@@ -8,6 +8,8 @@ Open Data from a table or view and use paging to control load. Search on the cur
 
 Press Cmd/Ctrl+F while browsing to open the find bar: matched cells get an outlined highlight, and Cmd/Ctrl+G / Cmd/Ctrl+Shift+G jump between matches and scroll the hit column into view. Hits are re-scanned after paging or refresh. Finding highlights matches — it never filters or modifies data.
 
+Choose "View selected record as JSON" from a record's context menu to inspect every field and nested structure in a read-only window; this helps with JSON columns or wide tables, and you can return to the large-text editor to edit. Press F5 to re-read the current table data and Ctrl+S to submit local changes, matching the toolbar buttons; still open SQL Preview before submitting.
+
 Wide tables can hide columns via the column-header dropdown that selects visible fields. Field filtering affects display only; exports and SQL preview still use the full column set. Keep page size and maximum rows reasonable for large tables. Whether a view is editable depends on the database and view definition; use the base table or explicit SQL when it is read-only.
 
 ## Edit values correctly
