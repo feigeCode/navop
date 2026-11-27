@@ -310,7 +310,9 @@ fn render_turn(
         children.push(slot(head_element));
     }
 
-    if turn.has_process() {
+    // 折叠头只折叠「结论之前」的项。结论之后才到达的东西不该被它折进来，
+    // 否则头下面空无一物、正文却挂在头上面 —— 那个头什么也没折住。
+    if !turn.process_before_answer().is_empty() {
         children.push(render_process(turn, context, theme, window, cx));
     }
 
@@ -325,6 +327,10 @@ fn render_turn(
         );
         children.push(slot(element));
     }
+
+    // 结论之后才到达的推理 / 工具按时间线接在结论**下面**：它们是更新的内容，
+    // 排到结论上方就是把时间线翻过来（正文钉在最底下、上面还在往外输出）。
+    children.extend(render_after_answer(turn, context, theme, window, cx));
 
     if context.turn_chrome {
         if turn.head.is_some() && turn.answer.is_empty() && !turn.live && turn.risks.is_empty() {
@@ -410,19 +416,50 @@ fn render_turn_head(turn: &TurnProjection<'_>, theme: &AgentChatTheme) -> AnyEle
 /// + 结构标记，见 [`crate::turn::survives_collapse`]）。
 /// 位置由 `process` 决定，所以两种状态下顺序都是消息的原始顺序
 /// —— 失败卡片不会被挪到末尾，正在跑的步骤也不会消失。
-fn visible_process_items<'a>(
-    turn: &'a TurnProjection<'_>,
-    expanded: bool,
-) -> Vec<&'a ChatMessageUI> {
+fn visible_process_items<'a>(turn: &TurnProjection<'a>, expanded: bool) -> Vec<&'a ChatMessageUI> {
+    visible_items(turn.process_before_answer(), expanded)
+}
+
+/// 过程项按折叠态过滤：展开 = 全部；收起 = 只剩不许被折叠吞掉的项。
+fn visible_items<'a>(items: &[&'a ChatMessageUI], expanded: bool) -> Vec<&'a ChatMessageUI> {
     if expanded {
-        turn.process.clone()
+        items.to_vec()
     } else {
-        turn.process
+        items
             .iter()
             .copied()
             .filter(|message| crate::turn::survives_collapse(message))
             .collect()
     }
+}
+
+/// 过程区此刻的展开态：用户手动改过的覆盖表优先，否则用默认值。
+fn process_expanded(turn: &TurnProjection<'_>, context: &MessageListContext<'_>) -> bool {
+    let default_expanded = turn.default_process_expanded();
+    context
+        .expansion
+        .map(|state| state.is_expanded(&turn.key, default_expanded))
+        .unwrap_or(default_expanded)
+}
+
+/// 结论之后才到达的过程项。
+///
+/// 它们仍属于过程统计（步数、改动、风险），但时间位置在结论之后，因此单独渲染
+/// 在结论下面，也不挂在折叠头底下 —— 折叠头只负责结论之前那一段。
+fn render_after_answer(
+    turn: &TurnProjection<'_>,
+    context: &MessageListContext<'_>,
+    theme: &AgentChatTheme,
+    window: &mut Window,
+    cx: &mut App,
+) -> Vec<AnyElement> {
+    let expanded = process_expanded(turn, context);
+    let visible = visible_items(turn.process_after_answer(), expanded);
+    if visible.is_empty() {
+        return Vec::new();
+    }
+    let live_tail = live_tail_ids(turn);
+    render_process_items(&visible, &live_tail, context, theme, window, cx)
 }
 
 /// 过程区里「当前段」的消息 id；渲染时据此让这些消息里的推理块保持展开。
@@ -438,6 +475,59 @@ fn live_tail_ids<'a>(turn: &'a TurnProjection<'_>) -> HashSet<&'a str> {
         .collect()
 }
 
+/// 过程项渲染：单条消息与工具组都各自成 slot，当前段里的推理块强制展开。
+fn render_process_items(
+    messages: &[&ChatMessageUI],
+    live_tail: &HashSet<&str>,
+    context: &MessageListContext<'_>,
+    theme: &AgentChatTheme,
+    window: &mut Window,
+    cx: &mut App,
+) -> Vec<AnyElement> {
+    let items = message_render_items_for(messages);
+    items
+        .into_iter()
+        .map(|item| match item {
+            crate::message_tool_group::MessageRenderItem::Single(message) => {
+                let force_open = live_tail.contains(message.id.as_str());
+                slot(crate::reasoning::with_reasoning_force_open(
+                    force_open,
+                    || {
+                        render_one(
+                            message,
+                            context.code_actions,
+                            context.on_action.as_ref(),
+                            theme,
+                            window,
+                            cx,
+                        )
+                    },
+                ))
+            }
+            crate::message_tool_group::MessageRenderItem::ToolCallGroup(group) => {
+                let inner = group
+                    .messages()
+                    .iter()
+                    .map(|message| {
+                        let force_open = live_tail.contains(message.id.as_str());
+                        crate::reasoning::with_reasoning_force_open(force_open, || {
+                            render_one(
+                                message,
+                                context.code_actions,
+                                context.on_action.as_ref(),
+                                theme,
+                                window,
+                                cx,
+                            )
+                        })
+                    })
+                    .collect();
+                slot(render_tool_call_group(group, inner, theme, cx))
+            }
+        })
+        .collect()
+}
+
 fn render_process(
     turn: &TurnProjection<'_>,
     context: &MessageListContext<'_>,
@@ -445,11 +535,7 @@ fn render_process(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
-    let default_expanded = turn.default_process_expanded();
-    let expanded = context
-        .expansion
-        .map(|state| state.is_expanded(&turn.key, default_expanded))
-        .unwrap_or(default_expanded);
+    let expanded = process_expanded(turn, context);
 
     let summary = process_summary(turn);
     let breakdown = breakdown_text(&turn.tool_breakdown(), BREAKDOWN_LIMIT);
@@ -516,50 +602,9 @@ fn render_process(
     // 收起时也保留风险项：它们不参与折叠（见 `turn.rs` 的纪律 1）。
     // 位置由 `process` 决定，所以无论展开还是收起，顺序都是消息的原始顺序。
     let visible = visible_process_items(turn, expanded);
-    let items = message_render_items_for(&visible);
     // 当前段里的推理块保持展开：这一段还在推进，塌下去只会闪。
     let live_tail = live_tail_ids(turn);
-    let children: Vec<AnyElement> = items
-        .into_iter()
-        .map(|item| match item {
-            crate::message_tool_group::MessageRenderItem::Single(message) => {
-                let force_open = live_tail.contains(message.id.as_str());
-                slot(crate::reasoning::with_reasoning_force_open(
-                    force_open,
-                    || {
-                        render_one(
-                            message,
-                            context.code_actions,
-                            context.on_action.as_ref(),
-                            theme,
-                            window,
-                            cx,
-                        )
-                    },
-                ))
-            }
-            crate::message_tool_group::MessageRenderItem::ToolCallGroup(group) => {
-                let inner = group
-                    .messages()
-                    .iter()
-                    .map(|message| {
-                        let force_open = live_tail.contains(message.id.as_str());
-                        crate::reasoning::with_reasoning_force_open(force_open, || {
-                            render_one(
-                                message,
-                                context.code_actions,
-                                context.on_action.as_ref(),
-                                theme,
-                                window,
-                                cx,
-                            )
-                        })
-                    })
-                    .collect();
-                slot(render_tool_call_group(group, inner, theme, cx))
-            }
-        })
-        .collect();
+    let children = render_process_items(&visible, &live_tail, context, theme, window, cx);
     // 收起且这一轮没有风险项时，整块过程正文都不渲染（只留折叠头）。
     let body = if children.is_empty() {
         None
