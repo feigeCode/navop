@@ -4,22 +4,6 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
-## [v0.24.3] - 2026-11-27
-
-#### 修复与优化
-
-- 修复 Responses 接口的流式工具调用被拼成空函数名（#609）：参数分片不再覆盖已捕获的调用 id 与函数名，工具调用可以正常执行，不再出现「未注册工具」或名称为空导致的中断。
-- Responses 参数分片改为与 Anthropic 一致的增量语义，只拼接 arguments，不再被当成新快照整条覆盖；新增回归测试回放真实映射事件流。
-
-国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.24.3) 下载桌面端安装包。
-
----
-
-#### Fixes and Improvements
-
-- Fixed streaming tool calls being assembled with an empty function name when the provider uses the Responses API (#609). Argument deltas no longer overwrite the captured call id and function name, so tools execute normally instead of failing as an unregistered or empty-name tool call.
-- Responses argument deltas now follow the same incremental semantics as the Anthropic path: arguments are appended instead of being replaced by a partial snapshot. A regression test replays the real mapper event stream.
-
 ## [v0.24.2] - 2026-11-26
 
 #### 更新内容
