@@ -190,7 +190,6 @@ Navop is maintained independently. Stars, focused pull requests, and bug reports
 - Community: [LINUX DO](https://linux.do) — where Chinese-speaking developers hang out
 - QQ Group: [860670605](https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605)
 - WeChat Group: [Join](https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD)
-- Legacy OnetCli repository (now named gpui-kit): [feigeCode/gpui-kit](https://github.com/feigeCode/gpui-kit)
 
 ## Star History
 
