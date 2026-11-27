@@ -204,7 +204,10 @@ Navop is maintained independently. Stars, focused pull requests, and bug reports
 
 ## Credits
 
-ER diagram rendering is based on [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git).
+- ER diagram rendering is based on [ferrum-flow](https://github.com/tu6ge/ferrum-flow).
+- Markdown editing and rendering in Notes is based on [Velotype](https://github.com/manyougz/velotype).
+- The SSH client is built on [russh](https://github.com/Eugeny/russh), patched in Navop as `v0.65.4-navop.1`.
+- The terminal emulator core uses [Alacritty](https://github.com/alacritty/alacritty)'s `alacritty_terminal` crate for VT parsing, grid, and scrollback.
 
 ## License
 

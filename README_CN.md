@@ -199,7 +199,10 @@ Navop 由个人长期维护。Star、聚焦的小型 PR 和 Bug 报告都有助�
 
 ## 致谢
 
-ER 图渲染基于 [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git)。
+- ER 图渲染基于 [ferrum-flow](https://github.com/tu6ge/ferrum-flow)。
+- 笔记（Notes）的 Markdown 编辑与渲染基于 [Velotype](https://github.com/manyougz/velotype)。
+- SSH 客户端基于 [russh](https://github.com/Eugeny/russh)，Navop 内部使用打过补丁的 `v0.65.4-navop.1`。
+- 终端模拟器内核使用 [Alacritty](https://github.com/alacritty/alacritty) 的 `alacritty_terminal` crate，负责 VT 解析、grid 与 scrollback。
 
 ## 许可证
 
