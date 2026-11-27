@@ -182,6 +182,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete development guide.
 Navop is maintained independently. Stars, focused pull requests, and bug reports all help sustain the project.
 
 - [Report a bug or request a feature](https://github.com/feigeCode/navop/issues)
+- Community: [LINUX DO](https://linux.do) — where Chinese-speaking developers hang out
 - QQ Group: [860670605](https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605)
 - WeChat Group: [Join](https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD)
 - Legacy OnetCli repository: [feigeCode/onetcli](https://github.com/feigeCode/onetcli)

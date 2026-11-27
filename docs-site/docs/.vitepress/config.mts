@@ -124,7 +124,8 @@ function localeTheme(options: LocaleOptions): DefaultTheme.LocaleConfig<DefaultT
     nav: [
       { text: options.quickStart, link: `${options.prefix}/guide/quick-start` },
       { text: options.productSite, link: "https://navop.dev", target: "_blank", rel: "noopener" },
-      { text: options.releases, link: `https://navop.dev${options.prefix}/extensions`, target: "_blank", rel: "noopener" }
+      { text: options.releases, link: `https://navop.dev${options.prefix}/extensions`, target: "_blank", rel: "noopener" },
+      { text: "LINUX DO", link: "https://linux.do", target: "_blank", rel: "noopener" }
     ],
     sidebar: guideItems(options),
     outline: { level: [2, 3], label: options.outline },
@@ -173,7 +174,7 @@ export default defineConfig({
     socialLinks: [{ icon: "github", link: "https://github.com/feigeCode/navop" }],
     search: { provider: "local" },
     footer: {
-      message: "Navop · AI 时代的开发和运维工作台",
+      message: 'Navop · AI 时代的开发和运维工作台 · <a href="https://linux.do" target="_blank" rel="noopener">LINUX DO 社区</a>',
       copyright: "Copyright © Navop"
     }
   }

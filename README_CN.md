@@ -182,6 +182,7 @@ cargo fmt --check
 Navop 由个人长期维护。Star、聚焦的小型 PR 和 Bug 报告都有助于项目持续发展。
 
 - [反馈 Bug 或提出功能建议](https://github.com/feigeCode/navop/issues)
+- 社区：[LINUX DO](https://linux.do)，佬友们的聚集地
 - QQ 群：[860670605](https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605)
 - 微信群：[加入](https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD)
 - 旧版 OnetCli 仓库：[feigeCode/onetcli](https://github.com/feigeCode/onetcli)
