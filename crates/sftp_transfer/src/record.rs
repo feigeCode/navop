@@ -118,6 +118,9 @@ pub(super) fn register_background_task(
     if let Some(path) = request.open_folder() {
         spec = spec.open_folder(path);
     }
+    if let Some(path) = request.reveal_path() {
+        spec = spec.reveal_path(path);
+    }
     let id = manager.update(cx, |manager, cx| {
         let id = manager.register(spec, cx);
         manager.set_cancellation(id, BackgroundTaskCancellation::token(token.clone()), cx);

@@ -145,6 +145,8 @@ pub struct BackgroundTaskSpec {
     pub detail: Option<SharedString>,
     pub key: Option<SharedString>,
     pub open_folder: Option<PathBuf>,
+    /// 成功后在文件管理器中定位并选中的文件。单文件下载使用；目录任务保持 `None`。
+    pub reveal_path: Option<PathBuf>,
     pub cancellable: bool,
     pub progress_unit: BackgroundTaskProgressUnit,
 }
@@ -158,6 +160,7 @@ impl BackgroundTaskSpec {
             detail: None,
             key: None,
             open_folder: None,
+            reveal_path: None,
             cancellable: true,
             progress_unit: BackgroundTaskProgressUnit::Steps,
         }
@@ -180,6 +183,12 @@ impl BackgroundTaskSpec {
 
     pub fn open_folder(mut self, path: impl Into<PathBuf>) -> Self {
         self.open_folder = Some(path.into());
+        self
+    }
+
+    /// 成功后打开所在目录并默认选中该文件；仅单文件任务使用。
+    pub fn reveal_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.reveal_path = Some(path.into());
         self
     }
 
@@ -212,6 +221,8 @@ pub struct BackgroundTask {
     pub title: SharedString,
     pub detail: Option<SharedString>,
     pub open_folder: Option<PathBuf>,
+    /// 成功后在文件管理器中定位并选中的文件。单文件下载使用；目录任务保持 `None`。
+    pub reveal_path: Option<PathBuf>,
     pub cancellable: bool,
     pub progress_unit: BackgroundTaskProgressUnit,
     pub status: BackgroundTaskStatus,
@@ -412,6 +423,7 @@ impl BackgroundTaskManager {
             title: spec.title,
             detail: spec.detail,
             open_folder: spec.open_folder,
+            reveal_path: spec.reveal_path,
             cancellable: spec.cancellable,
             progress_unit: spec.progress_unit,
             status: BackgroundTaskStatus::Queued,
@@ -1396,6 +1408,20 @@ mod tests {
         });
 
         assert_eq!(task(&manager, id, cx).open_folder, Some(open_folder));
+    }
+
+    #[gpui::test]
+    fn task_preserves_optional_reveal_path(cx: &mut gpui::TestAppContext) {
+        let manager = new_manager(cx);
+        let local_file = std::path::PathBuf::from("/tmp/report.pdf");
+        let id = manager.update(cx, |m, cx| {
+            m.register(
+                BackgroundTaskSpec::new("download", "report.pdf").reveal_path(local_file.clone()),
+                cx,
+            )
+        });
+
+        assert_eq!(task(&manager, id, cx).reveal_path, Some(local_file));
     }
 
     #[gpui::test]

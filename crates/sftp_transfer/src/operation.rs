@@ -134,6 +134,14 @@ impl TransferRequest {
         }
     }
 
+    /// 成功后在文件管理器中定位并选中的本地文件；目录下载保持 `None`，仅打开目录。
+    pub(super) fn reveal_path(&self) -> Option<PathBuf> {
+        match self {
+            Self::Download(request) if !request.is_dir => Some(request.local_path.clone()),
+            _ => None,
+        }
+    }
+
     pub(super) fn background_kind(&self) -> &'static str {
         match self {
             Self::Upload(_) => "sftp-upload",

@@ -182,9 +182,20 @@ fn download_progress_updates_snapshot_and_background_task(cx: &mut TestAppContex
     assert_eq!(task.group.as_deref(), Some("Test SFTP"));
     assert_eq!(task.detail.as_deref(), Some("nested/file.txt"));
     assert_eq!(task.open_folder, Some(PathBuf::from("/tmp")));
+    assert_eq!(task.reveal_path, Some(PathBuf::from("/tmp/progress")));
     let progress = task.progress.expect("background progress should exist");
     assert_eq!(progress.current, 64);
     assert_eq!(progress.total, Some(128));
     assert_eq!(progress.unit, BackgroundTaskProgressUnit::Bytes);
     assert_eq!(progress.message.as_deref(), Some("32 B/s"));
+}
+
+#[test]
+fn directory_download_registers_no_reveal_target() {
+    let mut request = download_request(SftpConnectionIdentity::Local(7), "folder");
+    request.is_dir = true;
+    let request = crate::operation::TransferRequest::Download(request);
+
+    assert_eq!(request.open_folder(), Some(PathBuf::from("/tmp/folder")));
+    assert_eq!(request.reveal_path(), None);
 }
