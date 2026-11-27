@@ -185,7 +185,7 @@ Navop 由个人长期维护。Star、聚焦的小型 PR 和 Bug 报告都有助�
 - 社区：[LINUX DO](https://linux.do)，佬友们的聚集地
 - QQ 群：[860670605](https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605)
 - 微信群：[加入](https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD)
-- 旧版 OnetCli 仓库：[feigeCode/onetcli](https://github.com/feigeCode/onetcli)
+- 旧版 OnetCli 仓库（仓库已改名为 gpui-kit）：[feigeCode/gpui-kit](https://github.com/feigeCode/gpui-kit)
 
 ## Star History
 
