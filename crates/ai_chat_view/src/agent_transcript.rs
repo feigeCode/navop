@@ -651,8 +651,15 @@ impl AgentTranscript {
             .as_ref()
             .and_then(|id| self.messages.iter().find(|message| &message.id == id))
             .is_some_and(|message| !message.content.trim().is_empty());
-        if segment_has_text {
-            self.streaming_id = None;
+        if segment_has_text
+            && let Some(id) = self.streaming_id.take()
+            && let Some(message) = self.messages.iter_mut().find(|message| message.id == id)
+        {
+            // 这一段正文已经落笔，不会再有人往它里面写：必须收尾。继续挂着
+            // `is_streaming` 会让这一轮**永远**算「进行中」——过程区不再收起、
+            // 页脚一直显示运行、思考块也永远展开。收尾同时把它的思考块合上，
+            // 下一步的推理由新消息承载、自己展开。
+            message.finalize_streaming();
         }
         if let Some(id) = &self.streaming_id {
             if let Some(msg) = self.messages.iter_mut().find(|m| &m.id == id) {
@@ -2513,6 +2520,54 @@ mod tests {
         assert_eq!("", tr.messages[0].reasoning_content);
         assert_eq!("先查一下文件有多大", tr.messages[1].reasoning_content);
         assert_eq!("文件 2MB，直接读。", tr.messages[1].content);
+
+        assert!(
+            !tr.messages[0].is_streaming,
+            "被下一段推理顶替的正文段落必须收尾：它还挂着 is_streaming 的话，\
+             这一轮永远算「进行中」，过程区再也不会收起、思考块也永远展开"
+        );
+        assert!(!tr.messages[0].is_reasoning_expanded);
+        assert!(tr.messages[1].is_streaming);
+    }
+
+    /// 截图现场在投影层的形状：正文已落笔、下一段思考还在往外流时，
+    /// 结论是那条正文，仍在流式的推理挂在结论**之后**，顺序与时间线一致。
+    #[test]
+    fn a_live_reasoning_segment_projects_after_the_written_answer() {
+        let mut tr = AgentTranscript::new();
+        tr.apply(&RuntimeEvent::UserMessage {
+            session_id: sid(),
+            turn_id: tid(),
+            text: "帮我加个 crontab".into(),
+        });
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "我先看一下当前终端里是哪个脚本，再给出对应的 crontab 配置。".into(),
+        });
+        tr.apply(&RuntimeEvent::ReasoningDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "先查一下脚本".into(),
+        });
+
+        let turns = crate::turn::project_turns(&tr.messages, &crate::turn::TurnTimings::new());
+        let turn = turns.last().expect("应该有这一轮");
+
+        assert!(turn.live, "推理还在流式，这一轮算进行中");
+        assert_eq!(
+            vec!["我先看一下当前终端里是哪个脚本，再给出对应的 crontab 配置。"],
+            turn.answer
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(1, turn.trailing(), "新推理在结论之后");
+        assert!(turn.process_before_answer().is_empty());
+        assert_eq!(
+            "先查一下脚本",
+            turn.process_after_answer()[0].reasoning_content
+        );
     }
 
     #[test]

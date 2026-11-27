@@ -120,11 +120,20 @@ pub struct TurnProjection<'a> {
     pub outcome: Option<TurnOutcome>,
     /// 本轮的用户提问（本轮第一条 user 消息）。preamble 轮为 `None`。
     pub head: Option<&'a ChatMessageUI>,
-    /// 过程：状态、工具、计划、子代理，以及结论之前的助手片段 ——
+    /// 过程：状态、工具、计划、子代理，以及结论之外的助手片段 ——
     /// **按消息原始顺序，且包含风险项**。
     pub process: Vec<&'a ChatMessageUI>,
     /// 结论：本轮最后一次助手正文。
     pub answer: Vec<&'a ChatMessageUI>,
+    /// 结论**之后**才到达的过程项个数（`process` 末尾那一段）。
+    ///
+    /// 结论取的是「最后一次助手正文」，可流式过程中正文写完之后还会继续到达
+    /// 下一段推理、工具卡片。它们的时间位置在结论之后，渲染必须排在结论下面
+    /// —— 否则用户看到的顺序被翻过来：正文钉在最底下，上面还在往外输出。
+    ///
+    /// 这些项仍留在 [`Self::process`] 里：步数、工具分布、改动文件、风险都要
+    /// 统计到它们（它们真的发生过），只是渲染位置在结论之后。
+    pub trailing: usize,
     /// 风险：待审批 / 失败 / 被拒。**是 `process` 的有序子集**，任何折叠都不得隐藏；
     /// 但**不能**单独排到轮次末尾 —— 那会让失败的工具卡片脱离时间线、一直钉在底部。
     pub risks: Vec<&'a ChatMessageUI>,
@@ -132,10 +141,25 @@ pub struct TurnProjection<'a> {
     pub live: bool,
 }
 
-impl TurnProjection<'_> {
+impl<'a> TurnProjection<'a> {
     /// 有过程内容才谈得上折叠。
     pub fn has_process(&self) -> bool {
         !self.process.is_empty()
+    }
+
+    /// 结论之后才到达的过程项个数。
+    pub fn trailing(&self) -> usize {
+        self.trailing
+    }
+
+    /// 结论之前的过程项：折叠头下面那一段。
+    pub fn process_before_answer(&self) -> &[&'a ChatMessageUI] {
+        &self.process[..self.process.len() - self.trailing]
+    }
+
+    /// 结论之后才到达的过程项：按时间线接在结论后面渲染。
+    pub fn process_after_answer(&self) -> &[&'a ChatMessageUI] {
+        &self.process[self.process.len() - self.trailing..]
     }
 
     /// 过程区的默认展开态。
@@ -405,6 +429,7 @@ fn build_turn<'a>(
     let mut answer = Vec::new();
     let mut risks = Vec::new();
     let mut live = false;
+    let mut trailing = 0usize;
 
     for (position, message) in body.into_iter().enumerate() {
         if is_live_message(message) {
@@ -418,6 +443,11 @@ fn build_turn<'a>(
         if Some(position) == answer_index {
             answer.push(message);
         } else {
+            // 结论之后的项仍进 `process`（统计口径不变），只是多记一个计数，
+            // 渲染层据此把它们排到结论下面而不是上面。
+            if answer_index.is_some_and(|index| position > index) {
+                trailing += 1;
+            }
             process.push(message);
         }
     }
@@ -459,6 +489,7 @@ fn build_turn<'a>(
         head,
         process,
         answer,
+        trailing,
         risks,
         live: live || running,
     }
@@ -819,6 +850,74 @@ mod tests {
         let turns = project_turns(&messages, &TurnTimings::new());
 
         assert_eq!(0, turns[0].live_tail_start(), "没有分段线就是一段到底");
+    }
+
+    /// 结论之后才到达的过程项（下一段推理 / 工具卡）必须归到「结论后」。
+    ///
+    /// 结论取「最后一次助手正文」，可流式时正文之后还会继续到达推理与工具。
+    /// 若把它们一律排在结论之前，用户看到的就是「正文钉在最底下、上面还在往外
+    /// 输出」—— 时间线被翻了过来。
+    #[test]
+    fn process_items_arriving_after_the_answer_are_trailing() {
+        let mut next_reasoning = assistant("", "t1");
+        next_reasoning.is_streaming = true;
+        next_reasoning.reasoning_content = "下一段先查终端".to_string();
+        let messages = vec![
+            user("Q1", "t1"),
+            assistant("我先看一下当前终端里是哪个脚本", "t1"),
+            next_reasoning,
+        ];
+
+        let turns = project_turns(&messages, &TurnTimings::new());
+
+        assert_eq!(
+            vec!["我先看一下当前终端里是哪个脚本"],
+            as_contents(&turns[0].answer)
+        );
+        assert_eq!(1, turns[0].process.len());
+        assert_eq!(1, turns[0].trailing(), "结论后的过程项应被标出");
+        assert!(turns[0].process_before_answer().is_empty());
+        assert_eq!(1, turns[0].process_after_answer().len());
+    }
+
+    /// 结论就是最后一条消息时没有「结论后」的项，渲染顺序与历史行为一致。
+    #[test]
+    fn an_answer_at_the_end_has_no_trailing_items() {
+        let messages = vec![
+            user("Q1", "t1"),
+            tool_card("c1", "fs.read", Some(true)),
+            assistant("结论在最末", "t1"),
+        ];
+
+        let turns = project_turns(&messages, &TurnTimings::new());
+
+        assert_eq!(0, turns[0].trailing());
+        assert_eq!(1, turns[0].process_before_answer().len());
+        assert!(turns[0].process_after_answer().is_empty());
+    }
+
+    /// 结论后面跟着失败卡片时，卡片仍在时间线的原位（结论之后），
+    /// 步数与风险统计也照旧算上它。
+    #[test]
+    fn a_failed_card_after_the_answer_stays_in_the_timeline() {
+        let messages = vec![
+            user("Q1", "t1"),
+            assistant("先跑一下", "t1"),
+            tool_card("c1", "ssh.exec", Some(false)),
+        ];
+
+        let turns = project_turns(&messages, &TurnTimings::new());
+
+        assert_eq!(1, turns[0].trailing());
+        assert_eq!(1, turns[0].step_count(), "结论后的工具卡仍算一步");
+        assert_eq!(1, turns[0].risks.len());
+        assert_eq!(
+            turns[0].risks.last().map(|message| message.id.as_str()),
+            turns[0]
+                .process_after_answer()
+                .last()
+                .map(|message| message.id.as_str())
+        );
     }
     #[test]
     fn an_unfinished_status_message_keeps_process_expanded() {
