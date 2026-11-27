@@ -246,6 +246,20 @@ fn api_base_action_on_type_change(
         None => ApiBaseAction::Clear,
     }
 }
+/// 编辑已有 provider 时优先回填已保存地址，新建时才使用类型预设。
+fn initial_api_base(saved: Option<&str>, selected_type: ProviderType) -> Option<String> {
+    saved
+        .map(str::to_string)
+        .or_else(|| default_api_base(selected_type).map(str::to_string))
+}
+
+/// 只有回填的是类型预设（没有已保存地址）时，切换类型才允许自动替换。
+fn initial_api_base_preset(saved: Option<&str>, selected_type: ProviderType) -> Option<String> {
+    saved
+        .is_none()
+        .then(|| default_api_base(selected_type).map(str::to_string))
+        .flatten()
+}
 
 /// Provider 类型选择项
 #[derive(Clone, Debug)]
@@ -482,9 +496,8 @@ impl ProviderDetail {
         let provider_type_select =
             cx.new(|cx| SelectState::new(provider_types, type_index, window, cx));
 
-        let default_base = default_api_base(selected_type)
-            .map(str::to_string)
-            .or_else(|| config.as_ref().and_then(|cfg| cfg.api_base.clone()));
+        let saved_api_base = config.as_ref().and_then(|cfg| cfg.api_base.clone());
+        let default_base = initial_api_base(saved_api_base.as_deref(), selected_type);
 
         let name_input = cx.new(|cx| {
             let mut state =
@@ -607,9 +620,7 @@ impl ProviderDetail {
             None => (Vec::new(), Vec::new(), String::new()),
         };
 
-        let last_applied_preset = default_base
-            .clone()
-            .filter(|base| default_api_base(selected_type) == Some(base.as_str()));
+        let last_applied_preset = initial_api_base_preset(saved_api_base.as_deref(), selected_type);
 
         // 切换供应商类型时把默认地址预填进 api_base，让用户知道该填什么。
         let subscription = cx.subscribe_in(
@@ -1612,8 +1623,9 @@ mod tests {
     use super::{
         ApiBaseAction, ApiModeItem, EffortItem, ProviderDetail, SelectionAction,
         api_base_action_on_type_change, api_mode_items, apply_selection_action,
-        filter_loaded_models, filter_models, format_header_lines, merge_models, parse_header_lines,
-        parse_headers_for_provider, reasoning_effort_items, toggle_model,
+        filter_loaded_models, filter_models, format_header_lines, initial_api_base,
+        initial_api_base_preset, merge_models, parse_header_lines, parse_headers_for_provider,
+        reasoning_effort_items, toggle_model,
     };
     use gpui::TestAppContext;
     use gpui_component::select::SelectItem;
@@ -1629,6 +1641,30 @@ mod tests {
 
         let responses = ApiModeItem::new(ApiMode::Responses);
         assert_eq!(&ApiMode::Responses, responses.value());
+    }
+
+    #[test]
+    fn saved_api_base_wins_over_type_preset() {
+        assert_eq!(
+            Some("https://api.example.com/v1".to_string()),
+            initial_api_base(Some("https://api.example.com/v1"), ProviderType::OpenAI)
+        );
+        assert_eq!(
+            None,
+            initial_api_base_preset(Some("https://api.example.com/v1"), ProviderType::OpenAI)
+        );
+    }
+
+    #[test]
+    fn missing_api_base_falls_back_to_type_preset() {
+        assert_eq!(
+            Some("https://api.openai.com/v1".to_string()),
+            initial_api_base(None, ProviderType::OpenAI)
+        );
+        assert_eq!(
+            Some("https://api.openai.com/v1".to_string()),
+            initial_api_base_preset(None, ProviderType::OpenAI)
+        );
     }
 
     #[test]
