@@ -1071,7 +1071,7 @@ cargo run -p navop-data   # Data
 
 ### 19.4 尚未完成
 
-- 独立产品没有完整 MCP 设置页；主页的 `MCP 工具` 对话框只能开关工具集，不能改权限模式/审批超时。
+- 独立产品的 MCP 页由 `navop_app` 的设置页提供（开关、服务器模式、权限模式、审批超时、工具暴露），2026-11-27 起直接在 `mcp_host` 上生效；主页的 `MCP 工具` 对话框仍只负责逐项开关工具集。
 - `toolsets_initialized` 是进程级设置字段：首次启动后即写入 true；如果用户清空设置文件，下次启动会重新写入本产品默认工具集。
 - 全量产品仍走 main 的 `public_mcp_runtime`，两条实现并存；后续应让 main 也改用 `mcp_host`，或明确保留 main 的高级能力（resource pool/access guard/审批）。
 
@@ -1087,6 +1087,21 @@ cargo run -p navop-data   # Data
 - 内置 Agent 的工具面（plan 工具注册表 provider、ACP 工具模式 provider、内置函数注册）抽成 `public_mcp_runtime::init_agent_tools`：全量产品由 `public_mcp_runtime::init` 内部调用（并继续启动自有的 MCP server），独立产品在 `navop_app::init` 的分支里显式调用（不启动 public_mcp_runtime）。此前独立产品根本不注册 provider，`build_plan_tool_registry` 返回空表，内置 Agent 表现为“AI 拿不到任何工具”。
 - 回归测试：`init_agent_tools_registers_plan_registry_without_public_mcp_runtime`（没有 `GlobalPublicMcpRuntime` 时内置 Agent 也能拿到工具）、`shell_product_hides_database_toolsets` / `database_product_hides_terminal_toolsets`（设置页裁剪）、`domain_init_precedes_public_mcp_init`（保持领域初始化先于工具注册）。
 - 验证（2026-11-27）：`cargo test -p navop_app --lib` 737 passed；`cargo check -p navop-shell -p navop-data` 通过；`rustfmt --check` 干净。回归用例做过反向验证：删掉用例里的 `init_agent_tools` 调用后 `内置 Agent 必须能拿到工具` 立即失败。
+
+### 19.6 独立产品的 MCP 设置即时生效、Temporary/Persistent 语义补齐（2026-11-27）
+
+- 问题（只影响独立产品，全量产品由 `public_mcp_runtime` 托管）：
+  - `mcp_host` 没有观察 `AppSettings`：设置页改工具集、权限模式或服务器模式后，必须重启 App 才生效。
+  - 缺 Temporary/Persistent 会话语义：`set_enabled` 只写 `settings.mcp.server_enabled`，而启动时 `session_enabled` 恒为 false；默认 `Temporary` 模式下开关显示已开、server 却永远不启动（新装的独立产品 MCP 直接不可用）。
+  - 状态项只读 `GlobalPublicMcpRuntime`，独立产品永远显示「已禁用」；`navop_app` 的 MCP 页在独立产品走 `session.rs`，没有该全局时全是 no-op。
+- 修法：
+  - `mcp_host::HostState` 增加 `active_config` / `session_enabled` / `settings_subscription`；`start` 安装 `AppSettings` 观察者（`ensure_settings_observer`），设置变化统一走 `reconcile`：`!enabled` 就 stop；只改权限模式时 `runtime.set_permission_mode` 原地生效；enabled/mode/toolsets 变化时先 stop 再重启（避免两个 runtime 抢同一个发现文件）。启动期间收到的设置变更在 `finish_start` 之后再收敛一次，启动失败不自动重试。
+  - 新增 `set_server_mode` / `server_enabled` / `McpHostStatus{Disabled,Starting,Running,Failed}` + `status`；`set_enabled`、`set_toolset_enabled` 复用 `apply_server_enabled_for_mode` / `apply_server_mode_preserving_enabled`，与全量产品共用同一套 Temporary/Persistent 语义。
+  - `navop_app::public_mcp_runtime::session` 在没有 `GlobalPublicMcpRuntime` 时委托 `mcp_host`；`runtime_status` 回退到 `mcp_host::status`，设置页因此能显示独立产品的真实状态。
+- 验证（2026-11-27）：
+  - `cargo test -p mcp_host` 16 passed，新增 `settings_changes_reconcile_the_host_without_restarting`（只改设置、不重启 App 即可收敛）与 `temporary_mode_toggle_keeps_the_persisted_switch_off`（默认 Temporary 模式下打开开关只开本次会话，不写持久化开关）。
+  - `cargo test -p navop_app --lib` 740 passed，新增 `standalone_status_maps_from_mcp_host`。
+  - `cargo check -p navop-shell -p navop-data` 通过；`cargo clippy --no-deps -p mcp_host --all-targets -- -D warnings` 通过；`rustfmt --check` 干净。
 
 ## 20. 独立产品基础能力补齐（2026-10-29）
 

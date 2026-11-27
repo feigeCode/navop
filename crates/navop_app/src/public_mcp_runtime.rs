@@ -132,16 +132,42 @@ fn mcp_permission_mode_for_tool_execution(mode: ToolExecutionMode) -> McpPermiss
 }
 
 pub fn runtime_status(cx: &App) -> PublicMcpRuntimeStatus {
-    cx.try_global::<GlobalPublicMcpRuntime>()
-        .map(|state| {
+    match cx.try_global::<GlobalPublicMcpRuntime>() {
+        Some(state) => {
             let client_count = state
                 .runtime
                 .as_ref()
                 .map(PublicMcpRuntime::client_count)
                 .unwrap_or_default();
             state.status.clone().with_client_count(client_count)
-        })
-        .unwrap_or_default()
+        }
+        // 独立产品的 server 由 `mcp_host` 托管，状态也从那里映射过来，
+        // 否则设置页永远显示「已禁用」。
+        None => status_from_mcp_host(mcp_host::status(cx)),
+    }
+}
+
+fn status_from_mcp_host(status: mcp_host::McpHostStatus) -> PublicMcpRuntimeStatus {
+    match status {
+        mcp_host::McpHostStatus::Disabled => PublicMcpRuntimeStatus::Disabled,
+        mcp_host::McpHostStatus::Starting => PublicMcpRuntimeStatus::Starting { generation: 0 },
+        mcp_host::McpHostStatus::Running {
+            bind_addr,
+            mode,
+            discovery_path,
+            client_count,
+        } => PublicMcpRuntimeStatus::Running {
+            generation: 0,
+            bind_addr,
+            mode,
+            discovery_path,
+            client_count,
+        },
+        mcp_host::McpHostStatus::Failed { message } => PublicMcpRuntimeStatus::Failed {
+            generation: 0,
+            message,
+        },
+    }
 }
 
 pub fn register_internal_function(cx: &mut App, definition: InternalFunctionDefinition) {
@@ -493,6 +519,44 @@ mod tests {
     use public_mcp::permissions::PermissionMode;
     use std::cell::Cell;
     use std::rc::Rc;
+
+    #[test]
+    fn standalone_status_maps_from_mcp_host() {
+        use super::{PublicMcpRuntimeStatus, status_from_mcp_host};
+        use public_mcp::discovery::PublicMcpMode;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        use std::path::PathBuf;
+
+        let status = status_from_mcp_host(mcp_host::McpHostStatus::Running {
+            bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1234),
+            mode: PublicMcpMode::Temporary,
+            discovery_path: PathBuf::from("/tmp/public-mcp.json"),
+            client_count: 2,
+        });
+        match status {
+            PublicMcpRuntimeStatus::Running {
+                bind_addr,
+                mode,
+                discovery_path,
+                client_count,
+                ..
+            } => {
+                assert_eq!(bind_addr.port(), 1234);
+                assert_eq!(mode, PublicMcpMode::Temporary);
+                assert_eq!(discovery_path, PathBuf::from("/tmp/public-mcp.json"));
+                assert_eq!(client_count, 2);
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+        assert!(matches!(
+            status_from_mcp_host(mcp_host::McpHostStatus::Disabled),
+            PublicMcpRuntimeStatus::Disabled
+        ));
+        assert!(matches!(
+            status_from_mcp_host(mcp_host::McpHostStatus::Starting),
+            PublicMcpRuntimeStatus::Starting { .. }
+        ));
+    }
 
     #[test]
     fn staged_discovery_path_stays_next_to_canonical_discovery() {
