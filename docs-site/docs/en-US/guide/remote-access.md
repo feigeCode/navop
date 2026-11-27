@@ -1,6 +1,6 @@
 # Remote desktop, serial, and server monitoring
 
-Navop connects to RDP and VNC through provider extensions, offers Serial terminals, and can deploy an SSH monitoring helper. Platform, provider, and remote-system compatibility determine available behavior.
+Navop connects to RDP and VNC through provider extensions, offers serial terminals, and provides a monitoring page for SSH hosts. Platform, provider, and remote-system compatibility determine available behavior.
 
 ## Install RDP or VNC providers
 
@@ -22,14 +22,18 @@ Select a device and set baud rate, data bits, stop bits, parity, and flow contro
 
 Review device documentation before sending reset, erase, or firmware commands. macOS has limitations around virtual serial pty devices; use a supported real device node and check system privacy permissions.
 
-## Enable SSH server monitoring
+## Monitor SSH hosts
 
-Monitoring shows CPU, memory, disk, network, and process trends. After explicit confirmation, Navop deploys `~/.onetcli-monitor` to the remote account. Managed servers may require administrator approval and appropriate directory/execute permissions.
+The Monitor page collects CPU, memory, disk partitions, and network state from saved SSH hosts. Monitoring is off by default and enabled per connection: use the "Resource monitoring" switch on a host card, or start monitoring from that host's entry. Only enabled hosts keep a long-lived sampling session, and the same switch controls whether the home connection list shows resource usage for that host.
 
-Sampling consumes some resources, and process or network views may contain sensitive operational data. Trends supplement rather than replace production alerting and audit systems.
+The page refreshes every 5, 15, or 30 seconds, supports searching hosts and reconnecting/refreshing all monitors, and shows resource cards with trends. GPU and NPU views appear when the host exposes them. If a host requires interactive credentials such as keyboard-interactive or TOTP, open a terminal once or save the credentials first; the monitor page can also answer these prompts automatically when reconnecting.
+
+Sampling runs inside the current SSH session and writes nothing to the remote host. Older releases deployed a `~/.onetcli-monitor` helper; that directory is now cleaned up on a best-effort basis and is no longer required. The terminal sidebar's "Server monitoring" panel uses the same collector for the current session.
+
+Sampling consumes some resources, and process or network data may contain sensitive operational information. Trends supplement rather than replace production alerting and audit systems.
 
 ## Update and remove components
 
-Update providers or the helper when versions do not match. Removing a provider makes its saved connections temporarily unavailable but does not delete the remote system. When disabling monitoring, verify whether the remote helper is still running and clean it up under organizational policy.
+Update providers when versions do not match. Removing a provider makes its saved connections temporarily unavailable but does not delete the remote system. To stop monitoring a host, turn off its resource-monitoring switch, then verify that no stale helper or background session remains under organizational policy.
 
 Proxy, read-only mode, and monitoring never bypass server permissions. Test network, extension state, account rights, and remote services separately before combining the diagnosis.

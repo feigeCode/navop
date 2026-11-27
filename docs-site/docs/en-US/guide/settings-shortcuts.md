@@ -1,6 +1,6 @@
 # Settings, fonts, and shortcuts
 
-Settings are organized into dedicated pages for databases, terminals, Agents, and MCP, covering appearance, remote editing, Notes, LLMs, logs, and updates. Test changes outside a critical session. A font or shortcut issue may not damage data, but it can change what you see or which action fires.
+Settings are grouped into 12 pages: General, Database, Terminal, SSH, SFTP, AI, Agent, MCP, Sync, Account, Shortcuts, and About. File transfer, remote editors, and ssh://, sftp://, and jms:// link handling live on their matching pages. Test changes outside a critical session. A font or shortcut issue may not damage data, but it can change what you see or which action fires.
 
 ## Set language and appearance
 
@@ -8,7 +8,7 @@ Choose language, start page, light/dark theme, or system-following behavior. App
 
 ![Unified themes and appearance settings](/images/theme.png)
 
-Configure application, SQL, table-preview, and terminal fonts separately. Custom font files support `.ttf`, `.otf`, `.ttc`, and `.otc`; verify licensing and integrity.
+Configure application, SQL, table-preview, and terminal fonts separately. Terminal and database share a monospaced font list of built-in, custom, and system-installed fonts. Custom font files support `.ttf`, `.otf`, `.ttc`, and `.otc`; verify licensing and integrity.
 
 Missing glyphs trigger fallback or unreadable output. Prefer monospaced fonts for SQL and terminals and recheck charts and highlighting after theme changes.
 
@@ -26,7 +26,9 @@ Display density never changes stored field values. Use the appropriate editor fo
 
 ## Configure terminal and remote editors
 
-Choose a local Terminal profile or trusted custom program. Terminal-scoped options (fonts, completion, selection copy, right/middle paste, multiline paste confirmation, dangerous-command warnings) live in the terminal tool sidebar's Settings panel rather than the app Settings page; paste confirmations sit in its Safety section, and the paste dialog also offers Open Settings and Don't Ask Again. Understand bracketed paste and clipboard risk before reducing safeguards.
+Choose a local Terminal profile or trusted custom program. Global terminal defaults — font, theme, completion, selection copy, right/middle paste, multiline paste confirmation, dangerous-command warnings, and terminal search — live in **Settings → Terminal**.
+
+The Settings panel in the terminal tool sidebar applies to the current session only: about 20 options such as font size and theme are not saved and do not affect other terminals, and the panel offers Restore Global Defaults at the bottom. The floating toolbar and automatic session logging toggles moved to app settings. Paste confirmations also offer Open Settings and Don't Ask Again. Understand bracketed paste and clipboard risk before reducing safeguards.
 
 Select a built-in or extension-provided remote editor, its executable, and automatic upload behavior. Keep remote-conflict checks enabled.
 
@@ -44,4 +46,4 @@ If a shortcut fails, check focus, platform, input method, and conflicts before r
 
 ## Inspect logs and updates
 
-Settings exposes the log path, automatic checks, and manual update. Logs may include paths, hosts, and error context and must be redacted before sharing. Save work, finish transactions and transfers, and verify extension compatibility around every update.
+Settings exposes the log path, automatic checks, and manual update. Switch between the stable and Beta update channels and choose a mirror (Auto, Cloudflare, CNB, or GitHub) under **Settings → About**; pick a mirror manually only when your network requires it. Logs may include paths, hosts, and error context and must be redacted before sharing. Save work, finish transactions and transfers, and verify extension compatibility around every update.

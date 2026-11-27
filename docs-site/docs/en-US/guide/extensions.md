@@ -4,7 +4,7 @@ Extensions add database drivers, middleware, native resource workbenches, ACP Ag
 
 ## Understand extension types
 
-Database drivers add connection types. ACP Agent extensions connect external agents. Import extensions read other applications. Remote desktop providers enable RDP/VNC. Language extensions add UI locales. Native resource workbench extensions (such as Docker) let the host render collections, detail pages, and operations. An "updates available" filter in the marketplace shows only extensions with newer releases.
+Database drivers add connection types. ACP Agent extensions connect external agents. Import extensions read other applications. Remote desktop providers enable RDP/VNC. Language extensions add UI locales. Native resource workbench extensions (such as Docker) let the host render collections, detail pages, and operations. A composite extension bundles several panels into one package, and its panels appear in the terminal, database, or note sidebar. An "updates available" filter in the marketplace shows only extensions with newer releases.
 
 A product name in a compatibility list does not mean its driver is installed. Check the marketplace entry, current platform, and Navop version first.
 
@@ -13,8 +13,8 @@ A product name in a compatibility list does not mean its driver is installed. Ch
 First-party extensions are built and published independently from the [navop-extensions](https://github.com/feigeCode/navop-extensions) repository; official marketplace entries come from that repository. The current catalog, grouped by kind:
 
 - **Database drivers**: TDengine, DuckDB, Redis, MongoDB (4.2+ / 3.6 / 3.2–3.4 tiers), Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, Oscar, and a pure-Go Oracle driver that needs no Oracle Instant Client.
-- **Middleware**: MQTT (subscribe, messages, and publish views, with SSH tunneling).
-- **Native resource workbenches**: Docker (engine overview, container and image management, logs, processes, filesystem changes, and exec terminals), where the host renders collections, detail pages, and operations natively.
+- **Middleware**: MQTT (subscribe, messages, and publish views, with SSH tunneling), RocketMQ (topics, consumer groups, and messages), and Elasticsearch 9 (cluster overview, indices, and document search).
+- **Native resource workbenches**: Docker (engine overview, container and image management, logs, processes, filesystem changes, and exec terminals), where the host renders collections, detail pages, and operations natively; plus composite panels such as Server Logs (a bottom full-width panel that tails or greps remote log files per connection) and Server Containers (right-side tabs for processes, containers, images, volumes, networks, Compose, and Kubernetes).
 - **Remote desktop providers**: RDP and VNC.
 - **ACP Agents**: Codex, Claude Code, and OpenCode.
 - **Connection importers**: SecureCRT, Xshell, WindTerm, OpenSSH config, Navicat, DBeaver, JetBrains DataGrip, MongoDB Compass, Redis Desktop, and TablePlus.
@@ -31,6 +31,14 @@ Review publisher, description, permissions, and release notes before installatio
 On startup, Navop checks the marketplace in the background and compares it with installed versions. When updates are found, a notification links straight to the marketplace; each batch is announced only once. The "updates available" filter in the marketplace page shows only extensions that can be updated.
 
 For failures, disable and re-enable or reload the extension, then inspect logs and versions. Do not update the driver currently handling a production task.
+
+## Dock extension panels
+
+Manifests can declare where an extension panel docks: left, right, or bottom sidebar, defaulting to the right. A manual drag takes precedence, so a panel stays where you put it. The database bottom panel spans the full content width and its height is draggable. The "+" at the sidebar opens the extension marketplace filtered to composite extensions.
+
+## Plugin AI tools
+
+Plugins built on the nsh runtime can declare `contributes.tools` and expose tools to the built-in Agent and external MCP clients. Tools are off by default: enable them per extension, disable individual tools, and set timeouts, result limits, and risk confirmation. A plugin tab can also show an AI sidebar on the right, collapsed by default and resizable.
 
 ## Use local and offline packages
 

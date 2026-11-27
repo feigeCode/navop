@@ -4,7 +4,7 @@ The AI workbench places model conversations beside live databases, terminals, fi
 
 ## Configure an LLM provider
 
-Add a Provider in Settings with its name, API key, base URL, API version, and other required values. Load available models or define a custom model, enable or disable providers, edit them, and choose a default. Validate compatibility and data policy for enterprise proxies or OpenAI-compatible endpoints.
+Add a Provider in Settings with its name, API key, base URL, API version, and other required values. Load available models or define a custom model, enable or disable providers, edit them, and choose a default. OpenCode Go sends the `x-opencode-session` header, and custom providers can attach extra request headers. Validate compatibility and data policy for enterprise proxies or OpenAI-compatible endpoints.
 
 Never paste API keys into conversations or reports. Confirm every base URL before sending prompts or attachments. Tune history length, temperature, and max tokens for context, cost, and repeatability.
 
@@ -27,6 +27,8 @@ Create, rename, archive, and delete conversations or tasks. Archiving is organiz
 The approval wait time is configurable; when it elapses, the approval is treated as timed out and the result reflects it. Read the tool purpose and parameters before confirming, and raise the wait time in Settings when you need more time to judge.
 
 Agents may use plans or sub-agents, but their results still require verification. Recheck connection and file state before acting on a long-running plan.
+
+Messages typed while the model is generating are queued instead of interrupting the turn: edit or delete a queued message, or choose "Send now" to inject it into the running turn. Queued messages still shape later tool calls, so check context and target resources before sending.
 
 ## Use ACP and HTML preview
 
