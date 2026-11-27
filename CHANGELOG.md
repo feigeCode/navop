@@ -4,6 +4,40 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.24.3] - 2026-11-27
+
+#### 更新内容
+
+- 内置 Agent 与 MCP 的工具面在三款产品里按领域收敛：Navop Shell 只列终端、文件与连接相关工具，Navop Data 只列数据库、缓存与连接相关工具，全量 Navop 仍保留全部工具。
+- 用户指南同步至 v0.24：补充监控页、终端 tmux、终端通知与扩展面板停靠等说明。
+
+#### 修复与优化
+
+- 修复 Navop Shell / Navop Data 里内置 Agent 拿不到任何工具的问题：工具注册表此前只在全量产品里初始化。
+- 修复独立产品的 MCP 设置改了不生效：工具暴露、权限模式与服务器模式现在改完立即收敛，权限模式与工具集变化无需重启 App。
+- 补齐独立产品的「临时 / 持久」MCP 模式语义：默认「临时」模式下打开开关会立刻启动本次会话的服务，不再出现开关已打开、服务却从未启动；MCP 状态项显示真实状态而不是一直「已禁用」。
+- 修复 Responses 接口在参数分片时清空工具名、导致带工具的请求发出空名工具调用的问题。
+- 修复编辑已有模型提供商时 API Base 没有回填已保存值的问题。
+- 数据库「当前语句」框线默认关闭，需要时可在设置里打开。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.24.3) 下载桌面端安装包。
+
+---
+
+#### What's New
+
+- The built-in Agent and MCP tool surfaces now follow each product's domain: Navop Shell lists only terminal, file and connection tools, Navop Data only database, cache and connection tools, while the full Navop keeps every tool.
+- The user guide is synced to v0.24 with the monitoring page, terminal tmux, terminal notifications and extension panel docking.
+
+#### Fixes and Improvements
+
+- Fixed the built-in Agent receiving no tools at all in Navop Shell / Navop Data; the tool registry used to be initialized only in the full product.
+- Fixed MCP settings not taking effect in the standalone products: tool exposure, permission mode and server mode now apply immediately, and permission/toolset changes no longer need an app restart.
+- Restored the Temporary / Persistent semantics for the standalone products' MCP server: in the default Temporary mode the toggle now starts the server for the current session instead of leaving it off, and the status item reports the real state instead of always showing "disabled".
+- Fixed the Responses API clearing tool names while splitting parameters, which produced tool calls with empty names.
+- Fixed the API Base field not being prefilled with the saved value when editing an existing provider.
+- The database "current statement" outline is off by default and can be enabled in settings.
+
 ## [v0.24.2] - 2026-11-26
 
 #### 更新内容
