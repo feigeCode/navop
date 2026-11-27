@@ -1055,10 +1055,14 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     // 独立产品（`navop-shell` / `navop-data`）用 `app_kit` 托管的通用 MCP 宿主
     // (`mcp_host`)；全量产品才启动自己的 `public_mcp_runtime`，否则两套 MCP
     // 会同时监听，发现文件与工具集互相覆盖。
+    // 内置 Agent 的工具面三产品都要注册；`public_mcp_runtime::init` 内部已经注册，
+    // 独立产品没有这一步，必须显式调用，否则内置 Agent 的工具表是空的。
     if app_kit::identity()
         .is_none_or(|identity| identity.app_id == domain_api::AppIdentity::FULL.app_id)
     {
         crate::public_mcp_runtime::init(cx);
+    } else {
+        crate::public_mcp_runtime::init_agent_tools(cx);
     }
     crate::home_tab::init(cx);
     cx.bind_keys(init_keybindings(cx));
@@ -3178,10 +3182,14 @@ mod tests {
     fn domain_init_precedes_public_mcp_init() {
         let source = include_str!("navop_app.rs");
         let domains = source.find("app_kit::init_domains(cx)?;").unwrap();
+        let agent_tools = source
+            .find("crate::public_mcp_runtime::init_agent_tools(cx);")
+            .unwrap();
         let public_mcp = source.find("crate::public_mcp_runtime::init(cx);").unwrap();
 
         // 领域初始化里包含 Mongo 原生驱动工厂（`data_domain` 负责），必须早于
-        // 公共 MCP 工具注册表，否则资源池会拿到内嵌驱动。
+        // 公共 MCP 工具注册表与内置 Agent 的工具面，否则资源池会拿到内嵌驱动。
+        assert!(domains < agent_tools);
         assert!(domains < public_mcp);
     }
 

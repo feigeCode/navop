@@ -1074,9 +1074,19 @@ cargo run -p navop-data   # Data
 - 独立产品没有完整 MCP 设置页；主页的 `MCP 工具` 对话框只能开关工具集，不能改权限模式/审批超时。
 - `toolsets_initialized` 是进程级设置字段：首次启动后即写入 true；如果用户清空设置文件，下次启动会重新写入本产品默认工具集。
 - 全量产品仍走 main 的 `public_mcp_runtime`，两条实现并存；后续应让 main 也改用 `mcp_host`，或明确保留 main 的高级能力（resource pool/access guard/审批）。
-- 三产品的工具暴露设置目前共用 `AppSettings.tool_exposure.mcp`；独立产品默认值由 `default_enabled` 兜底，还没有产品级 UI。
 
 提交：`0a5b4e472`、`cbb72d954`、`0c958ddcf`、`0c56a0b98 feat(mcp): 工具集开关接入设置并增加逐项 UI`。
+
+### 19.5 工具暴露按产品裁剪、内置 Agent 工具面三产品共用（2026-11-27）
+
+- 工具暴露设置页按产品领域裁剪条目：
+  - 终端 / SSH 执行 / 可见终端 / SFTP 只在装配终端领域的产品出现（`product::supports_shell_domain()`）。
+  - 数据库 / Redis / MongoDB 只在装配数据库领域的产品出现（`product::supports_database_domain()`；该判定在 `main` 归位到 `crates/navop_app` 时丢了实现、只剩文档注释，本次恢复）。
+  - 连接、笔记、内置函数、扩展三产品一致；扩展仍要求进程带 nsh 宿主。
+  - 此前 MCP 与 Agent 两个页面都把全部 11 项列给所有产品，独立产品会显示并保存本产品根本不存在的工具集开关。
+- 内置 Agent 的工具面（plan 工具注册表 provider、ACP 工具模式 provider、内置函数注册）抽成 `public_mcp_runtime::init_agent_tools`：全量产品由 `public_mcp_runtime::init` 内部调用（并继续启动自有的 MCP server），独立产品在 `navop_app::init` 的分支里显式调用（不启动 public_mcp_runtime）。此前独立产品根本不注册 provider，`build_plan_tool_registry` 返回空表，内置 Agent 表现为“AI 拿不到任何工具”。
+- 回归测试：`init_agent_tools_registers_plan_registry_without_public_mcp_runtime`（没有 `GlobalPublicMcpRuntime` 时内置 Agent 也能拿到工具）、`shell_product_hides_database_toolsets` / `database_product_hides_terminal_toolsets`（设置页裁剪）、`domain_init_precedes_public_mcp_init`（保持领域初始化先于工具注册）。
+- 验证（2026-11-27）：`cargo test -p navop_app --lib` 737 passed；`cargo check -p navop-shell -p navop-data` 通过；`rustfmt --check` 干净。回归用例做过反向验证：删掉用例里的 `init_agent_tools` 调用后 `内置 Agent 必须能拿到工具` 立即失败。
 
 ## 20. 独立产品基础能力补齐（2026-10-29）
 

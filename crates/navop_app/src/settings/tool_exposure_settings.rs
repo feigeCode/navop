@@ -4,11 +4,59 @@ use one_core::settings::{AppSettings, ToolExposureSettings, ToolExposureToolsetS
 use rust_i18n::t;
 
 pub fn mcp_tool_exposure_setting_group(default_settings: &ToolExposureSettings) -> SettingGroup {
-    tool_exposure_group(ToolExposureSurface::Mcp, &default_settings.mcp)
+    tool_exposure_group(
+        ToolExposureSurface::Mcp,
+        &default_settings.mcp,
+        ToolExposureCapabilities::current(),
+    )
 }
 
 pub fn agent_tool_exposure_setting_group(default_settings: &ToolExposureSettings) -> SettingGroup {
-    tool_exposure_group(ToolExposureSurface::Agent, &default_settings.agent)
+    tool_exposure_group(
+        ToolExposureSurface::Agent,
+        &default_settings.agent,
+        ToolExposureCapabilities::current(),
+    )
+}
+
+/// 当前产品的领域能力，用来按产品裁剪工具暴露设置页。
+///
+/// 终端与数据库两组工具集只在装配了对应领域的产品里存在：`navop-shell` 没有
+/// 数据库领域，页面上出现数据库 / Redis / MongoDB 开关只会保存一个永远不生效的
+/// 值；反过来的 `navop-data` 也一样。能力显式传参，单测不依赖领域注册表的全局
+/// 初始化顺序。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ToolExposureCapabilities {
+    shell: bool,
+    database: bool,
+}
+
+impl ToolExposureCapabilities {
+    /// 全量产品两个领域都装配；独立产品只装配自己的领域。
+    fn current() -> Self {
+        Self {
+            shell: crate::product::supports_shell_domain(),
+            database: crate::product::supports_database_domain(),
+        }
+    }
+
+    #[cfg(test)]
+    const FULL: Self = Self {
+        shell: true,
+        database: true,
+    };
+
+    #[cfg(test)]
+    const SHELL_ONLY: Self = Self {
+        shell: true,
+        database: false,
+    };
+
+    #[cfg(test)]
+    const DATABASE_ONLY: Self = Self {
+        shell: false,
+        database: true,
+    };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +117,17 @@ enum ToolExposureItem {
     Extensions,
 }
 
+/// 工具集所属领域，用来按产品裁剪设置页。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolExposureDomain {
+    /// 终端 / SSH / SFTP：只有装配了终端领域的产品才有这些工具集。
+    Shell,
+    /// 数据库 / Redis / MongoDB：只有装配了数据库领域的产品才有这些工具集。
+    Database,
+    /// 连接、笔记、内置函数、扩展：三产品一致。
+    General,
+}
+
 impl ToolExposureItem {
     const MCP_VISIBLE: [Self; 11] = [
         Self::Terminal,
@@ -96,6 +155,33 @@ impl ToolExposureItem {
         Self::InternalFunctions,
         Self::Extensions,
     ];
+
+    fn domain(self) -> ToolExposureDomain {
+        match self {
+            Self::Terminal | Self::TerminalSshExec | Self::TerminalExec | Self::Sftp => {
+                ToolExposureDomain::Shell
+            }
+            Self::Redis | Self::Mongo | Self::Database => ToolExposureDomain::Database,
+            Self::Connections | Self::Notes | Self::InternalFunctions | Self::Extensions => {
+                ToolExposureDomain::General
+            }
+        }
+    }
+
+    /// 该工具集在当前产品里是否真的存在。
+    ///
+    /// 领域能力决定终端 / 数据库两组工具集；扩展工具集还要求进程带 nsh 宿主，
+    /// 否则只会保存一个无效开关。
+    fn available(self, capabilities: ToolExposureCapabilities, nsh_ui: bool) -> bool {
+        if self == Self::Extensions && !nsh_ui {
+            return false;
+        }
+        match self.domain() {
+            ToolExposureDomain::Shell => capabilities.shell,
+            ToolExposureDomain::Database => capabilities.database,
+            ToolExposureDomain::General => true,
+        }
+    }
 
     #[cfg(test)]
     fn id(self) -> &'static str {
@@ -182,22 +268,23 @@ impl ToolExposureItem {
 fn tool_exposure_group(
     surface: ToolExposureSurface,
     default_settings: &ToolExposureToolsetSettings,
+    capabilities: ToolExposureCapabilities,
 ) -> SettingGroup {
     SettingGroup::new()
         .title(t!(surface.title_key()))
         .description(t!(surface.description_key()))
-        .items(tool_exposure_items(surface, default_settings))
+        .items(tool_exposure_items(surface, default_settings, capabilities))
 }
 
 fn tool_exposure_items(
     surface: ToolExposureSurface,
     default_settings: &ToolExposureToolsetSettings,
+    capabilities: ToolExposureCapabilities,
 ) -> Vec<SettingItem> {
     surface
         .visible_items()
         .iter()
-        // 没有 nsh 宿主时扩展工具集不存在，不展示只会保存无效开关的「扩展」项。
-        .filter(|item| crate::nsh_ui_available() || **item != ToolExposureItem::Extensions)
+        .filter(|item| item.available(capabilities, crate::nsh_ui_available()))
         .map(|item| tool_exposure_item(surface, *item, default_settings))
         .collect()
 }
@@ -226,19 +313,14 @@ fn tool_exposure_item(
 }
 
 #[cfg(test)]
-fn mcp_tool_exposure_item_ids() -> Vec<&'static str> {
-    ToolExposureSurface::Mcp
+fn tool_exposure_item_ids(
+    surface: ToolExposureSurface,
+    capabilities: ToolExposureCapabilities,
+) -> Vec<&'static str> {
+    surface
         .visible_items()
         .iter()
-        .map(|item| item.id())
-        .collect()
-}
-
-#[cfg(test)]
-fn agent_tool_exposure_item_ids() -> Vec<&'static str> {
-    ToolExposureSurface::Agent
-        .visible_items()
-        .iter()
+        .filter(|item| item.available(capabilities, crate::nsh_ui_available()))
         .map(|item| item.id())
         .collect()
 }
@@ -247,7 +329,8 @@ fn agent_tool_exposure_item_ids() -> Vec<&'static str> {
 mod tests {
     use super::*;
 
-    fn expected_item_ids() -> Vec<&'static str> {
+    /// 全量产品的完整清单；扩展项只在带 nsh 宿主的构建里存在。
+    fn full_item_ids() -> Vec<&'static str> {
         let mut ids = vec![
             "terminal",
             "terminal_ssh_exec",
@@ -267,17 +350,60 @@ mod tests {
         ids
     }
 
-    #[test]
-    fn mcp_tool_exposure_items_include_public_toolsets_and_terminal_flavors() {
-        let ids = mcp_tool_exposure_item_ids();
-
-        assert_eq!(expected_item_ids(), ids);
+    fn with_extensions(ids: &[&'static str]) -> Vec<&'static str> {
+        let mut ids = ids.to_vec();
+        if crate::nsh_ui_available() {
+            ids.push("extensions");
+        }
+        ids
     }
 
     #[test]
-    fn agent_tool_exposure_items_include_internal_agent_toolsets() {
-        let ids = agent_tool_exposure_item_ids();
+    fn full_product_exposes_all_toolsets() {
+        for surface in [ToolExposureSurface::Mcp, ToolExposureSurface::Agent] {
+            assert_eq!(
+                full_item_ids(),
+                tool_exposure_item_ids(surface, ToolExposureCapabilities::FULL)
+            );
+        }
+    }
 
-        assert_eq!(expected_item_ids(), ids);
+    /// 终端产品没有数据库领域：数据库 / Redis / MongoDB 开关操作的是不存在的工具集。
+    #[test]
+    fn shell_product_hides_database_toolsets() {
+        let expected = with_extensions(&[
+            "terminal",
+            "terminal_ssh_exec",
+            "terminal_exec",
+            "connections",
+            "sftp",
+            "notes",
+            "internal_functions",
+        ]);
+        for surface in [ToolExposureSurface::Mcp, ToolExposureSurface::Agent] {
+            assert_eq!(
+                expected,
+                tool_exposure_item_ids(surface, ToolExposureCapabilities::SHELL_ONLY)
+            );
+        }
+    }
+
+    /// 数据库产品没有终端领域：终端 / SSH / SFTP 开关操作的是不存在的工具集。
+    #[test]
+    fn database_product_hides_terminal_toolsets() {
+        let expected = with_extensions(&[
+            "connections",
+            "redis",
+            "mongo",
+            "database",
+            "notes",
+            "internal_functions",
+        ]);
+        for surface in [ToolExposureSurface::Mcp, ToolExposureSurface::Agent] {
+            assert_eq!(
+                expected,
+                tool_exposure_item_ids(surface, ToolExposureCapabilities::DATABASE_ONLY)
+            );
+        }
     }
 }
