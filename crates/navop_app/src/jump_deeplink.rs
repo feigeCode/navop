@@ -423,7 +423,6 @@ fn prompt_rdp_password(link: JumpLink, home: Entity<HomePage>, window: &mut Wind
             .description(
                 t!(
                     "Common.jump_rdp_password_description",
-                    name = name.clone(),
                     address = address.clone()
                 )
                 .to_string(),

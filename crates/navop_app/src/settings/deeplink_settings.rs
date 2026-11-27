@@ -193,10 +193,9 @@ fn status_text(scheme: &'static str, enabled: bool, cx: &App) -> (String, Hsla) 
             t!("Settings.General.Deeplinks.status_unset", scheme = scheme).to_string(),
             cx.theme().warning,
         ),
-        StatusLine::Unknown { scheme, error } => (
+        StatusLine::Unknown { error, .. } => (
             t!(
                 "Settings.General.Deeplinks.status_unknown",
-                scheme = scheme,
                 error = error
             )
             .to_string(),
