@@ -26,6 +26,7 @@ use one_assets::IconName;
 use one_ui::marquee_text::marquee_text;
 use rust_i18n::t;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// 面板状态实体，由 `TabContainer` 持有一个实例。
@@ -463,10 +464,8 @@ fn render_task_item(
                         .child(status_text),
                 )
                 .when(can_open_task_folder(task), |this| {
-                    let open_folder = task
-                        .open_folder
-                        .clone()
-                        .expect("task with an open-folder action must have a path");
+                    let reveal_path = task.reveal_path.clone();
+                    let open_folder = task.open_folder.clone();
                     this.child(
                         Button::new(SharedString::from(format!(
                             "background-task-reveal-{}",
@@ -476,7 +475,13 @@ fn render_task_item(
                         .label(t!("BackgroundTasks.open_folder").to_string())
                         .ghost()
                         .small()
-                        .on_click(move |_, _window, cx| cx.open_with_system(&open_folder)),
+                        .on_click(move |_, _window, cx| {
+                            if let Some(target) =
+                                resolve_open_target(reveal_path.clone(), open_folder.clone())
+                            {
+                                open_task_target(target, cx);
+                            }
+                        }),
                     )
                 })
                 .when(task.status == BackgroundTaskStatus::Cancelling, |this| {
@@ -587,7 +592,35 @@ fn render_task_item(
 }
 
 fn can_open_task_folder(task: &BackgroundTask) -> bool {
-    task.status == BackgroundTaskStatus::Succeeded && task.open_folder.is_some()
+    task.status == BackgroundTaskStatus::Succeeded
+        && (task.open_folder.is_some() || task.reveal_path.is_some())
+}
+
+/// 「打开目录」按钮点击后的实际动作。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TaskOpenTarget {
+    /// 打开所在目录并选中该文件。
+    Reveal(PathBuf),
+    /// 直接打开目录（目录下载或文件已不存在时的回退）。
+    OpenFolder(PathBuf),
+}
+
+/// 优先定位并选中下载好的文件；文件已被移走/删除时回退到打开所在目录。
+fn resolve_open_target(
+    reveal_path: Option<PathBuf>,
+    open_folder: Option<PathBuf>,
+) -> Option<TaskOpenTarget> {
+    if let Some(path) = reveal_path.filter(|path| path.exists()) {
+        return Some(TaskOpenTarget::Reveal(path));
+    }
+    open_folder.map(TaskOpenTarget::OpenFolder)
+}
+
+fn open_task_target(target: TaskOpenTarget, cx: &App) {
+    match target {
+        TaskOpenTarget::Reveal(path) => cx.reveal_path(&path),
+        TaskOpenTarget::OpenFolder(path) => cx.open_with_system(&path),
+    }
 }
 
 #[cfg(test)]
@@ -656,6 +689,59 @@ mod tests {
             })
             .expect("succeeded task");
         assert!(can_open_task_folder(&succeeded));
+    }
+
+    #[gpui::test]
+    fn reveal_path_alone_enables_the_open_action(cx: &mut gpui::TestAppContext) {
+        let manager = cx.update(BackgroundTaskManager::new);
+        let id = manager.update(cx, |manager, cx| {
+            manager.register(
+                BackgroundTaskSpec::new("download", "report.pdf").reveal_path("/tmp/report.pdf"),
+                cx,
+            )
+        });
+        manager.update(cx, |manager, cx| {
+            manager.mark_running(id, cx);
+            manager.succeed(id, None, cx);
+        });
+        let task = manager
+            .read_with(cx, |manager, _| {
+                manager.tasks().into_iter().find(|task| task.id == id)
+            })
+            .expect("succeeded task");
+
+        assert!(can_open_task_folder(&task));
+    }
+
+    #[test]
+    fn single_file_download_reveals_the_file_instead_of_just_opening_the_folder() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join("report.pdf");
+        std::fs::write(&file, b"content").expect("write file");
+
+        assert_eq!(
+            resolve_open_target(Some(file.clone()), Some(dir.path().to_path_buf())),
+            Some(TaskOpenTarget::Reveal(file))
+        );
+    }
+
+    #[test]
+    fn missing_reveal_target_falls_back_to_opening_the_folder() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let missing = dir.path().join("moved.pdf");
+
+        assert_eq!(
+            resolve_open_target(Some(missing), Some(dir.path().to_path_buf())),
+            Some(TaskOpenTarget::OpenFolder(dir.path().to_path_buf()))
+        );
+    }
+
+    #[test]
+    fn directory_download_opens_the_folder_without_selection() {
+        assert_eq!(
+            resolve_open_target(None, Some(PathBuf::from("/tmp/archive"))),
+            Some(TaskOpenTarget::OpenFolder(PathBuf::from("/tmp/archive")))
+        );
     }
 
     #[gpui::test]

@@ -450,6 +450,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "core-foundation 0.10.1",
  "dirs 6.0.0",
  "domain_api",
  "flate2",
