@@ -64,7 +64,12 @@
       </a>
     </td>
     <td>
-      Navop × Infistar.cc | Use one API key for Claude, GPT, Gemini, Grok, DeepSeek, and more in Navop’s SQL generation and AI chat. Save up to 99% off official pricing, with all models coming from verifiable official channels. Choose from 200+ models across 16 brands, backed by 1,000+ redundant routes and automatic failover. <a href="https://www.infistar.cc/register?aff=TKUN9HBM&amp;ref_source=link">Sign up through Navop’s link and get CNY 5 in trial credit</a>.
+      Navop × Infistar.cc | Use one API key for Claude, GPT, Gemini, Grok, DeepSeek, and more in Navop’s SQL generation and AI chat.
+      <ul>
+        <li>Save up to 99% off official pricing. All models come from official channels and can be verified.</li>
+        <li>200+ models from 16 brands, with 1,000+ redundant routes and automatic failover.</li>
+        <li><a href="https://www.infistar.cc/register?aff=TKUN9HBM&amp;ref_source=link">Sign up through Navop’s link and get CNY 5 in trial credit</a></li>
+      </ul>
     </td>
   </tr>
 </table>
