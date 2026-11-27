@@ -307,6 +307,10 @@ fn statement_for_gutter_marker<'a>(
 /// A non-empty selection suppresses the frame (run-selection mode), and an
 /// empty statement produces no decoration. When a values-region highlight is
 /// available (INSERT value hints), it is appended as a Fill decoration.
+///
+/// `frame_enabled` 为 false 时只发 INSERT values 的 Fill，不描语句框：gpui-kit
+/// 的 Frame 样式把每行文字的实际左右边界连成一条闭合折线，多行 SQL 就变成
+/// 阶梯状碎片并压住文字，所以该框线默认关闭（#589）。
 fn current_statement_frame_decorations(
     index: &dyn StatementIndex,
     _revision: u64,
@@ -314,6 +318,7 @@ fn current_statement_frame_decorations(
     selection: &Range<usize>,
     doc_len: usize,
     values_highlight: Option<Range<usize>>,
+    frame_enabled: bool,
 ) -> Vec<RangeDecoration> {
     let mut decorations = Vec::new();
     if let Some(highlight) = values_highlight {
@@ -325,6 +330,9 @@ fn current_statement_frame_decorations(
         }
     }
     if !selection.is_empty() {
+        return decorations;
+    }
+    if !frame_enabled {
         return decorations;
     }
     let Some(statement) = index.statement_at_cursor(cursor, doc_len) else {
@@ -341,6 +349,18 @@ fn current_statement_frame_decorations(
     }
     decorations.push(RangeDecoration::new(start..end));
     decorations
+}
+
+/// 取语句开头的第一个关键字（转成 ASCII 大写），用于在跑重活前做廉价过滤。
+///
+/// 语句范围已排除前导 trivia，所以这里看到的基本就是真正的首个关键字。
+/// 开头不是字母（比如带括号的子查询）时返回 `None`。
+fn leading_sql_keyword(statement: &str) -> Option<String> {
+    let trimmed = statement.trim_start();
+    let end = trimmed
+        .find(|character: char| !character.is_ascii_alphabetic())
+        .unwrap_or(trimmed.len());
+    (end > 0).then(|| trimmed[..end].to_ascii_uppercase())
 }
 
 /// Extract the target table name of an INSERT statement (`INSERT [INTO] t`).
@@ -1438,6 +1458,9 @@ struct CurrentStatementFrameKey {
     cursor: usize,
     selection: Range<usize>,
     insert_values: Option<Range<usize>>,
+    /// 设置页「当前语句框线」开关；开关本身也要进缓存键，否则切换后
+    /// 命中旧键、框线不跟着出现或消失。
+    frame_enabled: bool,
 }
 
 pub struct SqlEditorTab {
@@ -1500,6 +1523,8 @@ pub struct SqlEditorTab {
     last_frame_key: Option<CurrentStatementFrameKey>,
     _execution_state_subscription: Option<Subscription>,
     _editor_input_subscription: Option<Subscription>,
+    /// 设置页「当前语句框线」开关的变更监听，用于切换后立刻重算装饰。
+    _app_settings_subscription: Option<Subscription>,
     /// 诊断分析运行序号，用于防抖并丢弃过期任务。
     diagnostic_run_id: Arc<AtomicU64>,
     /// 在途的 SQL 诊断分析任务。
@@ -1671,6 +1696,7 @@ impl SqlEditorTab {
             last_frame_key: None,
             _execution_state_subscription: None,
             _editor_input_subscription: None,
+            _app_settings_subscription: None,
             diagnostic_run_id: diagnostic_run_id.clone(),
             _diagnostic_task: None,
             statement_run_id: statement_run_id.clone(),
@@ -1694,6 +1720,7 @@ impl SqlEditorTab {
         instance.bind_auto_save(auto_save_seq, is_dirty, requires_name, window, cx);
         instance.bind_execution_marker_event(cx);
         instance.bind_editor_input_observe(window, cx);
+        instance.bind_app_settings_observe(cx);
         instance.bind_connection_data_event(window, cx);
         // 页签关闭时释放粘性会话：连接归还池中关闭，不再占用数据库连接。
         instance._auto_session_release = Some(cx.on_release(
@@ -1976,12 +2003,14 @@ impl SqlEditorTab {
         let revision = sql_editor.document_revision(cx);
         let cursor = sql_editor.cursor_offset(cx);
         let selection = sql_editor.selected_range(cx);
+        let frame_enabled = AppSettings::global(cx).sql_editor_statement_frame_enabled;
         let frame_key = CurrentStatementFrameKey {
             generation: self.statement_index_generation,
             revision,
             cursor,
             selection: selection.clone(),
             insert_values: self.insert_values_highlight.clone(),
+            frame_enabled,
         };
         if self.last_frame_key.as_ref() == Some(&frame_key) {
             return;
@@ -2000,6 +2029,7 @@ impl SqlEditorTab {
             &selection,
             document.len(),
             self.insert_values_highlight.clone(),
+            frame_enabled,
         )
         .into_iter()
         .map(|decoration| match decoration.style() {
@@ -2050,10 +2080,36 @@ impl SqlEditorTab {
         }
         self.last_insert_hints_key = Some((statement_start, revision));
 
-        let schema = self.schema_snapshot.read().clone();
-        let ordinal_columns = insert_target_table(&statement_text)
-            .and_then(|table| lookup_table_columns(&schema, &table))
-            .unwrap_or_default();
+        // 列提示只对插入语句有意义。这里先用首个关键字做 O(1) 过滤：否则每条
+        // SELECT / DDL / 存储过程都会白跑 `insert_target_table`、
+        // `insert_value_hints`、`insert_values_range` 三次整段 tokenize，
+        // 语句一大就是每敲一个键几十上百毫秒（#589「敲一个字母要等好久」）。
+        // 单条语句过大时同样跳过：这个规模不会有人在里面看列提示，却要按键时
+        // 同步 tokenize 好几遍。
+        const INSERT_HINT_MAX_STATEMENT_BYTES: usize = 64 * 1024;
+        // 首个关键字取不出来时（前导注释、括号子查询等）保守走完整路径，
+        // 只有明确是别的语句类型才跳过。
+        let first_keyword_is_insert_like = match leading_sql_keyword(&statement_text) {
+            Some(keyword) => matches!(keyword.as_str(), "INSERT" | "REPLACE" | "WITH"),
+            None => true,
+        };
+        let is_insert_candidate =
+            statement_text.len() <= INSERT_HINT_MAX_STATEMENT_BYTES && first_keyword_is_insert_like;
+        if !is_insert_candidate {
+            self.insert_values_highlight = None;
+            self.refresh_current_statement_frame(cx);
+            return;
+        }
+
+        // 原来这里每次按键都 `read().clone()` 整份 schema；列名查询只需要读锁，
+        // 而且只有解析出目标表时才需要（#589 卡顿）。
+        let ordinal_columns = match insert_target_table(&statement_text) {
+            Some(table) => {
+                let schema = self.schema_snapshot.read();
+                lookup_table_columns(&schema, &table).unwrap_or_default()
+            }
+            None => Vec::new(),
+        };
 
         let has_value_slots = !insert_value_hints(&statement_text, &ordinal_columns).is_empty();
         let values_highlight = has_value_slots
@@ -2180,6 +2236,16 @@ impl SqlEditorTab {
                     this.refresh_insert_value_hints(cx);
                 }),
             );
+    }
+
+    /// 设置页「当前语句框线」开关变化后立刻重算装饰。
+    ///
+    /// 开关状态已进 `CurrentStatementFrameKey`，这里只要触发一次刷新，
+    /// 打开时框线马上出现、关掉时马上消失，不用等下一次光标移动。
+    fn bind_app_settings_observe(&mut self, cx: &mut Context<Self>) {
+        self._app_settings_subscription = Some(cx.observe_global::<AppSettings>(|this, cx| {
+            this.refresh_current_statement_frame(cx);
+        }));
     }
 
     fn viewport_statement_scan_is_stale(&self, cx: &App) -> bool {
@@ -2561,13 +2627,28 @@ impl SqlEditorTab {
 
         let run_id = self.diagnostic_run_id.fetch_add(1, Ordering::SeqCst) + 1;
         let run_id_clone = self.diagnostic_run_id.clone();
-        let instance = self.clone();
+        // 只捕获诊断用得上的几个句柄，不再 `self.clone()` 整张页签：整表拷贝会
+        // 深拷贝语句快照（全文 + 全部语句范围）和工具栏状态，而这条路径每次
+        // 按键都要走一遍（#589 卡顿）。
+        let editor = self.editor.clone();
+        let dialect = SqlDialect::from(&self.database_type);
+        let diagnostic_run_id = self.diagnostic_run_id.clone();
+        let context_generation = self.context_generation.clone();
         let task = cx.spawn(async move |_handle, cx| {
             Timer::after(Duration::from_millis(DIAGNOSTIC_DEBOUNCE_MS)).await;
             if run_id_clone.load(Ordering::SeqCst) != run_id {
                 return;
             }
-            cx.update(|cx| instance.run_diagnostics_with_id(run_id, cx));
+            cx.update(|cx| {
+                Self::run_diagnostics_for(
+                    &editor,
+                    dialect,
+                    run_id,
+                    &diagnostic_run_id,
+                    &context_generation,
+                    cx,
+                );
+            });
         });
         self._diagnostic_task = Some(task);
     }
@@ -2596,6 +2677,34 @@ impl SqlEditorTab {
             identity,
             self.diagnostic_run_id.clone(),
             self.context_generation.clone(),
+            cx,
+        );
+    }
+
+    /// 用显式句柄跑一次诊断，供防抖任务使用（见 `schedule_diagnostics`）。
+    ///
+    /// 与 `run_diagnostics_with_id` 等价，但不需要持有整张页签，避免为了一个
+    /// 防抖任务深拷贝整个 `SqlEditorTab`。
+    fn run_diagnostics_for(
+        editor: &Entity<SqlEditor>,
+        dialect: SqlDialect,
+        run_id: u64,
+        diagnostic_run_id: &Arc<AtomicU64>,
+        context_generation: &Arc<AtomicU64>,
+        cx: &App,
+    ) {
+        let document_revision = editor.read(cx).document_revision(cx);
+        let identity = SqlDiagnosticIdentity {
+            run_id,
+            document_revision,
+            context_generation: context_generation.load(Ordering::SeqCst),
+        };
+        Self::refresh_diagnostics_async(
+            editor,
+            dialect,
+            identity,
+            diagnostic_run_id.clone(),
+            context_generation.clone(),
             cx,
         );
     }
@@ -5259,6 +5368,7 @@ impl Clone for SqlEditorTab {
             last_frame_key: self.last_frame_key.clone(),
             _execution_state_subscription: None,
             _editor_input_subscription: None,
+            _app_settings_subscription: None,
             diagnostic_run_id: self.diagnostic_run_id.clone(),
             _diagnostic_task: None,
             statement_run_id: self.statement_run_id.clone(),
@@ -5447,7 +5557,8 @@ mod tests {
         foreign_qualifier_scope, initial_database_select_value, insert_target_table,
         insert_values_range, is_current_diagnostic_identity, is_current_manual_transaction_owner,
         is_current_manual_transaction_start, is_current_query_context_generation,
-        lookup_table_columns, manual_sql_execution_action, manual_transaction_control_sql,
+        leading_sql_keyword, lookup_table_columns, manual_sql_execution_action,
+        manual_transaction_control_sql,
         manual_transaction_invalidation_mode, manual_transaction_stop_action,
         match_sql_to_statement_marker, metadata_scope_selection, preferred_default_database,
         query_connection_context_label, query_connection_ids, query_file_path_for_name,
@@ -5490,6 +5601,7 @@ mod tests {
             cursor: 24,
             selection: 24..24,
             insert_values: None,
+            frame_enabled: true,
         };
         let cached = Some(cleared_while_stale.clone());
 
@@ -6442,8 +6554,15 @@ mod tests {
         let snapshot = SqlStatementSnapshot::new(sql, SqlDialect::from(&DatabaseType::MySQL));
         // Cursor inside the second statement.
         let cursor = sql.find("用户表").unwrap() + "用户".len();
-        let decorations =
-            current_statement_frame_decorations(&snapshot, 5, cursor, &(0..0), sql.len(), None);
+        let decorations = current_statement_frame_decorations(
+            &snapshot,
+            5,
+            cursor,
+            &(0..0),
+            sql.len(),
+            None,
+            true,
+        );
 
         assert_eq!(decorations.len(), 1);
         let decoration = &decorations[0];
@@ -6466,7 +6585,7 @@ mod tests {
         let snapshot = SqlStatementSnapshot::new(sql, SqlDialect::from(&DatabaseType::MySQL));
 
         let decorations =
-            current_statement_frame_decorations(&snapshot, 3, 2, &(0..9), sql.len(), None);
+            current_statement_frame_decorations(&snapshot, 3, 2, &(0..9), sql.len(), None, true);
 
         assert!(decorations.is_empty());
     }
@@ -6474,7 +6593,8 @@ mod tests {
     #[test]
     fn frame_decorations_empty_outside_statement() {
         let snapshot = SqlStatementSnapshot::new("", SqlDialect::from(&DatabaseType::MySQL));
-        let decorations = current_statement_frame_decorations(&snapshot, 3, 0, &(0..0), 0, None);
+        let decorations =
+            current_statement_frame_decorations(&snapshot, 3, 0, &(0..0), 0, None, true);
         assert!(decorations.is_empty());
     }
 
@@ -7498,11 +7618,61 @@ mod tests {
             &(0..0),
             text.len(),
             Some(values.clone()),
+            true,
         );
         assert_eq!(2, decorations.len());
         assert_eq!(RangeDecorationStyle::Fill, decorations[0].style());
         assert_eq!(&values, decorations[0].range());
         assert_eq!(RangeDecorationStyle::Frame, decorations[1].style());
         assert_eq!(&values, decorations[1].range());
+    }
+
+    #[test]
+    fn leading_sql_keyword_reads_the_first_word() {
+        assert_eq!(
+            Some("INSERT".to_string()),
+            leading_sql_keyword("\n  insert INTO t VALUES (1);")
+        );
+        assert_eq!(
+            Some("SELECT".to_string()),
+            leading_sql_keyword("select 1")
+        );
+        // 开头不是字母时取不出来，调用方会保守走完整路径。
+        assert_eq!(None, leading_sql_keyword("(select 1) union (select 2)"));
+        assert_eq!(None, leading_sql_keyword("   "));
+        assert_eq!(None, leading_sql_keyword(""));
+    }
+
+    #[test]
+    fn current_statement_frame_skipped_when_disabled_but_values_fill_kept() {
+        let text = "INSERT INTO t (a, b) VALUES (1, 2);";
+        let snapshot =
+            SqlStatementSnapshot::new(text.to_string(), SqlDialect::from(&DatabaseType::MySQL));
+        let statement = snapshot.statement_at_cursor(5).unwrap();
+        let start = statement.sql_range.start_byte;
+        let end = statement
+            .delimiter_range
+            .map(|delimiter| delimiter.end_byte)
+            .unwrap_or(statement.sql_range.end_byte);
+        let values = start..end;
+
+        // 设置默认关闭（#589）：只留 INSERT values 的 Fill，不再描语句框。
+        let decorations = current_statement_frame_decorations(
+            &snapshot,
+            7,
+            5,
+            &(0..0),
+            text.len(),
+            Some(values.clone()),
+            false,
+        );
+        assert_eq!(1, decorations.len());
+        assert_eq!(RangeDecorationStyle::Fill, decorations[0].style());
+        assert_eq!(&values, decorations[0].range());
+
+        // 没有 INSERT values 时关掉框线就是零装饰。
+        let decorations =
+            current_statement_frame_decorations(&snapshot, 7, 5, &(0..0), text.len(), None, false);
+        assert!(decorations.is_empty());
     }
 }
