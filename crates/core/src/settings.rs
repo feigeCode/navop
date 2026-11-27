@@ -1547,6 +1547,14 @@ pub struct AppSettings {
     /// SQL 编辑器鼠标 hover 是否显示对象详情（需停留约 0.6s）。
     #[serde(default = "default_sql_editor_hover_enabled")]
     pub sql_editor_hover_enabled: bool,
+    /// SQL 编辑器是否给光标所在语句描一圈 1px 边框（#589）。
+    ///
+    /// 默认关闭：gpui-kit 的 Frame 样式会把语句逐行文字的实际左右边界连成
+    /// 一条闭合折线，多行 SQL 每行宽度参差时就变成阶梯状碎片，压住文字、
+    /// 挡住光标；`#` 又只在 MySQL 方言下算注释，别的连接里 `####` 分段行会
+    /// 被并进语句，一框就是一大片。需要时可在设置里单独打开。
+    #[serde(default)]
+    pub sql_editor_statement_frame_enabled: bool,
     #[serde(default = "default_monospace_font_family")]
     pub table_preview_font_family: String,
     /// Markdown 编辑器代码字体（行内代码、代码块、表格内代码）。
@@ -2146,6 +2154,7 @@ impl Default for AppSettings {
             sql_editor_font_family: default_monospace_font_family(),
             sql_editor_font_size: default_sql_editor_font_size(),
             sql_editor_hover_enabled: default_sql_editor_hover_enabled(),
+            sql_editor_statement_frame_enabled: false,
             table_preview_font_family: default_monospace_font_family(),
             markdown_code_font_family: default_monospace_font_family(),
             notes_markdown_default_view_mode: MarkdownDefaultViewMode::default(),

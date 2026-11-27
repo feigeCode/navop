@@ -182,9 +182,9 @@ cargo fmt --check
 Navop 由个人长期维护。Star、聚焦的小型 PR 和 Bug 报告都有助于项目持续发展。
 
 - [反馈 Bug 或提出功能建议](https://github.com/feigeCode/navop/issues)
+- 社区：[LINUX DO](https://linux.do)，佬友们的聚集地
 - QQ 群：[860670605](https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605)
 - 微信群：[加入](https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD)
-- 旧版 OnetCli 仓库：[feigeCode/onetcli](https://github.com/feigeCode/onetcli)
 
 ## Star History
 
@@ -198,7 +198,10 @@ Navop 由个人长期维护。Star、聚焦的小型 PR 和 Bug 报告都有助�
 
 ## 致谢
 
-ER 图渲染基于 [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git)。
+- ER 图渲染基于 [ferrum-flow](https://github.com/tu6ge/ferrum-flow)。
+- 笔记（Notes）的 Markdown 编辑与渲染基于 [Velotype](https://github.com/manyougz/velotype)。
+- SSH 客户端基于 [russh](https://github.com/Eugeny/russh)，Navop 内部使用打过补丁的 `v0.65.4-navop.1`。
+- 终端模拟器内核使用 [Alacritty](https://github.com/alacritty/alacritty) 的 `alacritty_terminal` crate，负责 VT 解析、grid 与 scrollback。
 
 ## 许可证
 

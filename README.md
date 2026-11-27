@@ -64,7 +64,12 @@
       </a>
     </td>
     <td>
-      Navop × Infistar.cc | Use one API key for Claude, GPT, Gemini, Grok, DeepSeek, and more in Navop’s SQL generation and AI chat. Save up to 99% off official pricing, with all models coming from verifiable official channels. Choose from 200+ models across 16 brands, backed by 1,000+ redundant routes and automatic failover. <a href="https://www.infistar.cc/register?aff=TKUN9HBM&amp;ref_source=link">Sign up through Navop’s link and get CNY 5 in trial credit</a>.
+      Navop × Infistar.cc | Use one API key for Claude, GPT, Gemini, Grok, DeepSeek, and more in Navop’s SQL generation and AI chat.
+      <ul>
+        <li>Save up to 99% off official pricing. All models come from official channels and can be verified.</li>
+        <li>200+ models from 16 brands, with 1,000+ redundant routes and automatic failover.</li>
+        <li><a href="https://www.infistar.cc/register?aff=TKUN9HBM&amp;ref_source=link">Sign up through Navop’s link and get CNY 5 in trial credit</a></li>
+      </ul>
     </td>
   </tr>
 </table>
@@ -182,9 +187,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete development guide.
 Navop is maintained independently. Stars, focused pull requests, and bug reports all help sustain the project.
 
 - [Report a bug or request a feature](https://github.com/feigeCode/navop/issues)
+- Community: [LINUX DO](https://linux.do) — where Chinese-speaking developers hang out
 - QQ Group: [860670605](https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605)
 - WeChat Group: [Join](https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD)
-- Legacy OnetCli repository: [feigeCode/onetcli](https://github.com/feigeCode/onetcli)
 
 ## Star History
 
@@ -198,7 +203,10 @@ Navop is maintained independently. Stars, focused pull requests, and bug reports
 
 ## Credits
 
-ER diagram rendering is based on [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git).
+- ER diagram rendering is based on [ferrum-flow](https://github.com/tu6ge/ferrum-flow).
+- Markdown editing and rendering in Notes is based on [Velotype](https://github.com/manyougz/velotype).
+- The SSH client is built on [russh](https://github.com/Eugeny/russh), patched in Navop as `v0.65.4-navop.1`.
+- The terminal emulator core uses [Alacritty](https://github.com/alacritty/alacritty)'s `alacritty_terminal` crate for VT parsing, grid, and scrollback.
 
 ## License
 

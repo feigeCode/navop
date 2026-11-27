@@ -54,6 +54,7 @@ fn editor_font_setting_group(cx: &mut App) -> SettingGroup {
             sql_editor_font_family_item(cx, &defaults),
             sql_editor_font_size_item(&defaults),
             sql_editor_hover_item(&defaults),
+            sql_editor_statement_frame_item(&defaults),
             table_preview_font_family_item(cx, &defaults),
         ])
 }
@@ -138,6 +139,23 @@ fn sql_editor_hover_item(defaults: &AppSettings) -> SettingItem {
         .default_value(defaults.sql_editor_hover_enabled),
     )
     .description("鼠标停在表名、列名上时显示详细信息")
+}
+
+fn sql_editor_statement_frame_item(defaults: &AppSettings) -> SettingItem {
+    SettingItem::new(
+        "当前语句框线",
+        SettingField::switch(
+            |cx: &App| AppSettings::global(cx).sql_editor_statement_frame_enabled,
+            |val: bool, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.sql_editor_statement_frame_enabled = val;
+                });
+                cx.refresh_windows();
+            },
+        )
+        .default_value(defaults.sql_editor_statement_frame_enabled),
+    )
+    .description("给光标所在语句描一圈 1px 边框；多行 SQL 会沿每行文字边缘描成阶梯状，容易挡住光标")
 }
 
 fn table_preview_font_family_item(cx: &App, defaults: &AppSettings) -> SettingItem {
