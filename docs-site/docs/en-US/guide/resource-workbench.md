@@ -1,6 +1,6 @@
 # Native resource workbench
 
-The native resource workbench is a class of native UI that Navop provides to extensions. An extension declares resources, collections, tables, detail pages, and operations in its manifest, and the host renders a browsable, actionable workbench with native GPUI — the extension does not ship its own UI. The Docker extension is the first to ship with this mechanism.
+The native resource workbench is a class of native UI that Navop provides to extensions. An extension declares resources, collections, tables, detail pages, and operations in its manifest, and the host renders a browsable, actionable workbench with native GPUI — the extension does not ship its own UI. Docker and Elasticsearch extensions use this mechanism.
 
 ![Extension marketplace](/images/extension.png)
 
@@ -12,13 +12,14 @@ The native resource workbench is a class of native UI that Navop provides to ext
 
 ## Docker workbench
 
-After installing the Docker extension, create a Docker connection and provide the local socket (default `unix://~/.docker/run/docker.sock`, or `unix:///var/run/docker.sock`). The workbench provides:
+After installing the Docker extension, create a Docker connection and provide the local socket (default `unix://~/.docker/run/docker.sock`, or `unix:///var/run/docker.sock`), or point it at a remote TCP/TLS daemon. Unix sockets are supported on macOS and Linux only; on Windows use a remote connection. The workbench provides:
 
-- Engine overview: containers, images, disk, and runtime resource usage.
-- Containers: list, start, stop, restart, and remove, plus process and filesystem change views.
+- Engine overview: engine version, container, image, volume, and network counts, plus disk and runtime resource usage.
+- Containers: list, start, stop, restart, and remove; details include processes, stats, filesystem changes, mounts, and inspect.
 - Images: image list and asynchronous pulls.
-- Logs: container log viewer with tail-line control.
-- Terminal: an exec terminal into the container.
+- Volumes and networks: browse and inspect details.
+- Logs: container log viewer with tail-line control and follow mode.
+- Terminal: an exec terminal into the container, using the host's native terminal rather than an emulator.
 
 Removing containers or stopping running services affects a real environment — confirm the target and impact before running these operations.
 

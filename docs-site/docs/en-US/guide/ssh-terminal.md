@@ -4,7 +4,7 @@ Navop combines remote SSH and local Terminal sessions with tabs, splits, broadca
 
 ## Create SSH and local profiles
 
-SSH authentication supports passwords, private-key files, inline private-key content, SSH Agent, and default `~/.ssh` configuration. Interactive servers may request MFA. Configure proxy and timeout when necessary, and verify the host fingerprint on first connection.
+SSH authentication supports passwords, private-key files, inline private-key content, SSH Agent, default `~/.ssh` configuration, and no authentication (for trusted internal hosts). Interactive servers may request MFA, and the basic authentication section has a keyboard-interactive switch for servers that need challenge-response prompts. Configure proxy and timeout when necessary, and verify the host fingerprint on first connection. Navop can generate a key pair for you; the public key stays visible after generation so you can copy it into `authorized_keys` or a hosting console.
 
 The SSH connection's Advanced Settings include an "Allow Legacy SSH Algorithms" compatibility option (off by default). Enable it per connection only when a server supports only older algorithms such as DSA host keys, SHA-1 key exchange/MAC, or 1024-bit DH group negotiation; Windows also supports Pageant authentication. Enabling it lowers cryptographic strength, so do not keep it on for servers that can be upgraded.
 
@@ -57,6 +57,22 @@ Split a terminal Left, Right, Top, or Bottom, drag tabs between panes, and resiz
 
 After reconnecting, verify process state and directory. Long-running work should use server-side session management rather than assuming a GUI tab preserves it.
 
+Terminal search accepts case-sensitive, whole-word, and regular-expression options. Whole-word matching also works for non-ASCII text such as Chinese, and a regular expression is interpreted as entered rather than rewritten. Search only locates text in the current buffer; it does not change remote state.
+
+## tmux integration and panes
+
+Terminal settings include "Enable tmux integration", a global option that applies to local and SSH terminals. When enabled, Navop tracks panes and sessions through a tmux control channel; changing the toggle or the custom socket path rebuilds that channel. Leave the socket path empty to use the tmux default.
+
+When the session runs tmux, the terminal sidebar shows a "tmux panes" panel where you can split the window or select a pane. Splits and selections go through the control channel instead of simulated keystrokes. tmux 3.2 or later is required. If tmux is missing or the channel drops, the panel reports it and the ordinary terminal keeps working.
+
+## Terminal notifications
+
+Programs can emit OSC 9 or OSC 777 notifications — common for CLI approval prompts and task-completion messages from agent CLIs. Navop shows a dot on the tab and, depending on your settings, also a system notification.
+
+In "Settings → Terminal → System notifications" choose when to notify (when the window is unfocused or the tab is not active / only when the window is unfocused / always / off), the display duration, and the sound. "Send test notification" verifies that the platform actually delivers notifications: macOS uses Notification Center and asks for permission the first time, Linux goes through the freedesktop D-Bus service, and duration and sound options appear only where the platform supports them.
+
+For Codex CLI, enable OSC 9 notifications in `~/.codex/config.toml` first; otherwise the CLI never emits them.
+
 ## Lock sessions and read status
 
 Sessions can be locked with a password kept only in memory, including locking all sessions at once or hiding the output of the current session. A locked terminal rejects keystrokes and cannot be closed with the close button. SecureCRT-style status badges on tabs show connected, disconnected, and connected-and-locked states with tooltips.
@@ -67,7 +83,7 @@ Locking is local session protection and does not replace remote account permissi
 
 Broadcast input targets only selected open SSH terminals. Verify every host, user, and current directory; send a harmless `pwd` first. One mistaken command can otherwise affect every selected server.
 
-Multiline paste outside bracketed-paste mode and high-risk commands trigger confirmation. Right- or middle-click paste and selection copy are configurable. Review clipboard text containing newlines, pipes, redirection, or deletion in a text editor first.
+Multiline paste outside bracketed-paste mode and high-risk commands trigger confirmation. The paste review dialog lets you edit the text or send it line by line. Right- or middle-click paste and selection copy are configurable. Review clipboard text containing newlines, pipes, redirection, or deletion in a text editor first.
 
 ## Reuse commands and highlighting
 
@@ -79,7 +95,7 @@ Custom regular-expression highlighting and presets can emphasize errors or ident
 
 Shell integration can synchronize the SSH current directory with the file manager. Runtime SSH shell integration senses prompts, command start/end, and the current directory in real time without writing to the remote host, laying the groundwork for automation and script hints. Compatibility depends on the remote shell and initialization; do not fabricate path state when synchronization fails. The terminal shows connection status and auth prompts inline instead of interrupting with popups. Clipboard images can be uploaded to SSH and their path inserted into the terminal; confirm destination, permissions, and sensitivity before upload.
 
-Server monitoring deployment and privacy are covered in the remote-access chapter.
+Server monitoring and privacy are covered in the remote-access chapter.
 
 ## Telnet connections
 

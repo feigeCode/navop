@@ -1,6 +1,6 @@
 # 原生资源工作台
 
-原生资源工作台（Native Resource Workbench）是 Navop 为扩展提供的一类原生界面：扩展在 manifest 中声明资源、集合、表格、详情页和操作，宿主用原生 GPUI 渲染出可浏览、可操作的工作台，而不需要扩展自带 UI。首个使用该机制发布的是 Docker 扩展。
+原生资源工作台（Native Resource Workbench）是 Navop 为扩展提供的一类原生界面：扩展在 manifest 中声明资源、集合、表格、详情页和操作，宿主用原生 GPUI 渲染出可浏览、可操作的工作台，而不需要扩展自带 UI。Docker、Elasticsearch 等扩展使用该机制发布。
 
 ![扩展市场](/images/extension.png)
 
@@ -12,13 +12,14 @@
 
 ## Docker 工作台
 
-安装 Docker 扩展后，新建 Docker 连接并填写本机 socket（默认 `unix://~/.docker/run/docker.sock`，也可用 `unix:///var/run/docker.sock`）。工作台提供：
+安装 Docker 扩展后，新建 Docker 连接并填写本地 socket（默认 `unix://~/.docker/run/docker.sock`，也可用 `unix:///var/run/docker.sock`），或改用远程 TCP/TLS 守护进程；Unix socket 仅 macOS/Linux 支持，Windows 应使用远程连接。工作台提供：
 
-- 引擎概览：容器、镜像、磁盘与运行时资源用量。
-- 容器：列表浏览，启动、停止、重启和删除，查看进程与文件系统变更。
+- 引擎概览：引擎版本，容器、镜像、卷与网络数量，以及磁盘与运行时资源用量。
+- 容器：列表浏览，启动、停止、重启和删除；详情中可查看进程、统计、文件系统变更、挂载与 inspect。
 - 镜像：镜像列表与异步拉取。
-- 日志：容器日志查看器，支持 tail 行数控制。
-- 终端：进入容器执行命令的 exec 终端。
+- 卷与网络：浏览和查看详情。
+- 日志：容器日志查看器，支持 tail 行数和跟随刷新。
+- 终端：进入容器执行命令的 exec 终端，内嵌的是宿主原生终端而不是模拟终端。
 
 删除容器、停止运行中的服务等操作会影响真实环境，执行前请确认目标容器与影响范围。
 
