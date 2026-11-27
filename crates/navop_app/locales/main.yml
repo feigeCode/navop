@@ -66,6 +66,22 @@ Common:
     en: "Unable to open the JumpServer link: %{error}"
     zh-CN: "无法打开 JumpServer 链接：%{error}"
     zh-HK: "無法開啟 JumpServer 連結：%{error}"
+  jump_rdp_password_title:
+    en: "Connect to %{name}"
+    zh-CN: "连接到 %{name}"
+    zh-HK: "連線到 %{name}"
+  jump_rdp_password_description:
+    en: "JumpServer links do not include the RDP password. Enter the asset account password for %{address}; leave it empty to connect with an empty password."
+    zh-CN: "JumpServer 链接不包含 RDP 密码。请填写 %{address} 上资产账号的密码；留空则用空密码连接。"
+    zh-HK: "JumpServer 連結不包含 RDP 密碼。請填寫 %{address} 上資產帳號的密碼；留空則以空白密碼連線。"
+  jump_rdp_password_hint:
+    en: "Leave empty to let the RDP gateway verify an empty password."
+    zh-CN: "留空表示交给 RDP 网关校验空密码。"
+    zh-HK: "留空表示交由 RDP 閘道校驗空白密碼。"
+  jump_rdp_connect:
+    en: Connect
+    zh-CN: 连接
+    zh-HK: 連線
   connection_deeplink_failed:
     en: "Unable to open the connection link: %{error}"
     zh-CN: "无法打开连接链接：%{error}"
@@ -3114,6 +3130,54 @@ Settings:
         en: Open the JumpServer asset carried by the link in a temporary SSH session. The one-time token is used for this session only and never saved.
         zh-CN: 用链接里的一次性 token 临时打开 JumpServer 资产。token 只用于本次会话，不会保存。
         zh-HK: 用連結裡的一次性 token 臨時開啟 JumpServer 資產。token 只用於本次工作階段，不會儲存。
+      status_checking:
+        en: Checking the system's current handler…
+        zh-CN: 正在检测系统当前的接管状态…
+        zh-HK: 正在偵測系統目前的接管狀態…
+      status_taken:
+        en: Handled by Navop — %{scheme} links open here.
+        zh-CN: 已接管：系统会把 %{scheme} 链接交给 Navop。
+        zh-HK: 已接管：系統會把 %{scheme} 連結交給 Navop。
+      status_other:
+        en: Not handled by Navop. The system currently gives %{scheme} to %{app}.
+        zh-CN: 未接管：系统当前把 %{scheme} 交给 %{app}。
+        zh-HK: 未接管：系統目前把 %{scheme} 交給 %{app}。
+      status_unset:
+        en: Not handled by Navop. No application claims %{scheme} yet.
+        zh-CN: 未接管：系统里还没有应用认领 %{scheme}。
+        zh-HK: 未接管：系統裡還沒有應用程式認領 %{scheme}。
+      status_unknown:
+        en: Could not read the system setting (%{error}).
+        zh-CN: 读取系统设置失败（%{error}）。
+        zh-HK: 讀取系統設定失敗（%{error}）。
+      status_disabled:
+        en: Off. Navop ignores %{scheme} links and does not change the system handler.
+        zh-CN: 已关闭：Navop 不处理 %{scheme} 链接，也不会改动系统设置。
+        zh-HK: 已關閉：Navop 不處理 %{scheme} 連結，也不會改動系統設定。
+      status_disabled_but_taken:
+        en: Off. The system still points %{scheme} at Navop; links will be rejected until this is turned back on.
+        zh-CN: 已关闭：系统目前仍把 %{scheme} 指向 Navop，重新打开前这类链接会被拒绝。
+        zh-HK: 已關閉：系統目前仍把 %{scheme} 指向 Navop，重新開啟前這類連結會被拒絕。
+      status_development:
+        en: Development or portable build. Navop does not touch the system handler here.
+        zh-CN: 开发态或便携版运行，不会改写系统的链接处理程序。
+        zh-HK: 開發態或可攜版執行，不會改寫系統的連結處理程式。
+      overwrite_title:
+        en: Overwrite the system handler?
+        zh-CN: 要覆写本机的链接处理程序吗？
+        zh-HK: 要覆寫本機的連結處理程式嗎？
+      overwrite_desc:
+        en: Turning this on makes Navop the default handler for %{scheme} on this computer. If another application (for example the JumpServer client or your terminal) handles it today, that configuration is overwritten, and links will open in Navop from then on.
+        zh-CN: 打开后，Navop 会成为本机 %{scheme} 的默认处理程序。如果这个协议当前由别的应用（例如 JumpServer 官方客户端或你的终端）接管，该配置会被覆写，之后这类链接都会在 Navop 里打开。
+        zh-HK: 開啟後，Navop 會成為本機 %{scheme} 的預設處理程式。如果這個協定目前由別的應用程式（例如 JumpServer 官方用戶端或你的終端機）接管，該設定會被覆寫，之後這類連結都會在 Navop 裡開啟。
+      overwrite_ok:
+        en: Overwrite and turn on
+        zh-CN: 覆写并开启
+        zh-HK: 覆寫並開啟
+      overwrite_cancel:
+        en: Cancel
+        zh-CN: 取消
+        zh-HK: 取消
 
     # 语言设置
     Language:

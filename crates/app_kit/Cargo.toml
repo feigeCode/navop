@@ -55,6 +55,9 @@ notify-rust = "4.18"
 # clients with legacy clients`），表现为通知静默丢失。
 [target.'cfg(target_os = "macos")'.dependencies]
 notify-rust = { version = "4.18", default-features = false, features = ["preview-macos-un"] }
+# `jms://` 等 URL scheme 的默认处理程序只能通过 LaunchServices 的 C API 读写，
+# 没有命令行等价物（`lsregister -f` 只是登记 bundle，不指定默认处理器）。
+core-foundation = "0.10"
 # 读取 `UNAuthorizationStatus`，用于在设置页区分「未授权 / 已拒绝」，给用户可见提示。
 mac-usernotifications = "0.3"
 

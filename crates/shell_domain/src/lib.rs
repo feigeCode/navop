@@ -561,8 +561,7 @@ impl ConnectionOpener for RemoteDesktopConnectionOpener {
         let Some(options) = remote_desktop_options(&connection, protocol) else {
             return true;
         };
-        let connection_id = connection.id.unwrap_or(0);
-        let tab_id = remote_desktop_tab_id(protocol, connection_id);
+        let tab_id = remote_desktop_tab_id(protocol, connection.id);
         let tab_index = home.next_tab_index(&connection.name, cx);
         let title = connection.name.clone();
         let tab_kind = remote_desktop_tab_kind(protocol);
@@ -609,8 +608,31 @@ fn remote_desktop_tab_kind(protocol: RemoteDesktopProtocol) -> &'static str {
     }
 }
 
-fn remote_desktop_tab_id(protocol: RemoteDesktopProtocol, connection_id: i64) -> String {
-    format!("{}-{}", remote_desktop_tab_kind(protocol), connection_id)
+/// 已保存的连接按 id 复用同一个标签页；JumpServer 深链接这类临时会话没有 id，
+/// 必须每次开新标签页，否则第二个资产会命中已有的 `rdp-0` 被并进第一条会话。
+fn remote_desktop_tab_id(protocol: RemoteDesktopProtocol, connection_id: Option<i64>) -> String {
+    let kind = remote_desktop_tab_kind(protocol);
+    match connection_id {
+        Some(connection_id) => format!("{kind}-{connection_id}"),
+        // 同一毫秒里连续点两个链接也会撞车，所以再叠一个进程内自增序号。
+        None => format!(
+            "{kind}-ephemeral-{}-{}",
+            unix_millis(),
+            next_ephemeral_seq()
+        ),
+    }
+}
+
+fn unix_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn next_ephemeral_seq() -> u64 {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 fn port_forwarding_config(
@@ -708,17 +730,26 @@ mod tests {
     #[test]
     fn remote_desktop_tab_id_is_stable_per_connection_and_protocol() {
         assert_eq!(
-            remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, 42),
+            remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, Some(42)),
             "rdp-42"
         );
         assert_eq!(
-            remote_desktop_tab_id(RemoteDesktopProtocol::Vnc, 42),
+            remote_desktop_tab_id(RemoteDesktopProtocol::Vnc, Some(42)),
             "vnc-42"
         );
         assert_ne!(
-            remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, 42),
-            remote_desktop_tab_id(RemoteDesktopProtocol::Vnc, 42)
+            remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, Some(42)),
+            remote_desktop_tab_id(RemoteDesktopProtocol::Vnc, Some(42))
         );
+    }
+
+    #[test]
+    fn ephemeral_remote_desktop_sessions_get_a_fresh_tab_each_time() {
+        let first = remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, None);
+        let second = remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, None);
+        assert!(first.starts_with("rdp-ephemeral-"), "{first}");
+        assert_ne!(first, second);
+        assert_ne!(first, "rdp-0");
     }
 
     #[test]

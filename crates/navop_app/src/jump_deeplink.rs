@@ -1,5 +1,5 @@
 //! JumpServer `jms://` 深链接：把网页端签发的一次性 connection token 变成
-//! 一条临时 SSH 会话。
+//! 一条临时 SSH / RDP 会话。
 //!
 //! 链接形如 `jms://<base64url(JSON)>`，payload 由 JumpServer 前端生成：
 //!
@@ -13,27 +13,49 @@
 //! }
 //! ```
 //!
-//! 打开方式与官方客户端一致：直接以 `JMS-<token-id>` / `<token-value>` SSH 到
-//! `endpoint`，由网关上的 Koko 用 token 桥接到目标资产；不写入连接仓库，也不
-//! 保存密码，链接本身也不会出现在日志或错误提示里。
+//! SSH 打开方式与官方客户端一致：直接以 `JMS-<token-id>` / `<token-value>`
+//! SSH 到 `endpoint`，由网关上的 Koko 用 token 桥接到目标资产。
+//!
+//! RDP 走原生客户端（Razor）时 payload 里没有 `endpoint`，网关地址和登录用户名
+//! 都在 `.rdp` 文件内容里：
+//!
+//! ```json
+//! {
+//!   "protocol": "rdp",
+//!   "token": { "id": "token-id", "value": "token-secret" },
+//!   "file": { "name": "user-Asset.rdp", "content": "full address:s:gw:3389\nusername:s:user|token-id\n" }
+//! }
+//! ```
+//!
+//! 两种链接都不写入连接仓库，也不保存密码；链接本身不会出现在日志或错误提示里。
 
 use anyhow::{Context as _, Result, bail};
 use base64::Engine as _;
-use gpui::{App, Window};
-use gpui_component::{WindowExt as _, notification::Notification};
+use gpui::{App, AppContext as _, Entity, ParentElement as _, Styled as _, Window, div, px};
+use gpui_component::{
+    ActiveTheme as _, WindowExt as _,
+    dialog::DialogButtonProps,
+    input::{Input, InputState},
+    notification::Notification,
+    v_flex,
+};
 use one_core::settings::AppSettings;
 use one_core::storage::{
-    PreferredOpenMode, SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding,
-    StoredTerminalType,
+    PreferredOpenMode, RemoteDesktopBackendPreference, RemoteDesktopParams, RemoteDesktopProtocol,
+    SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType,
 };
 use one_core::tab_container::TabOpenMode;
 use rust_i18n::t;
 use serde_json::Value;
 
+use crate::home_tab::HomePage;
 use crate::navop_app::GlobalHomePage;
 
 /// JumpServer 深链接协议前缀（大小写不敏感）。
 pub(crate) const JUMP_DEEPLINK_PREFIX: &str = "jms://";
+
+/// RDP 默认端口：`.rdp` 的 `full address` 没写端口时使用。
+const DEFAULT_RDP_PORT: u16 = 3389;
 
 /// 深链接里声明的协议。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +63,8 @@ pub(crate) enum JumpProtocol {
     Ssh,
     Sftp,
     Telnet,
+    /// Windows 资产的 RDP 会话（JumpServer 原生客户端走 Razor 网关）。
+    Rdp,
 }
 
 impl JumpProtocol {
@@ -49,8 +73,14 @@ impl JumpProtocol {
             "ssh" => Ok(Self::Ssh),
             "sftp" => Ok(Self::Sftp),
             "telnet" => Ok(Self::Telnet),
+            "rdp" => Ok(Self::Rdp),
             other => bail!("不支持的 JumpServer 协议: {other}"),
         }
+    }
+
+    /// RDP 需要在打开前向用户索要密码（JumpServer 的 `.rdp` 里不含密码）。
+    fn needs_password_prompt(self) -> bool {
+        self == Self::Rdp
     }
 }
 
@@ -63,6 +93,8 @@ pub(crate) struct JumpLink {
     pub port: u16,
     pub token_id: String,
     pub token_value: String,
+    /// RDP 链接的 `username:s`，JumpServer 写的是 `<登录用户名>|<token-id>`。
+    pub rdp_username: Option<String>,
 }
 
 /// 判断字符串是否是 JumpServer 深链接。
@@ -105,15 +137,6 @@ pub(crate) fn parse_jump_deeplink(raw: &str) -> Result<JumpLink> {
         .or_else(|| payload.get("value").and_then(string_value))
         .context("jms:// payload 缺少 token value")?;
 
-    let host = payload
-        .pointer("/endpoint/host")
-        .and_then(string_value)
-        .context("jms:// payload 缺少 endpoint host")?;
-    let port = payload
-        .pointer("/endpoint/port")
-        .and_then(parse_port)
-        .context("jms:// payload 的 endpoint port 无效")?;
-
     let asset_name = payload
         .pointer("/asset/name")
         .and_then(string_value)
@@ -122,7 +145,61 @@ pub(crate) fn parse_jump_deeplink(raw: &str) -> Result<JumpLink> {
         .get("name")
         .and_then(string_value)
         .filter(|name| !name.is_empty());
-    let label = asset_name.or(name).unwrap_or_else(|| host.clone());
+    let file_name = payload
+        .pointer("/file/name")
+        .and_then(string_value)
+        .filter(|name| !name.is_empty());
+
+    let (host, port, rdp_username) = if protocol == JumpProtocol::Rdp {
+        // 原生客户端（Razor）的 RDP payload 只有 `.rdp` 文件内容：网关地址写在
+        // `full address:s`，登录用户名写在 `username:s`（`<用户>|<token-id>`）。
+        // 少数部署也会直接给 `endpoint`，此时退化到与 SSH 相同的取法。
+        let content = payload.pointer("/file/content").and_then(string_value);
+        let rdp_username = content
+            .as_deref()
+            .and_then(|content| rdp_option(content, "username"));
+        let address = content
+            .as_deref()
+            .and_then(|content| rdp_option(content, "full address"));
+        let (host, port) = match address {
+            Some(address) => split_rdp_address(&address)
+                .with_context(|| format!("jms:// RDP 链接的网关地址无效: {address}"))?,
+            None => {
+                let host = payload
+                    .pointer("/endpoint/host")
+                    .and_then(string_value)
+                    .context("jms:// RDP 链接缺少 .rdp 文件内容和 endpoint")?;
+                let port = payload
+                    .pointer("/endpoint/port")
+                    .and_then(parse_port)
+                    .unwrap_or(DEFAULT_RDP_PORT);
+                (host, port)
+            }
+        };
+        (host, port, rdp_username)
+    } else {
+        let host = payload
+            .pointer("/endpoint/host")
+            .and_then(string_value)
+            .context("jms:// payload 缺少 endpoint host")?;
+        let port = payload
+            .pointer("/endpoint/port")
+            .and_then(parse_port)
+            .context("jms:// payload 的 endpoint port 无效")?;
+        (host, port, None)
+    };
+
+    let label = asset_name
+        .or(name)
+        .or_else(|| {
+            file_name.map(|name| {
+                name.strip_suffix(".rdp")
+                    .or_else(|| name.strip_suffix(".RDP"))
+                    .unwrap_or(&name)
+                    .to_string()
+            })
+        })
+        .unwrap_or_else(|| host.clone());
 
     Ok(JumpLink {
         protocol,
@@ -131,7 +208,29 @@ pub(crate) fn parse_jump_deeplink(raw: &str) -> Result<JumpLink> {
         port,
         token_id,
         token_value,
+        rdp_username,
     })
+}
+
+/// 从 `.rdp` 文本里取字符串键：JumpServer 逐行写成 `key:s:value`。
+fn rdp_option(content: &str, key: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        let value = line.trim().strip_prefix(key)?.strip_prefix(":s:")?.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+/// 解析 `.rdp` 的 `full address`：`host:port`，没写端口时按 RDP 默认端口算。
+fn split_rdp_address(address: &str) -> Option<(String, u16)> {
+    let address = address.trim();
+    match address.rsplit_once(':') {
+        Some((host, port)) => {
+            let port = port.trim().parse::<u16>().ok().filter(|port| *port != 0)?;
+            let host = host.trim();
+            (!host.is_empty()).then(|| (host.to_string(), port))
+        }
+        None => (!address.is_empty()).then(|| (address.to_string(), DEFAULT_RDP_PORT)),
+    }
 }
 
 fn decode_payload(encoded: &str) -> Result<Value> {
@@ -165,9 +264,47 @@ fn parse_port(value: &Value) -> Option<u16> {
     u16::try_from(port).ok().filter(|port| *port != 0)
 }
 
-/// 把深链接转成一条不落库的 SSH 连接：用户名 `JMS-<token-id>`、密码为
-/// token 值，认证由网关上的 Koko 完成。
-pub(crate) fn connection_from_link(link: &JumpLink) -> StoredConnection {
+/// 把深链接转成一条不落库的连接。
+///
+/// SSH/SFTP/Telnet 用 `JMS-<token-id>` / `<token-value>` 交给网关上的 Koko 认证；
+/// RDP 连的是 JumpServer 网关本身，`password` 由调用方从对话框取（链接里没有）。
+pub(crate) fn connection_from_link(link: &JumpLink, password: Option<String>) -> StoredConnection {
+    if link.protocol == JumpProtocol::Rdp {
+        rdp_connection_from_link(link, password)
+    } else {
+        ssh_connection_from_link(link)
+    }
+}
+
+/// RDP：网关地址 + `.rdp` 里的登录用户名，密码留空时按空密码走 CredSSP。
+fn rdp_connection_from_link(link: &JumpLink, password: Option<String>) -> StoredConnection {
+    let params = RemoteDesktopParams {
+        protocol: RemoteDesktopProtocol::Rdp,
+        host: link.host.clone(),
+        port: link.port,
+        // JumpServer 的 RDP 用户名是 `<登录用户>|<token-id>`；payload 里没有时
+        // 退化到官方客户端的 `JMS-<token-id>` 写法，让网关自己给出提示。
+        username: link
+            .rdp_username
+            .clone()
+            .or_else(|| Some(format!("JMS-{}", link.token_id))),
+        password,
+        credential_reference: None,
+        domain: None,
+        read_only: false,
+        audio_playback: false,
+        proxy: None,
+        backend_preference: RemoteDesktopBackendPreference::default(),
+        rdp: None,
+    };
+    let mut connection = StoredConnection::new_remote_desktop(link.label.clone(), params, None);
+    // 临时会话不参与云同步；id 为 None，打开后自动成为一次性标签页。
+    connection.sync_enabled = false;
+    connection
+}
+
+/// SSH 系：用户名 `JMS-<token-id>`、密码为 token 值，认证由 Koko 完成。
+fn ssh_connection_from_link(link: &JumpLink) -> StoredConnection {
     let params = SshParams {
         host: link.host.clone(),
         port: link.port,
@@ -248,7 +385,6 @@ pub(crate) fn open_jump_deeplink(raw: &str, window: &mut Window, cx: &mut App) {
 
 fn try_open_jump_deeplink(raw: &str, window: &mut Window, cx: &mut App) -> Result<()> {
     let link = parse_jump_deeplink(raw)?;
-    let connection = connection_from_link(&link);
     tracing::info!(
         host = %link.host,
         port = link.port,
@@ -260,6 +396,86 @@ fn try_open_jump_deeplink(raw: &str, window: &mut Window, cx: &mut App) -> Resul
         .map(|global| global.home_page.clone())
         .context("home page is not ready")?;
     window.activate_window();
+    if link.protocol.needs_password_prompt() {
+        // JumpServer 的 RDP 链接里没有密码（官方客户端同样由用户自己填），
+        // 先问一次再开会话；留空按空密码连接，交给网关去校验。
+        prompt_rdp_password(link, home, window, cx);
+        return Ok(());
+    }
+    open_link_connection(connection_from_link(&link, None), home, window, cx);
+    Ok(())
+}
+
+/// 弹「RDP 密码」对话框，确认后打开会话。
+fn prompt_rdp_password(link: JumpLink, home: Entity<HomePage>, window: &mut Window, cx: &mut App) {
+    let name = link.label.clone();
+    let address = format!("{}:{}", link.host, link.port);
+    tracing::info!(
+        host = %link.host,
+        port = link.port,
+        "asking for the JumpServer RDP password"
+    );
+    let password_input = cx.new(|cx| InputState::new(window, cx).masked(true));
+    let input_for_ok = password_input.clone();
+    window.open_alert_dialog(cx, move |alert, _window, _cx| {
+        alert
+            .title(t!("Common.jump_rdp_password_title", name = name.clone()).to_string())
+            .description(
+                t!(
+                    "Common.jump_rdp_password_description",
+                    name = name.clone(),
+                    address = address.clone()
+                )
+                .to_string(),
+            )
+            .confirm()
+            .width(px(420.))
+            .button_props(
+                DialogButtonProps::default()
+                    .ok_text(t!("Common.jump_rdp_connect").to_string())
+                    .cancel_text(t!("Common.cancel").to_string())
+                    .show_cancel(true),
+            )
+            .content({
+                let password_input = password_input.clone();
+                move |content, _window, cx| {
+                    content.child(
+                        v_flex().gap_2().child(Input::new(&password_input)).child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("Common.jump_rdp_password_hint").to_string()),
+                        ),
+                    )
+                }
+            })
+            .on_ok({
+                // 对话框的 build 闭包是 `Fn`（每次重绘都会调用），所以这里每次
+                // 都重新克隆一份，不能把捕获的值移出去。
+                let link = link.clone();
+                let home = home.clone();
+                let input_for_ok = input_for_ok.clone();
+                move |_, window, cx| {
+                    let password = input_for_ok.read(cx).value().to_string();
+                    let password = (!password.is_empty()).then_some(password);
+                    open_link_connection(
+                        connection_from_link(&link, password),
+                        home.clone(),
+                        window,
+                        cx,
+                    );
+                    true
+                }
+            })
+    });
+}
+
+fn open_link_connection(
+    connection: StoredConnection,
+    home: Entity<HomePage>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     window.defer(cx, move |window, cx| {
         home.update(cx, |home, cx| {
             if !app_kit::registry().open_connection(
@@ -283,7 +499,6 @@ fn try_open_jump_deeplink(raw: &str, window: &mut Window, cx: &mut App) -> Resul
             }
         });
     });
-    Ok(())
 }
 
 #[cfg(test)]
@@ -383,12 +598,12 @@ mod tests {
     #[test]
     fn rejects_unsupported_protocol() {
         let payload = r#"{
-            "protocol": "rdp",
+            "protocol": "vnc",
             "token": { "id": "id", "value": "value" },
             "endpoint": { "host": "gw.example.com", "port": 2222 }
         }"#;
         let error = parse_jump_deeplink(&format!("jms://{}", encode(payload))).expect_err("应拒绝");
-        assert!(format!("{error:#}").contains("rdp"));
+        assert!(format!("{error:#}").contains("vnc"));
     }
 
     #[test]
@@ -400,7 +615,7 @@ mod tests {
     #[test]
     fn builds_ephemeral_ssh_connection() {
         let link = parse_jump_deeplink(&format!("jms://{}", encode(SAMPLE))).expect("应解析成功");
-        let connection = connection_from_link(&link);
+        let connection = connection_from_link(&link, None);
         assert_eq!(connection.id, None);
         assert!(!connection.sync_enabled);
         assert_eq!(connection.name, "Production Server");
@@ -430,10 +645,113 @@ mod tests {
             "endpoint": { "host": "gw.example.com", "port": 2222 }
         }"#;
         let link = parse_jump_deeplink(&format!("jms://{}", encode(payload))).expect("应解析成功");
-        let connection = connection_from_link(&link);
+        let connection = connection_from_link(&link, None);
         assert_eq!(
             connection.preferred_open_mode,
             Some(PreferredOpenMode::DualPane)
         );
+    }
+
+    /// RDP 链接（JumpServer 原生客户端 / Razor）：网关地址和用户名都在 `.rdp`
+    /// 文件内容里，payload 里没有 endpoint。
+    const RDP_SAMPLE: &str = r#"{
+        "version": 2,
+        "protocol": "rdp",
+        "name": "admin@WinServer[2026-11-27]",
+        "token": { "id": "token-id", "value": "token-secret" },
+        "file": {
+            "name": "admin-WinServer.rdp",
+            "content": "full address:s:rdp-gw.example.com:3389\nusername:s:admin|token-id\nsession bpp:i:24\n"
+        }
+    }"#;
+
+    #[test]
+    fn parses_rdp_payload_from_the_rdp_file() {
+        let link =
+            parse_jump_deeplink(&format!("jms://{}", encode(RDP_SAMPLE))).expect("应解析成功");
+        assert_eq!(link.protocol, JumpProtocol::Rdp);
+        assert!(link.protocol.needs_password_prompt());
+        assert_eq!(link.host, "rdp-gw.example.com");
+        assert_eq!(link.port, 3389);
+        assert_eq!(link.token_id, "token-id");
+        assert_eq!(link.rdp_username.as_deref(), Some("admin|token-id"));
+        assert_eq!(link.label, "admin@WinServer[2026-11-27]");
+    }
+
+    #[test]
+    fn rdp_file_name_labels_the_link_when_the_payload_has_no_name() {
+        let payload = r#"{
+            "protocol": "rdp",
+            "token": { "id": "token-id", "value": "token-secret" },
+            "file": {
+                "name": "admin-WinServer.rdp",
+                "content": "full address:s:rdp-gw.example.com:3389\nusername:s:admin|token-id\n"
+            }
+        }"#;
+        let link = parse_jump_deeplink(&format!("jms://{}", encode(payload))).expect("应解析成功");
+        assert_eq!(link.label, "admin-WinServer");
+    }
+
+    #[test]
+    fn rdp_address_without_a_port_uses_the_default_port() {
+        let payload = RDP_SAMPLE.replace("rdp-gw.example.com:3389", "rdp-gw.example.com");
+        let link = parse_jump_deeplink(&format!("jms://{}", encode(&payload))).expect("应解析成功");
+        assert_eq!(link.host, "rdp-gw.example.com");
+        assert_eq!(link.port, 3389);
+    }
+
+    #[test]
+    fn rdp_payload_without_the_rdp_file_falls_back_to_the_endpoint() {
+        let payload = r#"{
+            "protocol": "rdp",
+            "token": { "id": "id", "value": "value" },
+            "endpoint": { "host": "gw.example.com", "port": 3389 }
+        }"#;
+        let link = parse_jump_deeplink(&format!("jms://{}", encode(payload))).expect("应解析成功");
+        assert_eq!(link.host, "gw.example.com");
+        assert_eq!(link.port, 3389);
+        assert_eq!(link.rdp_username, None);
+        let connection = connection_from_link(&link, None);
+        let params: RemoteDesktopParams =
+            serde_json::from_str(&connection.params).expect("params 应是合法 RemoteDesktopParams");
+        assert_eq!(params.username.as_deref(), Some("JMS-id"));
+    }
+
+    #[test]
+    fn rejects_rdp_payload_without_any_gateway_address() {
+        let payload = r#"{
+            "protocol": "rdp",
+            "token": { "id": "id", "value": "value" }
+        }"#;
+        let error = parse_jump_deeplink(&format!("jms://{}", encode(payload))).expect_err("应拒绝");
+        assert!(format!("{error:#}").contains("endpoint"));
+    }
+
+    #[test]
+    fn builds_ephemeral_rdp_connection() {
+        let link =
+            parse_jump_deeplink(&format!("jms://{}", encode(RDP_SAMPLE))).expect("应解析成功");
+        let connection = connection_from_link(&link, Some("asset-password".to_string()));
+        assert_eq!(connection.id, None);
+        assert!(!connection.sync_enabled);
+        assert_eq!(connection.connection_type, ConnectionType::Rdp);
+
+        let params: RemoteDesktopParams =
+            serde_json::from_str(&connection.params).expect("params 应是合法 RemoteDesktopParams");
+        assert_eq!(params.protocol, RemoteDesktopProtocol::Rdp);
+        assert_eq!(params.host, "rdp-gw.example.com");
+        assert_eq!(params.port, 3389);
+        assert_eq!(params.username.as_deref(), Some("admin|token-id"));
+        assert_eq!(params.password.as_deref(), Some("asset-password"));
+    }
+
+    #[test]
+    fn rdp_connection_without_a_password_keeps_it_empty() {
+        let link =
+            parse_jump_deeplink(&format!("jms://{}", encode(RDP_SAMPLE))).expect("应解析成功");
+        let connection = connection_from_link(&link, None);
+        let params: RemoteDesktopParams =
+            serde_json::from_str(&connection.params).expect("params 应是合法 RemoteDesktopParams");
+        assert_eq!(params.password, None);
     }
 }

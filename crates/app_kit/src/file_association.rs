@@ -6,15 +6,15 @@
 
 use anyhow::{Context as _, Result, bail};
 use domain_api::AppIdentity;
-use gpui::{App, AppContext};
+use gpui::{App, AppContext, AsyncApp};
 use one_core::storage::manager::get_config_dir;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const ASSOCIATION_SCHEMA_VERSION: u32 = 3;
-const REGISTRATION_STAMP_FILE: &str = "file-association-registration-v3";
+const ASSOCIATION_SCHEMA_VERSION: u32 = 4;
+const REGISTRATION_STAMP_FILE: &str = "file-association-registration-v4";
 /// 上次写入系统的 URL scheme 清单，用于关闭开关时精确摘除注册。
 const REGISTERED_URL_SCHEMES_FILE: &str = "file-association-schemes-v1";
 /// 反向域名 `app_id` 里不参与 ProgID 的根段：`com.navop.shell` → `NavopShell`。
@@ -144,20 +144,38 @@ pub fn associations_for(identity: &AppIdentity) -> Vec<AssociationSpec> {
 
 /// 注册当前产品的文件关联与 URL 协议；两者都没声明的产品直接跳过。
 pub fn schedule_registration_with_schemes(cx: &mut App, enabled_schemes: Vec<String>) {
+    schedule_registration_with_schemes_and_then(cx, enabled_schemes, |_| {});
+}
+
+/// 与 [`schedule_registration_with_schemes`] 相同，但注册结束（含跳过与失败）后回调。
+///
+/// 设置页要展示「系统当前是否已经把 `jms://` 交给 Navop」，而注册是后台完成的；
+/// 只有等它真正写完再探测，界面里的状态才不会停在探测前的旧值。
+pub fn schedule_registration_with_schemes_and_then(
+    cx: &mut App,
+    enabled_schemes: Vec<String>,
+    on_finished: impl FnOnce(&mut App) + 'static,
+) {
     let Some(identity) = crate::identity() else {
         tracing::debug!("application identity is not configured; skipping file associations");
+        on_finished(cx);
         return;
     };
     if !claims_any_registration(identity) {
         tracing::debug!(
             "product declares no file associations or URL schemes; skipping registration"
         );
+        on_finished(cx);
         return;
     }
-    cx.background_spawn(async move {
+    let task = cx.background_spawn(async move {
         if let Err(error) = ensure_registered(identity, &enabled_schemes) {
             tracing::warn!(error = %error, "file association migration failed");
         }
+    });
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        task.await;
+        cx.update(on_finished);
     })
     .detach();
 }
@@ -507,7 +525,11 @@ fn ensure_windows_registered(
     identity: &AppIdentity,
     schemes: &[&str],
 ) -> Result<()> {
-    if stamp_matches(executable, identity, schemes)? {
+    // 只比 stamp 不够：注册表键可能被第三方安装器/清理工具改掉，而 stamp
+    // 仍然与上次一致，于是永远不会修复。这里再核一遍 `shell\open\command`。
+    if stamp_matches(executable, identity, schemes)?
+        && windows_url_protocols_are_current(executable, schemes)?
+    {
         return Ok(());
     }
     for registry_command in windows_registry_plan(executable, identity, schemes) {
@@ -520,6 +542,46 @@ fn ensure_windows_registered(
     }
     notify_windows_association_changed();
     save_registration_stamp(executable, identity, schemes)
+}
+
+/// 每个启用 scheme 的 `shell\open\command` 是否仍指向当前可执行文件。
+#[cfg(target_os = "windows")]
+fn windows_url_protocols_are_current(executable: &Path, schemes: &[&str]) -> Result<bool> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let expected = format!(r#""{}" "%1""#, executable.to_string_lossy());
+    for scheme in schemes {
+        let output = Command::new("reg.exe")
+            .arg("query")
+            .arg(format!(
+                r"HKCU\Software\Classes\{scheme}\shell\open\command"
+            ))
+            .arg("/ve")
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .context("query registered URL protocol command")?;
+        if !output.status.success() {
+            return Ok(false);
+        }
+        let current =
+            windows_registry_output_default_value(&String::from_utf8_lossy(&output.stdout));
+        if current.as_deref() != Some(expected.as_str()) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// 从 `reg.exe query ... /ve` 的输出里取出默认值。
+#[cfg(any(target_os = "windows", test))]
+fn windows_registry_output_default_value(stdout: &str) -> Option<String> {
+    stdout.lines().find_map(|line| {
+        ["REG_SZ", "REG_EXPAND_SZ"]
+            .into_iter()
+            .find_map(|value_type| line.split_once(value_type))
+            .map(|(_, value)| value.trim().to_string())
+    })
 }
 
 /// 把一个之前由 Navop 写过的 scheme 键从用户注册表里删掉（含子键）。
@@ -716,13 +778,50 @@ fn ensure_linux_registered(
     if desktop_changed || !stamp_current {
         run_optional_refresh("update-desktop-database", &data_dir.join("applications"))?;
     }
+    let desktop_name = format!("{}{LINUX_DESKTOP_SUFFIX}", identity.binary_name);
+    // 启用的 scheme 必须显式认领默认处理器：`xdg-mime default` 会覆盖别的
+    // 应用，否则用户点 `jms://` 时系统会拉起别的程序，表现为「没有接管」。
+    for scheme in schemes {
+        ensure_linux_scheme_default(&format!("x-scheme-handler/{scheme}"), &desktop_name)?;
+    }
     if !stamp_current {
-        let desktop_name = format!("{}{LINUX_DESKTOP_SUFFIX}", identity.binary_name);
-        for mime_type in linux_default_mime_types(identity, schemes) {
+        // 文件关联（.db/.md…）只在没有默认应用时补位，不抢用户已有选择。
+        for mime_type in linux_default_mime_types(identity, &[]) {
             ensure_linux_default_if_missing(&mime_type, &desktop_name)?;
         }
     }
     save_registration_stamp(executable, identity, schemes)
+}
+
+/// URL scheme 的默认处理器不属于用户「已有选择」里的普通文件类型，开关打开
+/// 就是明确要求接管，所以这里不仅补空位，还覆盖指向别的应用的默认值。
+#[cfg(target_os = "linux")]
+fn ensure_linux_scheme_default(mime_type: &str, desktop_name: &str) -> Result<()> {
+    let query = match Command::new("xdg-mime")
+        .args(["query", "default", mime_type])
+        .output()
+    {
+        Ok(query) => query,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tracing::debug!("xdg-mime is unavailable; skipping scheme association");
+            return Ok(());
+        }
+        Err(error) => return Err(error).context("query default scheme application"),
+    };
+    if !query.status.success() {
+        bail!("xdg-mime query failed for {mime_type}: {}", query.status);
+    }
+    if String::from_utf8_lossy(&query.stdout).trim() == desktop_name {
+        return Ok(());
+    }
+    let status = Command::new("xdg-mime")
+        .args(["default", desktop_name, mime_type])
+        .status()
+        .context("set default scheme application")?;
+    if !status.success() {
+        bail!("xdg-mime default failed for {mime_type}: {status}");
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -798,31 +897,149 @@ fn macos_app_bundle_from_executable(executable: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
+mod macos_launch_services {
+    //! LaunchServices 里「某个 URL scheme 的默认处理程序」只能通过 C API 读写。
+    //!
+    //! `lsregister -f <bundle>` 只是把 bundle 登记到 LaunchServices 数据库，
+    //! 让它声明过这个 scheme；**它不会把默认处理程序改成本应用**。默认处理器
+    //! 一旦被别的程序（JumpServer 官方客户端、IntelliJ、其它终端）抢走，
+    //! 只重跑 `lsregister` 永远抢不回来 —— 必须显式调用
+    //! `LSSetDefaultHandlerForURLScheme`。
+
+    use anyhow::{Result, bail};
+    use core_foundation::base::TCFType;
+    use core_foundation::bundle::CFBundle;
+    use core_foundation::string::{CFString, CFStringRef};
+
+    #[link(name = "CoreServices", kind = "framework")]
+    unsafe extern "C" {
+        /// 返回的 CFString 归调用方所有（create rule）。
+        fn LSCopyDefaultHandlerForURLScheme(scheme: CFStringRef) -> CFStringRef;
+        fn LSSetDefaultHandlerForURLScheme(scheme: CFStringRef, handler: CFStringRef) -> i32;
+    }
+
+    /// 当前进程属于哪个 bundle（`com.onetcli.app`）。非 bundle 运行（`cargo run`）返回 `None`。
+    pub(super) fn bundle_identifier() -> Option<String> {
+        let bundle = CFBundle::main_bundle();
+        let info = bundle.info_dictionary();
+        let key = CFString::new("CFBundleIdentifier");
+        info.find(&key)
+            .and_then(|value| value.downcast::<CFString>())
+            .map(|identifier| identifier.to_string())
+    }
+
+    pub(super) fn default_handler(scheme: &str) -> Option<String> {
+        let scheme = CFString::new(scheme);
+        // SAFETY: `scheme` 在调用期间存活；返回值按 create rule 持有，交给
+        // `wrap_under_create_rule` 释放，不会泄漏或多释放。
+        let handler = unsafe { LSCopyDefaultHandlerForURLScheme(scheme.as_concrete_TypeRef()) };
+        if handler.is_null() {
+            return None;
+        }
+        let handler = unsafe { CFString::wrap_under_create_rule(handler) };
+        Some(handler.to_string())
+    }
+
+    pub(super) fn set_default_handler(scheme: &str, handler: &str) -> Result<()> {
+        let scheme = CFString::new(scheme);
+        let handler = CFString::new(handler);
+        // SAFETY: 两个参数都是本次调用期间存活的 CFString。
+        let status = unsafe {
+            LSSetDefaultHandlerForURLScheme(
+                scheme.as_concrete_TypeRef(),
+                handler.as_concrete_TypeRef(),
+            )
+        };
+        if status != 0 {
+            bail!("LSSetDefaultHandlerForURLScheme failed with status {status}");
+        }
+        Ok(())
+    }
+}
+
+/// 当前启用的 scheme 是否都已经由本应用接管（默认处理程序 = 本 bundle）。
+#[cfg(target_os = "macos")]
+fn macos_url_scheme_handlers_are_current(schemes: &[&str]) -> bool {
+    if schemes.is_empty() {
+        return true;
+    }
+    let Some(bundle_id) = macos_launch_services::bundle_identifier() else {
+        // 不在 .app 里（开发态）：没有可比的 bundle id，交给上层继续走常规流程。
+        return false;
+    };
+    schemes.iter().all(|scheme| {
+        macos_launch_services::default_handler(scheme).as_deref() == Some(bundle_id.as_str())
+    })
+}
+
+/// 把启用的 scheme 的默认处理程序显式指回本应用。
+///
+/// 这是「系统根本不把 `jms://` 交给 Navop」的直接修复：注册（登记 bundle）与
+/// 认领默认处理器是两件事，过去只做了前者。
+#[cfg(target_os = "macos")]
+fn macos_claim_url_scheme_handlers(schemes: &[&str]) -> Result<()> {
+    if schemes.is_empty() {
+        return Ok(());
+    }
+    let Some(bundle_id) = macos_launch_services::bundle_identifier() else {
+        tracing::debug!("bundle identifier is unavailable; skipping URL scheme claim");
+        return Ok(());
+    };
+    for scheme in schemes {
+        if macos_launch_services::default_handler(scheme).as_deref() == Some(bundle_id.as_str()) {
+            continue;
+        }
+        match macos_launch_services::set_default_handler(scheme, &bundle_id) {
+            Ok(()) => tracing::info!(
+                scheme = *scheme,
+                bundle_id = %bundle_id,
+                "claimed URL scheme default handler"
+            ),
+            Err(error) => tracing::warn!(
+                scheme = *scheme,
+                bundle_id = %bundle_id,
+                error = %error,
+                "failed to claim URL scheme default handler"
+            ),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 fn ensure_macos_registered(
     executable: &Path,
     identity: &AppIdentity,
     schemes: &[&str],
 ) -> Result<()> {
-    if stamp_matches(executable, identity, schemes)? {
+    let stamp_current = stamp_matches(executable, identity, schemes)?;
+    let handlers_current = macos_url_scheme_handlers_are_current(schemes);
+    if stamp_current && handlers_current {
         return Ok(());
     }
-    let app_bundle = match macos_app_bundle_from_executable(executable) {
-        Ok(app_bundle) => app_bundle,
-        Err(error) => {
-            tracing::debug!(%error, "skipping LaunchServices registration outside an app bundle");
-            return Ok(());
+    if !stamp_current {
+        let app_bundle = match macos_app_bundle_from_executable(executable) {
+            Ok(app_bundle) => app_bundle,
+            Err(error) => {
+                tracing::debug!(%error, "skipping LaunchServices registration outside an app bundle");
+                // 仍然尝试认领默认处理器：即使当前可执行文件不在 .app 内，
+                // `main_bundle` 也可能解析到宿主应用。
+                macos_claim_url_scheme_handlers(schemes)?;
+                return Ok(());
+            }
+        };
+        const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+        let status = Command::new(LSREGISTER)
+            .arg("-f")
+            .arg(&app_bundle)
+            .status()
+            .context("refresh LaunchServices file associations")?;
+        if !status.success() {
+            bail!("lsregister failed with status {status}");
         }
-    };
-    const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
-    let status = Command::new(LSREGISTER)
-        .arg("-f")
-        .arg(&app_bundle)
-        .status()
-        .context("refresh LaunchServices file associations")?;
-    if !status.success() {
-        bail!("lsregister failed with status {status}");
+        save_registration_stamp(executable, identity, schemes)?;
     }
-    save_registration_stamp(executable, identity, schemes)
+    macos_claim_url_scheme_handlers(schemes)
 }
 
 fn write_if_changed(path: &Path, contents: &str) -> Result<bool> {
@@ -839,6 +1056,161 @@ fn write_if_changed(path: &Path, contents: &str) -> Result<bool> {
     fs::write(path, contents)
         .with_context(|| format!("write association file {}", path.display()))?;
     Ok(true)
+}
+
+/// 某个 URL scheme 在系统里的默认处理程序探测结果。
+///
+/// `handler` 是系统当前指给这个 scheme 的标识（各平台含义不同：macOS 是
+/// bundle id，Windows 是可执行文件路径，Linux 是 `.desktop` 文件名）；
+/// `expected` 是本应用接管时会写入的标识，`None` 表示当前进程不是安装形态
+/// （例如 `cargo run`），此时无法判断是否已接管。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UrlSchemeHandlerProbe {
+    /// scheme 本身，例如 `jms`。
+    pub scheme: String,
+    /// 系统当前默认处理程序的标识；`None` 表示系统里没有应用认领。
+    pub handler: Option<String>,
+    /// 本应用接管时的标识；`None` 表示当前进程无法判断。
+    pub expected: Option<String>,
+    /// 读取系统设置时的错误信息。
+    pub error: Option<String>,
+}
+
+impl UrlSchemeHandlerProbe {
+    /// 系统是否已经把这个 scheme 交给本应用。
+    pub fn is_claimed_by_self(&self) -> bool {
+        match (&self.handler, &self.expected) {
+            (Some(handler), Some(expected)) => {
+                handler.eq_ignore_ascii_case(expected) || same_executable(handler, expected)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// 探测这些 scheme 当前的系统默认处理程序。
+///
+/// Windows / Linux 会拉起 `reg.exe`、`xdg-mime` 子进程，调用方必须放到后台线程，
+/// 不要直接在 UI 线程上调用。
+pub fn probe_url_scheme_handlers(schemes: &[&str]) -> Vec<UrlSchemeHandlerProbe> {
+    let expected = expected_url_scheme_handler();
+    schemes
+        .iter()
+        .map(|scheme| match current_url_scheme_handler(scheme) {
+            Ok(handler) => UrlSchemeHandlerProbe {
+                scheme: (*scheme).to_string(),
+                handler,
+                expected: expected.clone(),
+                error: None,
+            },
+            Err(error) => UrlSchemeHandlerProbe {
+                scheme: (*scheme).to_string(),
+                handler: None,
+                expected: expected.clone(),
+                error: Some(format!("{error:#}")),
+            },
+        })
+        .collect()
+}
+
+/// 本应用接管 URL scheme 时写入的标识。
+#[cfg(target_os = "macos")]
+fn expected_url_scheme_handler() -> Option<String> {
+    macos_launch_services::bundle_identifier()
+}
+
+#[cfg(target_os = "macos")]
+fn current_url_scheme_handler(scheme: &str) -> Result<Option<String>> {
+    Ok(macos_launch_services::default_handler(scheme))
+}
+
+/// 本应用接管 URL scheme 时写入的标识。
+#[cfg(target_os = "linux")]
+fn expected_url_scheme_handler() -> Option<String> {
+    crate::identity().map(|identity| format!("{}{LINUX_DESKTOP_SUFFIX}", identity.binary_name))
+}
+
+#[cfg(target_os = "linux")]
+fn current_url_scheme_handler(scheme: &str) -> Result<Option<String>> {
+    let mime_type = format!("x-scheme-handler/{scheme}");
+    let output = match Command::new("xdg-mime")
+        .args(["query", "default", &mime_type])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            bail!("xdg-mime is unavailable");
+        }
+        Err(error) => return Err(error).context("query default URL scheme application"),
+    };
+    if !output.status.success() {
+        bail!("xdg-mime query failed for {mime_type}: {}", output.status);
+    }
+    let handler = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!handler.is_empty()).then_some(handler))
+}
+
+/// 本应用接管 URL scheme 时写入的标识。
+#[cfg(target_os = "windows")]
+fn expected_url_scheme_handler() -> Option<String> {
+    std::env::current_exe()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[cfg(target_os = "windows")]
+fn current_url_scheme_handler(scheme: &str) -> Result<Option<String>> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let output = Command::new("reg.exe")
+        .arg("query")
+        .arg(format!(
+            r"HKCU\Software\Classes\{scheme}\shell\open\command"
+        ))
+        .arg("/ve")
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .context("query registered URL protocol command")?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(
+        windows_registry_output_default_value(&String::from_utf8_lossy(&output.stdout))
+            .and_then(|command| command_executable_path(&command)),
+    )
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn expected_url_scheme_handler() -> Option<String> {
+    None
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn current_url_scheme_handler(_scheme: &str) -> Result<Option<String>> {
+    Ok(None)
+}
+
+/// 从 `"C:\Program Files\Navop\navop.exe" "%1"` 里取出可执行文件路径。
+#[cfg(any(target_os = "windows", test))]
+fn command_executable_path(command: &str) -> Option<String> {
+    let trimmed = command.trim();
+    if let Some(rest) = trimmed.strip_prefix('"') {
+        return rest.split('"').next().map(str::to_string);
+    }
+    trimmed.split_whitespace().next().map(str::to_string)
+}
+
+/// 两个标识是否指向同一个可执行文件（大小写、路径分隔符差异都算同一个）。
+fn same_executable(left: &str, right: &str) -> bool {
+    let normalize = |value: &str| {
+        value
+            .trim()
+            .trim_matches('"')
+            .replace('\\', "/")
+            .to_ascii_lowercase()
+    };
+    normalize(left) == normalize(right)
 }
 
 #[cfg(test)]
@@ -1042,8 +1414,8 @@ mod tests {
 
     #[test]
     fn registration_schema_covers_url_schemes() {
-        assert_eq!(3, ASSOCIATION_SCHEMA_VERSION);
-        assert_eq!("file-association-registration-v3", REGISTRATION_STAMP_FILE);
+        assert_eq!(4, ASSOCIATION_SCHEMA_VERSION);
+        assert_eq!("file-association-registration-v4", REGISTRATION_STAMP_FILE);
     }
 
     #[test]
@@ -1136,6 +1508,75 @@ mod tests {
             &["jms", "ssh"]
         )?);
         Ok(())
+    }
+
+    #[test]
+    fn registry_default_value_parsing_finds_the_installed_command() {
+        let stdout = "\r\nHKEY_CURRENT_USER\\Software\\Classes\\jms\\shell\\open\\command\r\n    (Default)    REG_SZ    \"C:\\Program Files\\Navop\\navop.exe\" \"%1\"\r\n\r\n";
+        assert_eq!(
+            Some(r#""C:\Program Files\Navop\navop.exe" "%1""#.to_string()),
+            windows_registry_output_default_value(stdout)
+        );
+        assert_eq!(None, windows_registry_output_default_value(""));
+    }
+
+    #[test]
+    fn command_executable_path_unwraps_the_registered_command() {
+        assert_eq!(
+            Some(r"C:\Program Files\Navop\navop.exe".to_string()),
+            command_executable_path(r#""C:\Program Files\Navop\navop.exe" "%1""#)
+        );
+        assert_eq!(
+            Some(r"C:\Navop\navop.exe".to_string()),
+            command_executable_path(r"C:\Navop\navop.exe %1")
+        );
+        assert_eq!(None, command_executable_path("   "));
+    }
+
+    #[test]
+    fn probe_reports_claimed_only_for_the_same_target() {
+        let claimed = UrlSchemeHandlerProbe {
+            scheme: "jms".to_string(),
+            handler: Some("com.onetcli.app".to_string()),
+            expected: Some("com.onetcli.app".to_string()),
+            error: None,
+        };
+        assert!(claimed.is_claimed_by_self());
+
+        // Windows 的注册表值和 current_exe 可能一个带引号、一个大写、一个用反斜杠。
+        let windows_style = UrlSchemeHandlerProbe {
+            scheme: "jms".to_string(),
+            handler: Some(r#""C:\Program Files\Navop\Navop.EXE""#.to_string()),
+            expected: Some(r"C:/Program Files/Navop/navop.exe".to_string()),
+            error: None,
+        };
+        assert!(windows_style.is_claimed_by_self());
+
+        let other_app = UrlSchemeHandlerProbe {
+            scheme: "jms".to_string(),
+            handler: Some("com.jumpserver.client".to_string()),
+            expected: Some("com.onetcli.app".to_string()),
+            error: None,
+        };
+        assert!(!other_app.is_claimed_by_self());
+
+        // 读不到系统设置时不能误报「已接管」。
+        let unknown = UrlSchemeHandlerProbe {
+            scheme: "jms".to_string(),
+            handler: None,
+            expected: Some("com.onetcli.app".to_string()),
+            error: Some("permission denied".to_string()),
+        };
+        assert!(!unknown.is_claimed_by_self());
+
+        // 非安装形态（没有 expected）同样不算接管。
+        let portable = UrlSchemeHandlerProbe {
+            scheme: "jms".to_string(),
+            handler: Some("com.onetcli.app".to_string()),
+            expected: None,
+            error: None,
+        };
+        assert!(!portable.is_claimed_by_self());
     }
 
     #[test]
