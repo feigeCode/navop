@@ -55,9 +55,29 @@ impl Drop for GlobalPublicMcpRuntime {
 }
 
 pub fn init(cx: &mut App) {
+    init_agent_tools(cx);
     let discovery_path = public_mcp_discovery_path();
     remove_own_discovery(&discovery_path);
     remove_own_discovery(&legacy_public_mcp_discovery_path());
+    let settings_subscription = cx.observe_global::<AppSettings>(reconcile_runtime);
+    cx.set_global(GlobalPublicMcpRuntime {
+        runtime: None,
+        active_config: None,
+        status: PublicMcpRuntimeStatus::Disabled,
+        generation: 0,
+        session_enabled: false,
+        _settings_subscription: settings_subscription,
+    });
+    reconcile_runtime(cx);
+}
+
+/// 注册内置 Agent 的工具面：工具注册表 provider、ACP 工具模式 provider、内置函数。
+///
+/// 三产品共用内置 Agent，但只有全量产品会启动 `public_mcp_runtime` 的 MCP 服务器。
+/// 这里注册的内容不依赖 `GlobalPublicMcpRuntime`（只有 ACP 模式读取的
+/// `session_enabled` 会因此退化为临时会话），所以独立产品也要调用，
+/// 否则内置 Agent 拿到的是一张空工具表。
+pub fn init_agent_tools(cx: &mut App) {
     ai_chat_view::set_plan_tool_registry_provider(cx, agent_runtime_tool_registry);
     ai_chat_view::set_acp_tool_mode_provider(
         cx,
@@ -91,16 +111,6 @@ pub fn init(cx: &mut App) {
     for definition in internal_functions::builtin_definitions() {
         register_internal_function(cx, definition);
     }
-    let settings_subscription = cx.observe_global::<AppSettings>(reconcile_runtime);
-    cx.set_global(GlobalPublicMcpRuntime {
-        runtime: None,
-        active_config: None,
-        status: PublicMcpRuntimeStatus::Disabled,
-        generation: 0,
-        session_enabled: false,
-        _settings_subscription: settings_subscription,
-    });
-    reconcile_runtime(cx);
 }
 
 fn tool_execution_mode_for_permission(

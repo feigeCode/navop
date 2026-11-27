@@ -8,6 +8,37 @@ use one_core::storage::{
     ConnectionRepository, GlobalStorageState, StorageManager, WorkspaceRepository,
 };
 
+/// 独立产品（`navop-shell` / `navop-data`）只注册内置 Agent 的工具面、不启动
+/// `public_mcp_runtime` 的 MCP 服务器。这里在没有 `GlobalPublicMcpRuntime` 的
+/// 前提下断言 `init_agent_tools` 之后内置 Agent 的 plan 工具表非空：之前独立
+/// 产品根本没人注册 provider，`build_plan_tool_registry` 返回空表，表现为
+/// “AI 拿不到任何工具”。
+#[gpui::test]
+fn init_agent_tools_registers_plan_registry_without_public_mcp_runtime(cx: &mut TestAppContext) {
+    let names = cx.update(|cx| {
+        register_connection_repository(cx);
+        cx.set_global(AppSettings::default());
+        assert!(
+            !super::session::runtime_session_enabled(cx),
+            "本用例要模拟没有全量产品 MCP runtime 的进程"
+        );
+
+        super::init_agent_tools(cx);
+
+        ai_chat_view::build_plan_tool_registry(cx)
+            .expect("plan tool registry should build")
+            .names()
+            .into_iter()
+            .map(|name| name.to_string())
+            .collect::<Vec<_>>()
+    });
+
+    assert!(!names.is_empty(), "内置 Agent 必须能拿到工具");
+    assert!(names.contains(&"db_query".to_string()));
+    assert!(names.contains(&"connections_list".to_string()));
+    assert!(names.contains(&"internal_functions_call".to_string()));
+}
+
 #[gpui::test]
 fn agent_runtime_tool_registry_uses_native_database_tools(cx: &mut TestAppContext) {
     let registry = cx.update(|cx| {
