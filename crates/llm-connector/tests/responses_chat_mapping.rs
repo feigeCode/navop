@@ -369,6 +369,17 @@ fn responses_stream_mapper_emits_tool_call_deltas_and_finish_reason() {
         .expect("应带 tool_calls")[0];
     assert_eq!(Some(0), tool_call.index);
     assert_eq!("{\"city\"", tool_call.function.arguments);
+    // 参数分片只携带 arguments。若这里带上 id/type/name，上层会把整条调用当成
+    // 新快照覆盖，导致已捕获的工具名被清空（issue #609 的 `<empty>` 症状）。
+    assert!(
+        tool_call.id.is_empty()
+            && tool_call.call_type.is_empty()
+            && tool_call.function.name.is_empty(),
+        "参数分片不应携带身份字段: id={:?}, type={:?}, name={:?}",
+        tool_call.id,
+        tool_call.call_type,
+        tool_call.function.name
+    );
 
     let completed = event(
         "response.completed",

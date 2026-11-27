@@ -564,6 +564,78 @@ fn partial_argument_deltas_preserve_initial_tool_identity() {
 }
 
 #[test]
+fn responses_stream_argument_deltas_keep_tool_identity() {
+    // 走真实的 `/responses` 流式映射（issue #609）：参数分片带 `type: "function"`，
+    // 之前会被当成新快照整条覆盖，聚合结果变成空 name + 只剩最后一个参数碎片。
+    use llm_connector::responses_chat::ResponsesChatStreamMapper;
+    use llm_connector::types::ResponsesStreamEvent;
+
+    fn responses_event(event_type: &str, data: serde_json::Value) -> ResponsesStreamEvent {
+        ResponsesStreamEvent {
+            event_type: event_type.to_string(),
+            data: data
+                .as_object()
+                .expect("测试事件 data 必须是对象")
+                .clone()
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    let events = [
+        (
+            "response.created",
+            serde_json::json!({"response": {"id": "resp_1", "object": "response"}}),
+        ),
+        (
+            "response.output_item.added",
+            serde_json::json!({
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "ssh_exec",
+                    "arguments": ""
+                }
+            }),
+        ),
+        (
+            "response.function_call_arguments.delta",
+            serde_json::json!({"item_id": "fc_1", "delta": "{\"command\":"}),
+        ),
+        (
+            "response.function_call_arguments.delta",
+            serde_json::json!({"item_id": "fc_1", "delta": "\"ls\""}),
+        ),
+        (
+            "response.function_call_arguments.delta",
+            serde_json::json!({"item_id": "fc_1", "delta": "}"}),
+        ),
+    ];
+
+    let mut mapper = ResponsesChatStreamMapper::new();
+    let mut acc = Vec::new();
+    for (event_type, data) in events {
+        let chunk = mapper
+            .map_event(&responses_event(event_type, data))
+            .expect("Responses 事件应可映射")
+            .expect("每个事件都应产出分片");
+        merge_stream_tool_calls(&mut acc, &chunk);
+    }
+
+    assert_eq!(acc.len(), 1, "同一 item 的调用应聚合为一条");
+    assert_eq!(acc[0].id, "call_1", "参数分片不能清掉已捕获的 call id");
+    assert_eq!(acc[0].call_type, "function");
+    assert_eq!(
+        acc[0].function.name, "ssh_exec",
+        "参数分片夹带 type 时不能把工具名清空"
+    );
+    assert_eq!(acc[0].function.arguments, "{\"command\":\"ls\"}");
+    serde_json::from_str::<serde_json::Value>(&acc[0].function.arguments)
+        .expect("聚合后的参数必须是完整 JSON");
+}
+
+#[test]
 fn anthropic_tool_use_placeholder_is_replaced_by_json_deltas() {
     let mut acc = Vec::new();
     merge_stream_tool_calls(

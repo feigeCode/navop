@@ -36,8 +36,14 @@ fn merge_existing_tool_call(existing: &mut ToolCall, call: &ToolCall) {
     }
 }
 
+/// 参数增量分片只带 arguments。
+///
+/// 判定只看身份字段 `function.name`：工具名只在首个分片出现，后续分片必然为空。
+/// 不能用 `call_type` 判定——它是常量 `"function"`，部分适配器（`/responses` 的
+/// `response.function_call_arguments.delta`）会在参数分片里照样填上，一旦纳入
+/// 判定，整条调用就会被当成新快照覆盖，已捕获的 id/name 全部丢失。
 fn is_argument_delta(call: &ToolCall) -> bool {
-    call.id.is_empty() && call.call_type.is_empty() && call.function.name.is_empty()
+    call.function.name.is_empty()
 }
 
 /// 判断两个流式工具调用分片是否指向同一次调用:优先比 `index`,否则比非空 `id`。

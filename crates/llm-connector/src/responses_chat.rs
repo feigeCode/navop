@@ -470,7 +470,9 @@ impl ResponsesChatStreamMapper {
                     Delta {
                         tool_calls: Some(vec![ToolCall {
                             id: String::new(),
-                            call_type: "function".to_string(),
+                            // 参数分片只携带 arguments：带上 `type` 会让上层
+                            // 把它误判成新快照并覆盖掉已捕获的 id/name。
+                            call_type: String::new(),
                             function: FunctionCall {
                                 name: String::new(),
                                 arguments: delta,
