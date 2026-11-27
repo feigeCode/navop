@@ -24,6 +24,8 @@ anyhow = { workspace = true }
 shell_domain = { workspace = true }
 data_domain = { workspace = true }
 
+navop_nsh_app = { path = "../../crates/navop_nsh_app" }
+
 [lints]
 workspace = true
 

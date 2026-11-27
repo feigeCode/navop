@@ -51,7 +51,10 @@ members = [
     "tools/gpui-rdp-smoke",
     "tools/windows-rdp-probe",
     "crates/navop_app",
+    "crates/navop_nsh",
+    "crates/navop_nsh_app",
     "apps/navop",
+    "apps/navop-nsh",
     "apps/navop-shell",
     "apps/navop-data",
     "crates/ssh",
@@ -216,6 +219,7 @@ shell_domain = { path = "crates/shell_domain" }
 ssh_form = { path = "crates/ssh_form" }
 mongodb_view = {path = "crates/mongodb_view"}
 navop_runtime = { path = "crates/navop_runtime", default-features = false }
+navop_nsh = { path = "crates/navop_nsh" }
 remote_file_editor = { path = "crates/remote_file_editor" }
 remote_image_preview = { path = "crates/remote_image_preview" }
 notes = { path = "crates/notes" }

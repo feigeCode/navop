@@ -103,7 +103,10 @@ fn validate_property(
     if let Some(allowed) = spec.get("enum").and_then(Value::as_array) {
         let value_text = value.to_string();
         let ok = allowed.iter().any(|candidate| {
-            candidate == value || candidate.to_string() == value_text
+            candidate == value
+                || candidate
+                    .as_str()
+                    .is_some_and(|candidate| Some(candidate) == value.as_str())
         });
         if !ok {
             let allowed_text: Vec<String> =

@@ -110,7 +110,6 @@ impl OpenedExtensionResource {
     }
 
     /// 打开资源时观察到的 provider 进程 generation。
-
     #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) fn client(&self) -> &ManagedUniversalPluginClient {
         &self.client
@@ -118,7 +117,6 @@ impl OpenedExtensionResource {
 
     /// 把打开的资源移交给 ResourceSessionOwner;移交后本句柄不再负责关闭。
     /// client 是 Clone 句柄,clone 后本句柄的 Drop 变为 no-op(result 已被取走)。
-
     pub(crate) async fn close(&mut self) {
         let Some(result) = self.result.take() else {
             return;
@@ -194,8 +192,6 @@ fn credential_refs<'a>(
 /// - `credential_refs`(provider 取密句柄)也不放进去 —— provider 侧的取密能力
 ///   不该顺着 UI 通道漏出去。
 ///
-/// 解析失败(非扩展连接 / schema 版本不符)时返回 `Null`:连接上下文是可选
-
 /// 扩展连接里**非敏感**的配置字段（secrets 与取密句柄绝不出现）。
 ///
 /// 页面把它渲染成"当前连接"，宿主工作台/调试也用它 —— 只给 UI 能看的

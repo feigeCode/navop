@@ -32,6 +32,7 @@ impl NshPanel {
     /// `contribution` 是所属 app 的贡献项（入口/后端/能力都取自它）；
     /// `panel` 提供面板 id 与标题。`when` 过滤与排序由宿主锚点在列出
     /// 面板时处理，这里只负责装载。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn open(
         contribution: extension_runtime::RegisteredShellAppContribution,
         panel: extension_runtime::RegisteredPanelContribution,

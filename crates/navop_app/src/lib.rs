@@ -392,7 +392,32 @@ fn install_panic_logger() {
     }));
 }
 
+/// Builds the main window root when the product uses the nsh shell.
+///
+/// Startup, paths, single-instance forwarding, tray, updates and window state
+/// all stay in [`run_with_nsh`]; the closure only supplies the root view.
+pub type NshRootFactory = fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView;
+
 pub fn run_with<P>(product: P, version: &'static str)
+where
+    P: domain_api::Product + 'static,
+{
+    run_with_inner(product, version, None);
+}
+
+/// Starts the complete Navop host with an nsh root view.
+///
+/// This is the shell-flip entry point: tray, single-instance handling, URL and
+/// file startup forwarding, window restoration and update checks come from the
+/// normal product bootstrap, while the main window content is an nsh `AppView`.
+pub fn run_with_nsh<P>(product: P, version: &'static str, root: NshRootFactory)
+where
+    P: domain_api::Product + 'static,
+{
+    run_with_inner(product, version, Some(root));
+}
+
+fn run_with_inner<P>(product: P, version: &'static str, nsh_root: Option<NshRootFactory>)
 where
     P: domain_api::Product + 'static,
 {
@@ -707,7 +732,10 @@ where
                 // 扩展市场与更新都跑在 nsh 宿主里；没有宿主（32 位 Windows）时不排期。
                 #[cfg(feature = "nsh-host")]
                 extension_update::schedule_plugin_update_check(window, cx);
-                let view = cx.new(|cx| NavopApp::new(window, cx));
+                let view: AnyView = match nsh_root {
+                    Some(builder) => builder(window, cx),
+                    None => AnyView::from(cx.new(|cx| NavopApp::new(window, cx))),
+                };
                 let root = cx.new(|cx| Root::new(view, window, cx));
                 system_tray::sync_sessions_from(cx);
                 // 主窗口内的 dialog 与右键菜单一样，都是 GPUI 的 deferred 浮层：
@@ -1497,5 +1525,27 @@ mod sidebar_logo_asset_tests {
             bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
             "侧栏 logo 必须是可解码的 PNG"
         );
+    }
+}
+
+#[cfg(test)]
+mod nsh_shell_contract_tests {
+    /// The nsh shell must share the same lifecycle host as the legacy shell:
+    /// one `gpui_component::Root` keeps dialog/notification/theme facilities
+    /// working, while only the inner view is swapped for an nsh `AppView`.
+    #[test]
+    fn nsh_shell_wraps_the_selected_root_view_in_the_component_root() {
+        let source = include_str!("lib.rs");
+        assert!(source.contains("pub fn run_with_nsh"));
+        assert!(source.contains("let view: AnyView = match nsh_root"));
+        assert!(source.contains("let root = cx.new(|cx| Root::new(view, window, cx));"));
+        assert!(source.contains("pub type NshRootFactory"));
+    }
+
+    #[test]
+    fn default_navop_binary_uses_the_nsh_application_bootstrap() {
+        let source = include_str!("../../../apps/navop/src/main.rs");
+        assert!(source.contains("navop_nsh_app::run(env!(\"CARGO_PKG_VERSION\"));"));
+        assert!(!source.contains("navop_app::run_with("));
     }
 }

@@ -215,6 +215,7 @@ impl NshTab {
     /// 注意：`surface_panel` 要在 `create` 返回后经 `update` 设置——构造
     /// 体内拿不到半成品实体；而装载发生在第一次 `render`，所以这里设置
     /// 一定早于装载，`host.params.surface/panel` 不会错过。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_panel(
         contribution: extension_runtime::RegisteredShellAppContribution,
         panel_id: &str,

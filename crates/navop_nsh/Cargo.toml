@@ -1,0 +1,50 @@
+[package]
+name = "navop_nsh"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+agent_runtime = { workspace = true }
+agent-client-protocol = { workspace = true }
+ai_chat_view = { workspace = true, default-features = false }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+bson = { version = "2.13", features = ["chrono-0_4"] }
+chrono = { workspace = true }
+db = { workspace = true }
+extension-runtime = { workspace = true }
+extension_view = { workspace = true }
+gpui = { workspace = true }
+mongodb-runtime = { workspace = true }
+mongodb_view = { workspace = true }
+notes = { workspace = true }
+one-core = { workspace = true }
+remote_desktop = { workspace = true }
+remote_desktop_view = { workspace = true }
+ssh = { workspace = true }
+nsh-core = { workspace = true }
+nsh-base = { workspace = true, features = ["term"] }
+nsh-platform-gpui = { workspace = true }
+otp = { workspace = true }
+serde_json = { workspace = true }
+polling = "3.11.0"
+port_forwarding = { workspace = true }
+port_forwarding_view = { workspace = true }
+redis-runtime = { workspace = true }
+redis_view = { workspace = true }
+sftp = { workspace = true }
+sftp_view = { workspace = true }
+terminal = { workspace = true }
+terminal_view = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+universal-plugins = { workspace = true, features = ["nsh-host"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+
+[lints]
+workspace = true

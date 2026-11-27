@@ -8340,6 +8340,7 @@ dependencies = [
  "domain_api",
  "gpui-fast",
  "navop_app",
+ "navop_nsh_app",
  "shell_domain",
  "winresource",
 ]
@@ -8354,6 +8355,33 @@ dependencies = [
  "gpui-fast",
  "navop_app",
  "winresource",
+]
+
+[[package]]
+name = "navop-nsh"
+version = "0.24.1"
+dependencies = [
+ "ai_chat_view",
+ "anyhow",
+ "app_kit",
+ "data_domain",
+ "db",
+ "domain_api",
+ "extension-runtime",
+ "gpui-fast",
+ "gpui-fast-platform",
+ "mongodb_view",
+ "navop_app",
+ "navop_nsh",
+ "navop_nsh_app",
+ "notes",
+ "nsh-base",
+ "nsh-core",
+ "nsh-platform-gpui",
+ "one-core",
+ "shell_domain",
+ "ssh",
+ "terminal",
 ]
 
 [[package]]
@@ -8446,6 +8474,72 @@ dependencies = [
  "x11rb",
  "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=110523127440aefb11ce0cf280ae7c5071337ec5)",
  "zeroize",
+]
+
+[[package]]
+name = "navop_nsh"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "agent_runtime",
+ "ai_chat_view",
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bson",
+ "chrono",
+ "db",
+ "extension-runtime",
+ "extension_view",
+ "gpui-fast",
+ "libc",
+ "mongodb-runtime",
+ "mongodb_view",
+ "notes",
+ "nsh-base",
+ "nsh-core",
+ "nsh-platform-gpui",
+ "one-core",
+ "otp",
+ "polling",
+ "port_forwarding",
+ "port_forwarding_view",
+ "redis-runtime",
+ "redis_view",
+ "remote_desktop",
+ "remote_desktop_view",
+ "serde_json",
+ "sftp",
+ "sftp_view",
+ "ssh",
+ "terminal",
+ "terminal_view",
+ "tokio",
+ "universal-plugins",
+]
+
+[[package]]
+name = "navop_nsh_app"
+version = "0.1.0"
+dependencies = [
+ "ai_chat_view",
+ "anyhow",
+ "data_domain",
+ "db",
+ "domain_api",
+ "extension-runtime",
+ "gpui-fast",
+ "mongodb_view",
+ "navop_app",
+ "navop_nsh",
+ "notes",
+ "nsh-base",
+ "nsh-core",
+ "nsh-platform-gpui",
+ "one-core",
+ "shell_domain",
+ "ssh",
+ "terminal",
 ]
 
 [[package]]

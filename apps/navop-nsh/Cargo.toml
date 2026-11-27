@@ -1,0 +1,31 @@
+[package]
+name = "navop-nsh"
+version = "0.24.1"
+edition.workspace = true
+publish = false
+
+[dependencies]
+ai_chat_view = { workspace = true, default-features = false }
+anyhow = { workspace = true }
+app_kit = { workspace = true }
+data_domain = { workspace = true }
+db = { workspace = true }
+domain_api = { workspace = true }
+extension-runtime = { workspace = true }
+gpui = { workspace = true }
+gpui_platform = { workspace = true }
+mongodb_view = { workspace = true }
+navop_app = { path = "../../crates/navop_app", default-features = false, features = ["database", "shell", "nsh-host", "nsh-db", "nsh-terminal"] }
+navop_nsh = { workspace = true }
+navop_nsh_app = { path = "../../crates/navop_nsh_app" }
+notes = { workspace = true }
+nsh-base = { workspace = true }
+nsh-core = { workspace = true }
+nsh-platform-gpui = { workspace = true }
+one-core = { workspace = true }
+shell_domain = { workspace = true, features = ["nsh-host"] }
+ssh = { workspace = true }
+terminal = { workspace = true }
+
+[lints]
+workspace = true

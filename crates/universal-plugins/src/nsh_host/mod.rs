@@ -220,6 +220,33 @@ pub fn init(service: UniversalPluginService, cx: &mut App) {
 }
 
 impl NshHost {
+    /// Open an extension app as a standalone GPUI entity.
+    ///
+    /// The normal shell path mounts `NshTab` in `TabContainer`. The nsh-native
+    /// shell embeds that entity in a registered `NativeComponent` instead, so
+    /// extension apps can render without depending on the legacy tab host.
+    pub fn open_embedded(
+        &self,
+        extension_id: &str,
+        route: Option<&str>,
+        cx: &mut App,
+    ) -> Option<Entity<NshTab>> {
+        if self.retiring.borrow().contains(extension_id) {
+            return None;
+        }
+        let contribution = self.contribution(extension_id)?;
+        let tab = NshTab::open(
+            contribution,
+            route.map(str::to_string),
+            self.service.clone(),
+            self.trust.clone(),
+            self.dispatcher(),
+            cx,
+        );
+        self.track(extension_id, tab.downgrade());
+        Some(tab)
+    }
+
     /// 打开一个扩展面板：装载 `contributes.panels[]` 的一条为独立
     /// `AppView` 实例，返回给宿主锚点（终端侧栏）嵌入。
     ///
@@ -672,7 +699,7 @@ mod tests {
             "结构化错误的 code 应带回来: {payload}"
         );
         // `locale()` 读的是 `AppView::set_locale` 写进 surface 的那份值。
-        let expected = nsh_platform_gpui::Locale::parse(&rust_i18n::locale().to_string())
+        let expected = nsh_platform_gpui::Locale::parse(rust_i18n::locale().as_ref())
             .unwrap_or(nsh_platform_gpui::Locale::EN_US);
         assert_eq!(
             payload["locale"],

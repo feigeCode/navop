@@ -24,7 +24,7 @@ pub use extension_connection_form::{ExtensionConnectionForm, ExtensionConnection
 #[cfg(feature = "nsh-host")]
 pub use nsh_host::{
     ConnectionPageOpen, DevOps, NativeFactory, NativeViewContext, NshHost, NshPanel,
-    init as init_nsh_host, register_native_component, set_dev_ops,
+    NshTab, init as init_nsh_host, register_native_component, set_dev_ops,
 };
 #[cfg(feature = "nsh-db")]
 pub use nsh_host::set_db_state as set_nsh_db_state;

@@ -4426,6 +4426,56 @@ impl GlobalDbState {
             .await
     }
 
+    /// Pure async table-data query for hosts without a GPUI `AsyncApp`.
+    ///
+    /// The normal [`Self::query_table_data`] entry point is GPUI-bound and
+    /// cannot be called from an nsh Rust page. This path creates, uses and
+    /// releases one database session just like the other `*_direct` APIs.
+    pub async fn query_table_data_direct(
+        &self,
+        connection_id: &str,
+        request: crate::types::TableDataRequest,
+    ) -> anyhow::Result<crate::types::TableDataResponse> {
+        require_tokio_runtime("database table data query")?;
+        let mut config = self
+            .get_config(connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
+        if config.database_type != DatabaseType::Oracle && !request.database.is_empty() {
+            config.database = Some(request.database.clone());
+        }
+
+        let plugin = self.get_plugin(&config.database_type)?;
+        let session_id = self
+            .connection_manager
+            .create_session(config, &self.db_manager)
+            .await?;
+
+        let result = async {
+            let mut guard = self
+                .connection_manager
+                .get_session_connection(&session_id)
+                .await?;
+            let conn = guard
+                .connection()
+                .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
+
+            if let Some(schema) = request.schema.as_deref() {
+                conn.switch_schema(schema)
+                    .await
+                    .map_err(|error| anyhow::anyhow!("Failed to switch schema: {error}"))?;
+            }
+
+            plugin
+                .query_table_data(&*conn, request)
+                .await
+                .map_err(|error| anyhow::anyhow!("{error}"))
+        }
+        .await;
+
+        self.finish_direct_metadata_session(&session_id, result)
+            .await
+    }
+
     /// 获取数据库的比较能力
     pub fn get_compare_capabilities(
         &self,
