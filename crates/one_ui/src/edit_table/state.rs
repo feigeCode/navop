@@ -1077,11 +1077,16 @@ where
             .collect();
 
         let table_entity = cx.entity().clone();
-        let filter_panel = FilterPanel::new(values).on_toggle(move |value, window, cx| {
-            table_entity.update(cx, |table, cx| {
-                table.toggle_filter_value_realtime(col_ix, value, window, cx);
+        let active_keys = current_filter
+            .map(|filter| filter.selected_values.clone())
+            .unwrap_or_default();
+        let filter_panel = FilterPanel::new(values)
+            .with_active_custom_keys(&active_keys)
+            .on_toggle(move |value, window, cx| {
+                table_entity.update(cx, |table, cx| {
+                    table.toggle_filter_value_realtime(col_ix, value, window, cx);
+                });
             });
-        });
 
         self.filter_list =
             Some(cx.new(|cx| ListState::new(filter_panel, window, cx).searchable(true)));

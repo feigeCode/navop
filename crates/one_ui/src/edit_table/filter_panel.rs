@@ -285,6 +285,25 @@ impl FilterPanel {
     pub fn filtered_values(&self) -> &[FilterValue] {
         &self.filtered_values
     }
+
+    /// 把「当前筛选中已生效、但当前结果集里查不到」的值补进列表。
+    ///
+    /// 否则用户手动输入一个值筛选后，重开筛选面板会因为列表里没有它而
+    /// 无法取消勾选，只能清空整列筛选（issue #305 的后续问题）。
+    pub fn with_active_custom_keys(mut self, selected_keys: &HashSet<FilterValueKey>) -> Self {
+        for key in selected_keys {
+            if self.values.iter().any(|value| &value.key == key) {
+                continue;
+            }
+            let mut value = FilterValue::from_key(key.clone(), 0);
+            value.custom = true;
+            value.selected = true;
+            value.checked = true;
+            self.values.push(value.clone());
+            self.filtered_values.push(value);
+        }
+        self
+    }
 }
 
 impl ListDelegate for FilterPanel {
@@ -394,6 +413,41 @@ mod tests {
                 .get_selected_values()
                 .contains(&FilterValueKey::Text("beta".to_string()))
         );
+    }
+
+    #[test]
+    fn reopening_the_panel_keeps_active_custom_values_visible() {
+        // #305 后续：手动输入的值筛选后，重开面板必须还能看到并取消勾选。
+        let mut keys = HashSet::new();
+        keys.insert(FilterValueKey::Text("beta".to_string()));
+
+        let panel =
+            panel(vec![FilterValue::new("alpha".to_string(), 2)]).with_active_custom_keys(&keys);
+
+        let restored = panel
+            .filtered_values()
+            .iter()
+            .find(|value| value.key == FilterValueKey::Text("beta".to_string()))
+            .expect("custom value kept");
+        assert!(restored.custom);
+        assert!(restored.selected);
+        assert!(
+            panel
+                .get_selected_values()
+                .contains(&FilterValueKey::Text("beta".to_string()))
+        );
+    }
+
+    #[test]
+    fn active_keys_already_present_are_not_duplicated() {
+        let mut keys = HashSet::new();
+        keys.insert(FilterValueKey::Text("alpha".to_string()));
+
+        let panel =
+            panel(vec![FilterValue::new("alpha".to_string(), 2)]).with_active_custom_keys(&keys);
+
+        assert_eq!(1, panel.filtered_values().len());
+        assert!(!panel.filtered_values()[0].custom);
     }
 
     #[test]
