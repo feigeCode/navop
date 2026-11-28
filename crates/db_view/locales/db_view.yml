@@ -1089,6 +1089,22 @@ Table:
     en: Table Comment
     zh-CN: 表注释
     zh-HK: 表註釋
+  batch_add_columns:
+    en: Add Columns in Bulk
+    zh-CN: 批量添加列
+    zh-HK: 批次新增欄
+  batch_add_columns_placeholder:
+    en: "One column name per line"
+    zh-CN: 一行一个列名
+    zh-HK: 一行一個欄名
+  batch_add_columns_hint:
+    en: Columns are added with the default type; adjust length/type in each row afterwards.
+    zh-CN: 新列先按默认类型添加，可随后在每行里调整类型与长度。
+    zh-HK: 新欄先按預設類型新增，可隨後在每行調整類型與長度。
+  batch_add_columns_empty:
+    en: Enter at least one column name
+    zh-CN: 请至少输入一个列名
+    zh-HK: 請至少輸入一個欄名
   add_column:
     en: Add Column
     zh-CN: 添加列

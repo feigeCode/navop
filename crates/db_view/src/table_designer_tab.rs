@@ -18,7 +18,7 @@ use gpui_component::{
     dialog::{DialogButtonProps, DialogFooter},
     form::{field, h_form},
     h_flex,
-    input::{Editor, EditorState, Input, InputEvent, InputState},
+    input::{Editor, EditorState, Input, InputEvent, InputState, Textarea, TextareaState},
     scroll::Scrollbar,
     select::{Select, SelectEvent, SelectItem, SelectState},
     spinner::Spinner,
@@ -2125,6 +2125,25 @@ impl TabContent for TableDesigner {
     }
 }
 
+/// 解析「批量新增列」的输入：一行一个列名，忽略空行，按大小写不敏感去重。
+fn parse_batch_column_names(input: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for line in input.split('\n') {
+        let name = line.trim();
+        if name.is_empty() {
+            continue;
+        }
+        if names
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(name))
+        {
+            continue;
+        }
+        names.push(name.to_string());
+    }
+    names
+}
+
 // === Columns Editor ===
 
 pub enum ColumnsEditorEvent {
@@ -2463,6 +2482,65 @@ impl ColumnsEditor {
 
         data_types.push(base_type.to_string());
         data_types.len() - 1
+    }
+
+    /// 批量新增列：逐行填列名，类型先在行内用默认值，后续再按需调整（issue #30 #7）。
+    fn open_batch_add_columns_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let names_input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder(t!("Table.batch_add_columns_placeholder").to_string())
+                .auto_grow(3, 10)
+        });
+        let designer = cx.entity();
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let names_input = names_input.clone();
+            let designer_ok = designer.clone();
+            dialog
+                .title(t!("Table.batch_add_columns").to_string())
+                .overlay_closable(false)
+                .child(
+                    v_flex().gap_2().child(Textarea::new(&names_input)).child(
+                        div()
+                            .text_xs()
+                            .child(t!("Table.batch_add_columns_hint").to_string()),
+                    ),
+                )
+                .on_ok(move |_, window, cx| {
+                    let names = parse_batch_column_names(&names_input.read(cx).text().to_string());
+                    if names.is_empty() {
+                        window
+                            .push_notification(t!("Table.batch_add_columns_empty").to_string(), cx);
+                        return false;
+                    }
+                    designer_ok.update(cx, |designer, cx| {
+                        designer.add_columns_named(&names, window, cx)
+                    });
+                    true
+                })
+        });
+    }
+
+    fn add_columns_named(&mut self, names: &[String], window: &mut Window, cx: &mut Context<Self>) {
+        let existing: Vec<String> = self
+            .columns
+            .iter()
+            .map(|column| column.name_input.read(cx).value().to_string())
+            .collect();
+        for name in names {
+            if existing
+                .iter()
+                .any(|current| current.eq_ignore_ascii_case(name))
+            {
+                continue;
+            }
+            let index = self.columns.len();
+            self.add_column(window, cx);
+            if let Some(row) = self.columns.get(index) {
+                row.name_input
+                    .update(cx, |state, cx| state.set_value(name.as_str(), window, cx));
+            }
+        }
     }
 
     fn add_column(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3150,6 +3228,15 @@ impl ColumnsEditor {
                     .glyph_size(OneIconSize::Default)
                     .tooltip(t!("Table.add_column").to_string())
                     .on_click(cx.listener(|this, _, window, cx| this.add_column(window, cx))),
+            )
+            .child(
+                IconButton::new("add-cols-batch", IconName::ListChecks)
+                    .hit_size(Size::Small)
+                    .glyph_size(OneIconSize::Default)
+                    .tooltip(t!("Table.batch_add_columns").to_string())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_batch_add_columns_dialog(window, cx)
+                    })),
             )
             .child(
                 IconButton::new("remove-col", IconName::Minus)
@@ -4682,6 +4769,14 @@ mod tests {
 
     /// issue #586：新增列带上表字符集/排序规则时，ADD COLUMN 要显式写出
     /// CHARACTER SET/COLLATE；表选项本身没变，ALTER 不应附带表级设置。
+    #[test]
+    fn batch_column_names_ignore_blank_lines_and_duplicate_case_insensitively() {
+        // issue #30 #7：批量加列时一行一个列名，空白行与重复列名要跳过，
+        // 否则会一次性加出重复列，提交到数据库时才报错。
+        let names = parse_batch_column_names("  name \n\nemail\nName\n  \ncreated_at\n");
+        assert_eq!(vec!["name", "email", "created_at"], names);
+    }
+
     #[test]
     fn test_mysql_add_column_inherits_table_charset() {
         let plugin = build_plugin(&DatabaseType::MySQL);
