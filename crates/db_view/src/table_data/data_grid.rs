@@ -37,6 +37,7 @@ use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
 use crate::sql_editor::SqlEditor;
 use crate::table_data::copy_format::{CopyFormat, CopyFormatContext, CopyFormatter, TableMetadata};
 use crate::table_data::filter_editor::{FilterEditorEvent, TableFilterEditor, TableSchema};
+use crate::table_data::record_json_editor::RecordJsonEditor;
 use crate::table_data::results_delegate::{EditorTableDelegate, RowChange, VerticalCellValue};
 use chrono::Local;
 use db::{
@@ -47,7 +48,6 @@ use db::{
 use gpui_component::button::ButtonVariants;
 use gpui_component::dialog::DialogButtonProps;
 use gpui_component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
-use json_view::JsonValueView;
 use one_core::connection_notifier::{ConnectionDataEvent, GlobalConnectionNotifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
@@ -3260,7 +3260,7 @@ impl DataGrid {
             window.push_notification(t!("TableDataGrid.record_json_select_one").to_string(), cx);
             return;
         };
-        let json_view = cx.new(|cx| JsonValueView::new(value, window, cx));
+        let json_view = cx.new(|cx| RecordJsonEditor::new(&value, window, cx));
         window.open_dialog(cx, move |dialog, _window, _cx| {
             dialog
                 .title(t!("TableDataGrid.record_json_title", row = display_row_ix + 1).to_string())
