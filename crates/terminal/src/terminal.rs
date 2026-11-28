@@ -139,6 +139,12 @@ pub enum TerminalModelEvent {
     ChildExit(i32),
     /// 成功命令历史已写入数据库
     CommandHistoryChanged,
+    /// 远端/本地 shell 历史文件没有读到任何命令（issue #570）
+    ///
+    /// 常见于堡垒机、网络设备：它们既不发 shell 集成（拿不到 OSC 133），
+    /// 也可能禁止 `sh -lc` 或把历史写到别处。视图层据此给出一次性提示，
+    /// 而不是让历史面板静静地空着。
+    ShellHistoryUnavailable,
     /// 终端程序请求存储到剪贴板
     ClipboardStore(String),
     /// 远程工作目录变更（OSC 7），带上报主机名
@@ -3110,10 +3116,21 @@ impl Terminal {
         let task = Tokio::spawn(cx, async move { load_ssh_history(manager).await });
 
         cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            let Ok(Ok(history)) = task.await else {
-                return;
+            let history = match task.await {
+                Ok(Ok(history)) => history,
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "failed to load ssh shell history");
+                    Vec::new()
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "ssh shell history task failed");
+                    Vec::new()
+                }
             };
             let _ = this.update(cx, |terminal, cx| {
+                if history.is_empty() {
+                    cx.emit(TerminalModelEvent::ShellHistoryUnavailable);
+                }
                 terminal.set_persisted_history(history, cx);
             });
         })
@@ -7482,6 +7499,24 @@ mod tests {
     /// 历史读取在同一个 SSH transport 上额外开 exec channel 执行 `sh -lc ...`；
     /// 锐捷 S6250 这类设备会把它当成非法命令回显并断开连接，现场表现为登录后
     /// 未输入任何内容就刷 `% Unknown command` / `File failed`。
+    #[test]
+    fn empty_shell_history_reports_an_unavailable_hint() {
+        // issue #570：堡垒机既没有 shell 集成，也可能读不到历史文件。
+        // 这时要发出提示事件，而不是让历史面板静默为空。
+        let source = include_str!("terminal.rs");
+        let production = source.split("mod tests").next().unwrap_or_default();
+        let loader = production
+            .split("fn spawn_ssh_history_loader")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .expect("spawn_ssh_history_loader 必须存在");
+        assert!(
+            loader.contains("ShellHistoryUnavailable"),
+            "读不到历史时要通知视图层"
+        );
+        assert!(loader.contains("is_empty"), "空历史也要提示");
+    }
+
     #[test]
     fn loading_shell_history_also_imports_it_into_the_command_history_store() {
         // issue #570：历史面板读的是持久化命令库。只把 shell 历史文件塞进内存

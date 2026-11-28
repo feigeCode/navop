@@ -1776,6 +1776,10 @@ QuickCommand:
     zh-HK: 刪除
 
 HistoryCommand:
+  remote_history_unavailable:
+    en: No shell history was found for this session. The device may block reading history files or keep it somewhere else.
+    zh-CN: 这个会话没有读到历史命令。设备可能禁止读取历史文件，或把历史写在了其他位置。
+    zh-HK: 這個工作階段沒有讀到歷史指令。裝置可能禁止讀取歷史檔案，或把歷史寫在其他位置。
   search:
     en: Search
     zh-CN: 搜索

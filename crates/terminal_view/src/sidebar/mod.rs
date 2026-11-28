@@ -2106,6 +2106,15 @@ impl TerminalSidebar {
         cx.notify();
     }
 
+    /// 标记「本会话读不到 shell 历史」，让历史面板空状态给出原因（issue #570）。
+    pub fn set_remote_history_unavailable(&mut self, unavailable: bool, cx: &mut Context<Self>) {
+        if let Some(ref history_panel) = self.history_command_panel {
+            history_panel.update(cx, |panel, cx| {
+                panel.set_remote_history_unavailable(unavailable, cx);
+            });
+        }
+    }
+
     pub fn refresh_history_commands(&mut self, cx: &mut Context<Self>) {
         if let Some(ref history_panel) = self.history_command_panel {
             history_panel.update(cx, |panel, cx| {
