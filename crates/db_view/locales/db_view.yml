@@ -200,6 +200,30 @@ Connection:
 # 连接表单
 ConnectionForm:
   # 标签组
+  environment:
+    en: Environment
+    zh-CN: 环境
+    zh-HK: 環境
+  environment_unset:
+    en: Not marked
+    zh-CN: 未标记
+    zh-HK: 未標記
+  environment_development:
+    en: Development
+    zh-CN: 开发
+    zh-HK: 開發
+  environment_staging:
+    en: Staging
+    zh-CN: 测试
+    zh-HK: 測試
+  environment_production:
+    en: Production
+    zh-CN: 生产
+    zh-HK: 生產
+  production_badge:
+    en: PRODUCTION
+    zh-CN: 生产环境
+    zh-HK: 生產環境
   general:
     en: General
     zh-CN: 常规

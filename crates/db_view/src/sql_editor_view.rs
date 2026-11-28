@@ -28,11 +28,13 @@ use futures::channel::oneshot;
 use futures::stream::{self, StreamExt};
 use gpui::prelude::*;
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, Context, Element, Entity,
+    AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, Context,
+    Element, Entity,
     EventEmitter, FocusHandle, Focusable, Hsla, IntoElement, KeyBinding, MouseMoveEvent,
     MouseUpEvent, NoAction, ParentElement, Pixels, Point, Render, SharedString, Styled,
     Subscription, Task, WeakEntity, Window, div, px,
 };
+use gpui_component::StyledExt;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_component::dialog::DialogFooter;
 use gpui_component::input::{
@@ -52,7 +54,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::settings::AppSettings;
 use one_core::storage::{
-    DatabaseType, QueryDirectoryScope, SqlFileNameError, default_query_directory,
+    DatabaseType, DbEnvironment, QueryDirectoryScope, SqlFileNameError, default_query_directory,
     sql_file_path_for_name,
 };
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
@@ -5580,6 +5582,32 @@ impl SqlEditorTab {
 
     /// 参考 dbx EditorToolbar 的紧凑工具栏：左侧彩色图标按钮，右侧连接/数据库选择。
     /// 手动事务组（模式切换 + 提交/回滚）保留在左侧动作区之后。
+    /// 生产环境徽标：连接表单里把「环境」标成「生产」时显示。
+    ///
+    /// 未标记、开发、测试都不显示，保证老连接的行为不变。
+    fn production_environment_badge(&self, cx: &App) -> Option<AnyElement> {
+        let config = cx.global::<GlobalDbState>().get_config(&self.connection_id)?;
+        if !DbEnvironment::from_params(&config.extra_params).is_production() {
+            return None;
+        }
+
+        Some(
+            div()
+                .id("query-production-badge")
+                .h(px(20.0))
+                .px_2()
+                .rounded_sm()
+                .flex()
+                .items_center()
+                .bg(cx.theme().danger.opacity(0.12))
+                .text_xs()
+                .font_semibold()
+                .text_color(cx.theme().danger)
+                .child(t!("ConnectionForm.production_badge").to_string())
+                .into_any_element(),
+        )
+    }
+
     fn render_query_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let connection_select = self.connection_select.clone();
         let database_select = self.database_select.clone();
@@ -5654,6 +5682,9 @@ impl SqlEditorTab {
                     cx,
                 ),
             })
+            // issue #30 第 5 点：连接被标记为生产环境时，工具栏常驻红色提示，
+            // 让「这条 SQL 要打在哪」始终可见。
+            .children(self.production_environment_badge(cx))
             // 运行中在工具栏上同步给出反馈：查询数据量大时面板可能被挤得很窄，
             // 仅靠面板内的加载态不足以说明“执行已提交”。这里刻意不读
             // `total_elapsed_ms`，避免编辑器（含 SQL 输入）被计时器每 100ms

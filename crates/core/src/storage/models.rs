@@ -1968,6 +1968,53 @@ fn default_forward_bind_host() -> String {
     "127.0.0.1".to_string()
 }
 
+/// 连接所处的环境标记（issue #30 第 5 点）。
+///
+/// 目前只用于在界面上给出「生产环境」提示，避免在正式库上误执行破坏性 SQL；
+/// 值存放在 `DbConnectionConfig::extra_params` 的 `environment` 键里。
+pub const ENVIRONMENT_PARAM: &str = "environment";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DbEnvironment {
+    /// 未标记：不做任何提示，行为与旧版本一致。
+    #[default]
+    Unspecified,
+    Development,
+    Staging,
+    Production,
+}
+
+impl DbEnvironment {
+    pub fn from_param(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "development" | "dev" => Self::Development,
+            "staging" | "test" | "testing" => Self::Staging,
+            "production" | "prod" => Self::Production,
+            _ => Self::Unspecified,
+        }
+    }
+
+    pub fn from_params(extra_params: &std::collections::HashMap<String, String>) -> Self {
+        extra_params
+            .get(ENVIRONMENT_PARAM)
+            .map(|value| Self::from_param(value))
+            .unwrap_or_default()
+    }
+
+    pub fn as_param(self) -> &'static str {
+        match self {
+            Self::Unspecified => "",
+            Self::Development => "development",
+            Self::Staging => "staging",
+            Self::Production => "production",
+        }
+    }
+
+    pub fn is_production(self) -> bool {
+        matches!(self, Self::Production)
+    }
+}
+
 /// Connection configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbConnectionConfig {
@@ -5654,5 +5701,37 @@ mod serial_tests {
             params
         );
         assert!(decrypt_sensitive_params_with_key("{not json", "unused").is_err());
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+
+    #[test]
+    fn environment_parses_known_aliases_and_defaults_to_unspecified() {
+        assert_eq!(
+            DbEnvironment::Production,
+            DbEnvironment::from_param("production")
+        );
+        assert_eq!(DbEnvironment::Production, DbEnvironment::from_param(" PROD "));
+        assert_eq!(DbEnvironment::Staging, DbEnvironment::from_param("test"));
+        assert_eq!(DbEnvironment::Development, DbEnvironment::from_param("dev"));
+        assert_eq!(DbEnvironment::Unspecified, DbEnvironment::from_param(""));
+        assert_eq!(
+            DbEnvironment::Unspecified,
+            DbEnvironment::from_param("eu-west-1")
+        );
+    }
+
+    #[test]
+    fn environment_reads_the_extra_params_key_and_round_trips() {
+        let mut params = std::collections::HashMap::new();
+        params.insert(ENVIRONMENT_PARAM.to_string(), "production".to_string());
+
+        let environment = DbEnvironment::from_params(&params);
+        assert!(environment.is_production());
+        assert_eq!("production", environment.as_param());
+        assert_eq!("", DbEnvironment::Unspecified.as_param());
     }
 }
