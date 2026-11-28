@@ -18,6 +18,15 @@ const OTP_PROMPT_MARKERS: &[&str] = &[
     "authentication code",
     "passcode",
     "token",
+    // 中文 / 日文提示（部分国产设备与本地化 PAM 走这些文案）。
+    "验证码",
+    "驗證碼",
+    "动态码",
+    "動態碼",
+    "一次性密码",
+    "一次性密碼",
+    "动态口令",
+    "確認コード",
 ];
 
 /// 判断提示是否为一次性验证码提示。
@@ -41,6 +50,10 @@ pub fn is_password_prompt(prompt: &str) -> bool {
         || prompt.ends_with("'s password")
         || prompt.starts_with("password for ")
         || prompt == "enter password"
+        // 本地化提示：中文「密码：」/「用户密码：」、日文「パスワード:」。
+        || prompt.ends_with("密码")
+        || prompt.ends_with("密碼")
+        || prompt.ends_with("パスワード")
 }
 
 /// 尝试用已保存的密码与 OTP 密钥自动应答整组提示。
@@ -89,7 +102,8 @@ pub fn auto_answer_keyboard_interactive(
 fn normalize_prompt(prompt: &str) -> String {
     prompt
         .trim()
-        .trim_end_matches(|c: char| c == ':' || c.is_whitespace())
+        // 中文输入法下常是全角冒号「：」，也要一起去掉，否则「密码：」识别不出来。
+        .trim_end_matches(|c: char| c == ':' || c == '：' || c.is_whitespace())
         .to_ascii_lowercase()
 }
 
@@ -142,6 +156,33 @@ mod tests {
         assert!(is_password_prompt("Password for alice:"));
         assert!(!is_password_prompt("Verification code:"));
         assert!(!is_password_prompt("Passcode:"));
+    }
+
+    #[test]
+    fn recognizes_localized_prompts() {
+        // 中文本地化 PAM 会把密码提示写成「密码：」，验证码写成「验证码：」。
+        assert!(is_password_prompt("密码："));
+        assert!(is_password_prompt("alice 的密码："));
+        assert!(is_password_prompt("密碼:"));
+        assert!(is_password_prompt("パスワード:"));
+        assert!(!is_password_prompt("验证码："));
+        assert!(!is_password_prompt("動態碼："));
+        assert!(is_otp_prompt("验证码："));
+        assert!(is_otp_prompt("动态口令："));
+        assert!(is_otp_prompt("確認コード:"));
+        assert!(!is_otp_prompt("密码："));
+        // 一次性密码里含「密码」两个字，必须先按 OTP 提示识别。
+        assert!(is_otp_prompt("一次性密码："));
+        assert!(!is_password_prompt("一次性密码："));
+    }
+
+    #[test]
+    fn auto_answers_localized_password_then_code() {
+        let request = request(&["密码：", "验证码："]);
+        let answers =
+            auto_answer_keyboard_interactive(&request, Some(&otp()), Some("secret"), 0, 59)
+                .expect("should auto answer");
+        assert_eq!(answers, vec!["secret".to_string(), "287082".to_string()]);
     }
 
     #[test]

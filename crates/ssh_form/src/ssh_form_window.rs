@@ -63,7 +63,8 @@ use crate::host_key_dialog::{
 use crate::otp_qr::{OtpQrError, decode_otp_secret};
 use crate::ssh_form_mfa::{
     CapturedMfaRequest, FormMfaPrompt, FormMfaRequest, JumpServerMfaResponder,
-    OtpAutoAnswerResponder, form_mfa_request_from_keyboard_interactive, is_jump_mfa_required_error,
+    OtpAutoAnswerResponder, TestPasswordResponder, form_mfa_request_from_keyboard_interactive,
+    is_jump_mfa_required_error,
 };
 use crate::x11_status::{X11ConnectionState, probe_connection_x11};
 
@@ -2238,6 +2239,11 @@ impl SshFormWindow {
             )));
         } else if let Some(jump_fallback) = jump_fallback {
             config.keyboard_interactive_responder = Some(Arc::new(jump_fallback));
+        } else {
+            // 没有 TOTP 也没有跳板机时，仍有主机把密码放在 keyboard-interactive 里；
+            // 用当次表单里的密码应答，避免测试连接直接失败。
+            config.keyboard_interactive_responder =
+                Some(Arc::new(TestPasswordResponder::new(None, target_password)));
         }
         let window_handle = window.window_handle();
 
