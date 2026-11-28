@@ -5697,6 +5697,10 @@ Settings:
       en: Replace
       zh-CN: 替换
       zh-HK: 取代
+    remote_editor_format:
+      en: Format Document
+      zh-CN: 格式化文档
+      zh-HK: 格式化文件
     redis_clear_output:
       en: Clear Output
       zh-CN: 清空输出

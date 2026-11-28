@@ -3579,6 +3579,13 @@ const REMOTE_EDITOR_SHORTCUTS: &[ShortcutEntry] = &[
         action_id: Some(action_id::REMOTE_EDITOR_REPLACE),
         system_hotkey: false,
     },
+    ShortcutEntry {
+        keys_macos: &["cmd-shift-f"],
+        keys_other: &["ctrl-shift-f"],
+        label_key: "Settings.Shortcuts.remote_editor_format",
+        action_id: Some(action_id::REMOTE_EDITOR_FORMAT),
+        system_hotkey: false,
+    },
 ];
 
 const REDIS_CLI_SHORTCUTS: &[ShortcutEntry] = &[
