@@ -8,7 +8,7 @@ edition.workspace = true
 one-assets = { workspace = true }
 gpui = { workspace = true }
 gpui_platform = { workspace = true }
-gpui-component = { workspace = true, features = ["tree-sitter-bash", "tree-sitter-sql"] }
+gpui-component = { workspace = true, features = ["tree-sitter-bash", "tree-sitter-sql", "tree-sitter-yaml"] }
 gpui-component-assets = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }

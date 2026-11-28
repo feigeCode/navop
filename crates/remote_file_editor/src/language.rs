@@ -41,6 +41,9 @@ fn local_language_name(extension: &str) -> Option<&'static str> {
         "json" | "jsonc" => Some("json"),
         "md" | "markdown" => Some("markdown"),
         "sql" => Some("sql"),
+        // YAML 语法树由 gpui-component 的 tree-sitter-yaml 特性提供（navop_app 已开启），
+        // 否则 `.yml`/`.yaml` 不装语言扩展时只能退化成纯文本。
+        "yml" | "yaml" => Some("yaml"),
         _ => None,
     }
 }
@@ -64,6 +67,8 @@ mod tests {
         assert_eq!(language_for_path("/tmp/data.json", false), "json");
         assert_eq!(language_for_path("/tmp/README.md", false), "markdown");
         assert_eq!(language_for_path("/tmp/query.sql", false), "sql");
+        assert_eq!(language_for_path("/tmp/docker-compose.yml", false), "yaml");
+        assert_eq!(language_for_path("/tmp/docker-compose.yaml", false), "yaml");
     }
 
     #[test]
