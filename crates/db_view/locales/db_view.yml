@@ -1094,13 +1094,17 @@ Table:
     zh-CN: 批量添加列
     zh-HK: 批次新增欄
   batch_add_columns_placeholder:
-    en: "One column name per line"
-    zh-CN: 一行一个列名
-    zh-HK: 一行一個欄名
+    en: "email VARCHAR(255)"
+    zh-CN: email VARCHAR(255)
+    zh-HK: email VARCHAR(255)
   batch_add_columns_hint:
-    en: Columns are added with the default type; adjust length/type in each row afterwards.
-    zh-CN: 新列先按默认类型添加，可随后在每行里调整类型与长度。
-    zh-HK: 新欄先按預設類型新增，可隨後在每行調整類型與長度。
+    en: "One per line: name, or name TYPE(length). Types not in the list keep the default type and are reported."
+    zh-CN: 一行一条：列名，或「列名 类型(长度)」；类型不在列表里时按默认类型添加并提示。
+    zh-HK: 一行一條：欄名，或「欄名 類型(長度)」；類型不在清單裡時按預設類型新增並提示。
+  batch_add_columns_unknown_type:
+    en: "Unknown type for: %{types} (kept the default type)"
+    zh-CN: 以下类型不在当前数据库的类型列表里，已按默认类型添加：%{types}
+    zh-HK: 以下類型不在目前資料庫的類型清單裡，已按預設類型新增：%{types}
   batch_add_columns_empty:
     en: Enter at least one column name
     zh-CN: 请至少输入一个列名
