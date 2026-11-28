@@ -76,8 +76,15 @@ const PANEL_MIN_SIZE: Pixels = px(100.0);
 const RESULT_PANEL_DEFAULT_SIZE: Pixels = px(400.0);
 const SQL_EDITOR_CONTEXT: &str = "SqlEditor";
 const SQL_EDITOR_INPUT_CONTEXT: &str = "SqlEditor > Input";
-const RUN_CURRENT_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-enter", "ctrl-enter"];
-const RUN_ALL_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-shift-enter", "ctrl-shift-enter"];
+/// 「运行当前语句 / 选中内容」的默认键位。
+///
+/// `cmd-shift-r` / `ctrl-shift-r` 是 Navicat 的「运行选中」组合（#594），与
+/// `enter` 系列并存：老用户不必改习惯，从 Navicat 迁过来的用户直接能用。
+const RUN_CURRENT_QUERY_KEY_BINDINGS: [&str; 4] =
+    ["cmd-enter", "ctrl-enter", "cmd-shift-r", "ctrl-shift-r"];
+/// 「运行全部」的默认键位；`cmd-r` / `ctrl-r` 对齐 Navicat（#594）。
+const RUN_ALL_QUERY_KEY_BINDINGS: [&str; 4] =
+    ["cmd-shift-enter", "ctrl-shift-enter", "cmd-r", "ctrl-r"];
 
 /// 「注释 / 取消注释」的默认键位（#290）。
 ///
@@ -6782,8 +6789,12 @@ mod tests {
     fn run_query_key_bindings_separate_current_and_all_modes() {
         assert!(RUN_CURRENT_QUERY_KEY_BINDINGS.contains(&"cmd-enter"));
         assert!(RUN_CURRENT_QUERY_KEY_BINDINGS.contains(&"ctrl-enter"));
+        assert!(RUN_CURRENT_QUERY_KEY_BINDINGS.contains(&"cmd-shift-r"));
+        assert!(RUN_CURRENT_QUERY_KEY_BINDINGS.contains(&"ctrl-shift-r"));
         assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"cmd-shift-enter"));
         assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"ctrl-shift-enter"));
+        assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"cmd-r"));
+        assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"ctrl-r"));
     }
 
     #[gpui::test]

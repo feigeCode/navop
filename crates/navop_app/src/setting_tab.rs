@@ -3413,15 +3413,15 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
-        keys_macos: &["cmd-enter", "ctrl-enter"],
-        keys_other: &["cmd-enter", "ctrl-enter"],
+        keys_macos: &["cmd-enter", "ctrl-enter", "cmd-shift-r", "ctrl-shift-r"],
+        keys_other: &["cmd-enter", "ctrl-enter", "cmd-shift-r", "ctrl-shift-r"],
         label_key: "Settings.Shortcuts.sql_run_query",
         action_id: Some(action_id::SQL_RUN_QUERY),
         system_hotkey: false,
     },
     ShortcutEntry {
-        keys_macos: &["cmd-shift-enter", "ctrl-shift-enter"],
-        keys_other: &["cmd-shift-enter", "ctrl-shift-enter"],
+        keys_macos: &["cmd-shift-enter", "ctrl-shift-enter", "cmd-r", "ctrl-r"],
+        keys_other: &["cmd-shift-enter", "ctrl-shift-enter", "cmd-r", "ctrl-r"],
         label_key: "Settings.Shortcuts.sql_run_all_query",
         action_id: Some(action_id::SQL_RUN_ALL_QUERY),
         system_hotkey: false,
@@ -4240,6 +4240,30 @@ mod tests {
             .expect("close active tab shortcut");
 
         assert_eq!(&["ctrl-f4", "alt-shift-w"], shortcut.keys_other);
+    }
+
+    #[test]
+    fn sql_run_shortcuts_include_navicat_combinations() {
+        // #594：从 Navicat 迁过来的用户习惯 `ctrl-r` 运行全部、`ctrl-shift-r` 运行选中。
+        let run_current = DATABASE_SHORTCUTS
+            .iter()
+            .find(|entry| entry.action_id == Some(one_core::keybindings::action_id::SQL_RUN_QUERY))
+            .expect("run current query shortcut");
+        assert_eq!(
+            run_current.keys_other,
+            &["cmd-enter", "ctrl-enter", "cmd-shift-r", "ctrl-shift-r"]
+        );
+
+        let run_all = DATABASE_SHORTCUTS
+            .iter()
+            .find(|entry| {
+                entry.action_id == Some(one_core::keybindings::action_id::SQL_RUN_ALL_QUERY)
+            })
+            .expect("run all query shortcut");
+        assert_eq!(
+            run_all.keys_other,
+            &["cmd-shift-enter", "ctrl-shift-enter", "cmd-r", "ctrl-r"]
+        );
     }
 
     #[test]
