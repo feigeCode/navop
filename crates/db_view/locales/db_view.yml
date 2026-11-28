@@ -1450,6 +1450,10 @@ Query:
     en: Save
     zh-CN: 保存
     zh-HK: 儲存
+  save_as_file:
+    en: Save As File...
+    zh-CN: 另存为文件…
+    zh-HK: 另存為檔案…
   save_query_title:
     en: Save Query
     zh-CN: 保存查询

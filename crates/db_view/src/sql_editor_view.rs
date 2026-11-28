@@ -160,6 +160,24 @@ fn write_new_sql_file(file_path: &Path, sql: &str) -> io::Result<()> {
         .and_then(|mut file| std::io::Write::write_all(&mut file, sql.as_bytes()))
 }
 
+/// 「另存为」时给系统对话框返回的路径补上 `.sql` 后缀；用户自己写了后缀就保持原样。
+fn sql_file_path_with_extension(mut file_path: PathBuf) -> PathBuf {
+    if file_path.extension().is_none() {
+        file_path.set_extension("sql");
+    }
+    file_path
+}
+
+/// 「另存为」对话框的默认文件名：沿用当前文件的名字，取不到时退回 `query.sql`。
+fn suggested_save_as_file_name(current: &Path) -> String {
+    current
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| "query.sql".to_string())
+}
+
 gpui::actions!(
     sql_editor_view,
     [RunCurrentQuery, RunAllQuery, ToggleLineComment]
@@ -4769,6 +4787,55 @@ impl SqlEditorTab {
         window.push_notification(Notification::error(message).autohide(true), cx);
     }
 
+    /// 「另存为…」：交给系统保存对话框选目标路径，写入当前 SQL 后把页签绑定到该文件，
+    /// 之后的保存直接覆盖这份文件，方便把查询分享出去。
+    fn handle_save_query_as_file(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let sql = self.get_sql_text(cx);
+        if sql.trim().is_empty() {
+            window.push_notification(t!("Query.query_content_empty").to_string(), cx);
+            return;
+        }
+        let directory = self
+            .file_path
+            .read()
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let suggested_name = suggested_save_as_file_name(&self.file_path.read());
+        let prompt = cx.prompt_for_new_path(&directory, Some(&suggested_name));
+        cx.spawn_in(window, async move |view, cx| {
+            let path = match prompt.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Ok(None)) => return,
+                Ok(Err(error)) => {
+                    view.update_in(cx, |view, window, cx| {
+                        view.notify_save_failed(io::Error::other(error.to_string()), window, cx);
+                    })
+                    .ok();
+                    return;
+                }
+                Err(_) => return,
+            };
+            let file_path = sql_file_path_with_extension(path);
+            let write_result = write_sql_file(&file_path, &sql);
+            view.update_in(cx, move |view, window, cx| match write_result {
+                Ok(()) => {
+                    *view.file_path.write() = file_path;
+                    view.requires_name.store(false, Ordering::Relaxed);
+                    view.finish_successful_save(window, cx);
+                }
+                Err(error) => view.notify_save_failed(error, window, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn finish_successful_save(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.is_dirty.store(false, Ordering::Relaxed);
         window.push_notification(t!("Query.query_saved").to_string(), cx);
@@ -5129,6 +5196,18 @@ impl SqlEditorTab {
                     loading: false,
                 },
                 cx.listener(Self::handle_save_query),
+                cx,
+            ))
+            .child(Self::query_toolbar_button(
+                QueryToolbarButtonSpec {
+                    id: "save-query-as",
+                    icon: IconName::FolderOpen,
+                    color: cx.theme().primary,
+                    tooltip: t!("Query.save_as_file").into(),
+                    disabled: false,
+                    loading: false,
+                },
+                cx.listener(Self::handle_save_query_as_file),
                 cx,
             ))
             .when(supports_transactions, |toolbar| {
@@ -5563,11 +5642,12 @@ mod tests {
         match_sql_to_statement_marker, metadata_scope_selection, preferred_default_database,
         query_connection_context_label, query_connection_ids, query_file_path_for_name,
         query_toolbar_action, result_panel_visible, schema_changed_event_matches_scope,
-        should_render_schema_select,
+        should_render_schema_select, sql_file_path_with_extension,
         sql_text_for_run_all, sql_text_for_toolbar_run, statement_for_gutter_marker,
-        statement_marker_id, supports_manual_transactions, toggle_line_comment_defaults,
-        toggle_sql_line_comments, transaction_action_loading, transaction_liveness,
-        unquote_sql_identifier, viewport_statement_scan_input, write_new_sql_file, write_sql_file,
+        statement_marker_id, suggested_save_as_file_name, supports_manual_transactions,
+        toggle_line_comment_defaults, toggle_sql_line_comments, transaction_action_loading,
+        transaction_liveness, unquote_sql_identifier, viewport_statement_scan_input,
+        write_new_sql_file, write_sql_file,
     };
     use crate::sql_editor::SqlEditor;
     use db::DbManager;
@@ -5584,7 +5664,7 @@ mod tests {
     use one_core::storage::DatabaseType;
     use ropey::Rope;
     use std::cell::Cell;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -6413,6 +6493,24 @@ mod tests {
         );
 
         std::fs::remove_dir_all(directory).expect("temporary query directory should be removed");
+    }
+
+    #[test]
+    fn save_as_path_without_extension_gets_a_sql_suffix() {
+        let path = sql_file_path_with_extension(PathBuf::from("/tmp/quarterly report"));
+        assert_eq!(path, PathBuf::from("/tmp/quarterly report.sql"));
+
+        let kept = sql_file_path_with_extension(PathBuf::from("/tmp/quarterly.txt"));
+        assert_eq!(kept, PathBuf::from("/tmp/quarterly.txt"));
+    }
+
+    #[test]
+    fn save_as_default_name_falls_back_to_query_sql() {
+        assert_eq!(
+            suggested_save_as_file_name(Path::new("/tmp/queries/orders.sql")),
+            "orders.sql"
+        );
+        assert_eq!(suggested_save_as_file_name(Path::new("")), "query.sql");
     }
 
     #[test]
