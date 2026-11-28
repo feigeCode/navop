@@ -59,7 +59,10 @@ impl HomePage {
                 }
                 InputEvent::PressEnter { .. } => {
                     let query = input.read(cx).text().to_string();
-                    if crate::home::home_connection_quick_open::temporary_ssh_connection(&query)
+                    let default_encoding =
+                        one_core::settings::AppSettings::global(cx).terminal_default_encoding;
+                    if crate::home::home_connection_quick_open::
+                        temporary_ssh_connection_with_encoding(&query, default_encoding)
                         .is_some()
                     {
                         this.show_connection_quick_open_with_query(query, window, cx);

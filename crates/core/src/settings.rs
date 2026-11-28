@@ -1,6 +1,6 @@
 use crate::cloud_sync::{GlobalCloudUser, UserInfo};
 use crate::sidebar_contribution::SidebarPlacement;
-use crate::storage::get_config_dir;
+use crate::storage::{StoredTerminalEncoding, get_config_dir};
 use crate::utils::auto_save_config::AutoSaveConfig;
 use agent_runtime::{
     DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_MAX_ITERATIONS, MIN_AGENT_MAX_ITERATIONS,
@@ -1604,6 +1604,9 @@ pub struct AppSettings {
     pub terminal_theme: String,
     #[serde(default)]
     pub terminal_cursor_blink: bool,
+    /// 新建 SSH 连接与快速连接（`ssh user@host`）默认使用的终端编码（issue #345）
+    #[serde(default)]
+    pub terminal_default_encoding: StoredTerminalEncoding,
     #[serde(default = "default_true")]
     pub terminal_confirm_multiline_paste: bool,
     #[serde(default = "default_true")]
@@ -2176,6 +2179,7 @@ impl Default for AppSettings {
             terminal_sync_path_with_terminal: true,
             terminal_theme: default_terminal_theme(),
             terminal_cursor_blink: false,
+            terminal_default_encoding: StoredTerminalEncoding::Utf8,
             terminal_confirm_multiline_paste: default_true(),
             terminal_confirm_high_risk_command: default_true(),
             terminal_auto_session_logging: default_true(),
@@ -2919,6 +2923,7 @@ fn quarantine_corrupt_settings(path: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use crate::storage::StoredTerminalEncoding;
     use gpui::px;
     use gpui_component::{Theme, ThemeMode};
     use std::path::PathBuf;
@@ -2941,6 +2946,30 @@ mod tests {
         migrate_layout_settings, monospace_font_options,
         resolve_installed_grid_monospace_font_family, write_settings_atomically,
     };
+
+    #[test]
+    fn terminal_default_encoding_defaults_to_utf8() {
+        assert_eq!(
+            AppSettings::default().terminal_default_encoding,
+            StoredTerminalEncoding::Utf8
+        );
+    }
+
+    #[test]
+    fn terminal_default_encoding_deserializes_from_settings_json() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"terminal_default_encoding":"gbk"}"#).expect("settings json");
+        assert_eq!(
+            settings.terminal_default_encoding,
+            StoredTerminalEncoding::Gbk
+        );
+
+        let legacy: AppSettings = serde_json::from_str("{}").expect("legacy settings json");
+        assert_eq!(
+            legacy.terminal_default_encoding,
+            StoredTerminalEncoding::Utf8
+        );
+    }
 
     #[test]
     fn app_settings_disables_sync_by_default() {

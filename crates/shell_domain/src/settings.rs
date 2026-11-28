@@ -31,6 +31,7 @@ use one_core::settings::{
     AppSettings, TerminalDesktopNotificationDuration, TerminalDesktopNotificationMode,
     monospace_font_options,
 };
+use one_core::storage::StoredTerminalEncoding;
 use rust_i18n::t;
 use terminal_view::{
     MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, available_monospace_fonts, current_settings,
@@ -180,6 +181,7 @@ fn terminal_input_group(defaults: &AppSettings) -> SettingGroup {
                 |settings, value| settings.terminal_show_suggestion_popup = value,
             ),
             suggestion_popup_opacity_item(defaults),
+            default_terminal_encoding_item(defaults),
         ])
 }
 
@@ -426,6 +428,46 @@ fn scrollback_lines_item(defaults: &AppSettings) -> SettingItem {
 }
 
 /// 候选弹层不透明度；与终端侧边栏里那条滑块共用同一区间。
+/// 新建 SSH 连接 / 快速连接使用的默认终端编码（issue #345）。
+///
+/// 用 [`StoredTerminalEncoding::label`] 作为下拉值，避免把 serde 名字暴露给用户；
+/// 回填时按 label 找回枚举。
+fn default_terminal_encoding_item(defaults: &AppSettings) -> SettingItem {
+    let options = StoredTerminalEncoding::all()
+        .iter()
+        .copied()
+        .map(|encoding| {
+            (
+                SharedString::from(encoding.label()),
+                SharedString::from(encoding.label()),
+            )
+        })
+        .collect::<Vec<_>>();
+    SettingItem::new(
+        t!("Settings.terminal.default_encoding"),
+        SettingField::dropdown(
+            options,
+            |cx: &App| {
+                SharedString::from(AppSettings::global(cx).terminal_default_encoding.label())
+            },
+            |value: SharedString, cx: &mut App| {
+                let encoding = StoredTerminalEncoding::all()
+                    .iter()
+                    .copied()
+                    .find(|encoding| encoding.label() == value.as_ref())
+                    .unwrap_or_default();
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.terminal_default_encoding = encoding;
+                });
+            },
+        )
+        .default_value(SharedString::from(
+            defaults.terminal_default_encoding.label(),
+        )),
+    )
+    .description(t!("Settings.terminal.default_encoding_description").to_string())
+}
+
 fn suggestion_popup_opacity_item(defaults: &AppSettings) -> SettingItem {
     let options = NumberFieldOptions {
         min: 0.1,

@@ -33,6 +33,7 @@ use gpui_component::{
 };
 use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
+use one_core::settings::AppSettings;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
@@ -1059,10 +1060,12 @@ impl SshFormWindow {
             .copied()
             .map(|encoding| TerminalEncodingSelectItem { encoding })
             .collect::<Vec<_>>();
+        // 新连接默认用设置里的终端编码（issue #345），编辑已有连接时下面会回填真实值。
+        let default_terminal_encoding = AppSettings::global(cx).terminal_default_encoding;
         let terminal_encoding_select = cx.new(|cx| {
             let mut state = SelectState::new(terminal_encoding_items, None, window, cx);
             state = state.searchable(true);
-            state.set_selected_value(&StoredTerminalEncoding::Utf8, window, cx);
+            state.set_selected_value(&default_terminal_encoding, window, cx);
             state
         });
         let terminal_type_items = StoredTerminalType::all()

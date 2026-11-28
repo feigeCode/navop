@@ -17,7 +17,7 @@ use gpui_component::{
 use one_assets::IconName;
 #[cfg(feature = "shell")]
 use one_core::settings::AppSettings;
-use one_core::storage::{SshAuthMethod, SshParams, StoredConnection};
+use one_core::storage::{SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding};
 use one_ui::{IconButton, IconButtonRole, IconSize};
 use rust_i18n::t;
 
@@ -74,11 +74,14 @@ impl ConnectionQuickOpenDelegate {
             })
             .cloned()
             .collect();
-        self.apply_filter();
+        self.apply_filter(cx);
     }
 
-    fn apply_filter(&mut self) {
-        if let Some(connection) = temporary_ssh_connection(&self.search_query) {
+    fn apply_filter(&mut self, cx: &App) {
+        let default_encoding = AppSettings::global(cx).terminal_default_encoding;
+        if let Some(connection) =
+            temporary_ssh_connection_with_encoding(&self.search_query, default_encoding)
+        {
             self.filtered_entries = vec![QuickOpenEntry::Connection(connection)];
             self.selected_index = Some(IndexPath::default());
             return;
@@ -241,7 +244,19 @@ fn parse_temporary_ssh_command(input: &str) -> Option<(String, String, u16)> {
         .then(|| (username.to_string(), host.to_string(), port))
 }
 
+/// `ssh user@host` 这种临时连接使用的默认编码。
+///
+/// 真正运行时优先用 [`temporary_ssh_connection_with_encoding`] 传入设置里的
+/// 默认编码（issue #345）；这个不传编码的版本保留给没有 `App` 上下文的调用点
+/// （例如异步的页签快速打开解析器）与测试。
 pub(crate) fn temporary_ssh_connection(input: &str) -> Option<StoredConnection> {
+    temporary_ssh_connection_with_encoding(input, StoredTerminalEncoding::default())
+}
+
+pub(crate) fn temporary_ssh_connection_with_encoding(
+    input: &str,
+    terminal_encoding: StoredTerminalEncoding,
+) -> Option<StoredConnection> {
     let (username, host, port) = parse_temporary_ssh_command(input)?;
     let name = format!(
         "SSH {}{host} (temporary)",
@@ -266,7 +281,7 @@ pub(crate) fn temporary_ssh_connection(input: &str) -> Option<StoredConnection> 
         sftp_default_directory: None,
         credential_reference: None,
         keyboard_interactive: None,
-        terminal_encoding: Default::default(),
+        terminal_encoding,
         terminal_type: Default::default(),
         account_expect: Default::default(),
         connect_timeout: None,
@@ -291,7 +306,29 @@ pub(crate) fn temporary_ssh_connection(input: &str) -> Option<StoredConnection> 
 
 #[cfg(test)]
 mod temporary_ssh_tests {
-    use super::parse_temporary_ssh_command;
+    use super::{parse_temporary_ssh_command, temporary_ssh_connection};
+    use one_core::storage::StoredTerminalEncoding;
+
+    #[test]
+    fn temporary_ssh_connection_uses_the_default_encoding() {
+        let connection = temporary_ssh_connection("ssh example.com").expect("temporary ssh");
+        let params: one_core::storage::SshParams =
+            serde_json::from_str(&connection.params).expect("ssh params json");
+        assert_eq!(params.terminal_encoding, StoredTerminalEncoding::Utf8);
+    }
+
+    #[test]
+    fn temporary_ssh_connection_can_carry_a_configured_encoding() {
+        let connection = super::temporary_ssh_connection_with_encoding(
+            "ssh alice@example.com",
+            StoredTerminalEncoding::Gbk,
+        )
+        .expect("temporary ssh");
+        let params: one_core::storage::SshParams =
+            serde_json::from_str(&connection.params).expect("ssh params json");
+        assert_eq!(params.terminal_encoding, StoredTerminalEncoding::Gbk);
+        assert_eq!(params.username, "alice");
+    }
 
     #[test]
     fn parses_temporary_ssh_targets_without_persisting() {
@@ -352,7 +389,7 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
         cx: &mut Context<ListState<Self>>,
     ) -> Task<()> {
         self.search_query = query.to_string();
-        self.apply_filter();
+        self.apply_filter(cx);
         cx.notify();
         Task::ready(())
     }
