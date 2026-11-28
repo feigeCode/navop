@@ -27,6 +27,58 @@ fn pinned_quick_commands_keeps_only_pinned_in_existing_order() {
     assert_eq!(vec!["cd app", "tail -f app.log"], pinned);
 }
 
+fn grouped(mut command: QuickCommand, group: &str) -> QuickCommand {
+    command.group_name = Some(group.to_string());
+    command
+}
+
+#[test]
+fn quick_bar_groups_put_pinned_commands_first_inside_each_group() {
+    let commands = vec![
+        grouped(command("cd app"), "部署"),
+        grouped(command("kubectl get pods").pinned(), "部署"),
+        grouped(command("docker ps"), "运维"),
+    ];
+
+    let groups = quick_bar_groups(&commands);
+    let names = groups
+        .iter()
+        .map(|group| group.name.clone().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(vec!["部署", "运维"], names);
+
+    let deploy = groups[0]
+        .commands
+        .iter()
+        .map(|command| command.command.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(vec!["kubectl get pods", "cd app"], deploy);
+}
+
+#[test]
+fn quick_bar_groups_keep_ungrouped_commands_in_the_same_row() {
+    let commands = vec![command("ls"), grouped(command("cd app"), "部署")];
+
+    let groups = quick_bar_groups(&commands);
+    assert_eq!(2, groups.len());
+    assert!(groups[0].name.is_none(), "未分组指令要保持无标题分组");
+    assert_eq!(Some("部署".to_string()), groups[1].name);
+}
+
+#[test]
+fn named_group_detection_ignores_blank_names() {
+    assert!(!has_named_quick_group(&[grouped(command("ls"), "   ")]));
+    assert!(has_named_quick_group(&[grouped(command("ls"), " 部署 ")]));
+    assert!(!has_named_quick_group(&[command("ls")]));
+}
+
+#[test]
+fn group_label_is_trimmed_and_blank_groups_have_none() {
+    let groups = quick_bar_groups(&[grouped(command("a"), " 部署 "), command("b")]);
+    assert_eq!(Some("部署".to_string()), quick_bar_group_label(&groups[0]));
+    assert_eq!(None, quick_bar_group_label(&groups[1]));
+}
+
 #[test]
 fn chip_label_prefers_trimmed_name() {
     let command = named(
@@ -69,7 +121,7 @@ fn quick_bar_reuses_shared_execution_path_and_scrolls_horizontally() {
 
     let render = include_str!("render.rs");
     assert!(
-        render.contains("render_pinned_quick_chips"),
+        render.contains("render_quick_command_chips"),
         "折叠行必须直接挂载置顶 chip 横条"
     );
     assert!(
