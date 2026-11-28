@@ -49,7 +49,8 @@ use crate::encoding::TerminalEncoding;
 use crate::history::{
     HistoryEntry, PERSISTED_HISTORY_LIMIT, SESSION_HISTORY_LIMIT, ShellHistoryFormat,
     collect_history_search_results, collect_history_suggestions_with_cwd, collect_recent_history,
-    normalize_recorded_command, parse_shell_history, push_rich_history_entry,
+    normalize_history_command, normalize_recorded_command, parse_shell_history,
+    push_rich_history_entry,
 };
 use crate::line_timeline::{LineTimelineSample, SharedLineTimeline};
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
@@ -1347,25 +1348,66 @@ fn with_local_terminal_default_env(env: Vec<(String, String)>) -> Vec<(String, S
     env
 }
 
+/// 远端历史文件之间使用的分隔标记（issue #570：堡垒机等设备的历史文件位置不统一）。
+const REMOTE_HISTORY_SPLIT_MARKER: &str = "__ONETCLI_HISTORY_SPLIT__";
+
 fn build_remote_history_load_command() -> String {
+    // 一次 exec 内依次读取常见历史文件：`$HISTFILE` 优先（ksh/自定义 HISTFILE），
+    // 之后是 bash/zsh/sh/generic 的默认历史文件。每段前面打一个标记，便于分段解析。
     [
         "sh -lc",
         "'",
-        "if [ -f \"$HOME/.bash_history\" ]; then tail -n 512 \"$HOME/.bash_history\" 2>/dev/null || true; fi;",
+        "for f in \"$HISTFILE\" \"$HOME/.bash_history\" \"$HOME/.zsh_history\" \"$HOME/.sh_history\" \"$HOME/.history\"; do",
         "printf \"\\n__ONETCLI_HISTORY_SPLIT__\\n\";",
-        "if [ -f \"$HOME/.zsh_history\" ]; then tail -n 512 \"$HOME/.zsh_history\" 2>/dev/null || true; fi",
+        "if [ -n \"$f\" ] && [ -f \"$f\" ]; then tail -n 512 \"$f\" 2>/dev/null || true; fi;",
+        "done",
         "'",
     ]
     .join(" ")
 }
 
-fn parse_remote_history_output(output: &str) -> Vec<String> {
-    let (bash_history, zsh_history) = output
-        .split_once("\n__ONETCLI_HISTORY_SPLIT__\n")
-        .unwrap_or((output, ""));
+/// 一行是否是 zsh 扩展历史格式（`: <开始时间>:<耗时>;<命令>`）。
+fn is_zsh_extended_history_line(line: &str) -> bool {
+    let Some((prefix, _)) = line.split_once(';') else {
+        return false;
+    };
+    let Some(rest) = prefix.strip_prefix(':') else {
+        return false;
+    };
+    rest.chars()
+        .all(|ch| ch.is_ascii_digit() || ch == ':' || ch == ' ')
+}
 
-    let mut commands = parse_shell_history(bash_history, ShellHistoryFormat::Bash);
-    commands.extend(parse_shell_history(zsh_history, ShellHistoryFormat::Zsh));
+/// 解析一段历史文件内容：逐行自动识别 zsh 扩展格式，其余按普通命令行处理。
+fn parse_remote_history_section(section: &str) -> Vec<String> {
+    section
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if is_zsh_extended_history_line(line) {
+                let (_, command) = line.split_once(';')?;
+                normalize_history_command(command)
+            } else {
+                normalize_history_command(line)
+            }
+        })
+        .collect()
+}
+
+fn parse_remote_history_output(output: &str) -> Vec<String> {
+    // 输出形如 `\n<marker>\n<file0>\n<marker>\n<file1>…`；第一段是命令自身的噪音，忽略。
+    let mut commands = Vec::new();
+    for section in output.split(REMOTE_HISTORY_SPLIT_MARKER).skip(1) {
+        let section = section.trim_start_matches(['\r', '\n']);
+        if section.trim().is_empty() {
+            continue;
+        }
+        commands.extend(parse_remote_history_section(section));
+    }
+    if commands.is_empty() {
+        // 兼容没有标记的旧输出（例如某些设备把命令回显混进 stdout）。
+        commands = parse_shell_history(output, ShellHistoryFormat::Bash);
+    }
     commands
 }
 
@@ -5742,7 +5784,8 @@ mod tests {
         build_ssh_init_commands, clear_screen_shell_redraw_bytes, compose_ssh_init_commands,
         flush_pending_terminal_events, format_connection_error, host_key_verification_request,
         is_reconnect_generation, is_ssh_password_prompt, keyboard_interactive_answers_for_terminal,
-        merge_history_matches, normalize_history_matches, parse_stored_telnet_params,
+        REMOTE_HISTORY_SPLIT_MARKER, build_remote_history_load_command, merge_history_matches,
+        normalize_history_matches, parse_remote_history_output, parse_stored_telnet_params,
         receive_terminal_event_for_gpui, recent_text_from_term, remote_shell_history_allowed,
         resolve_default_windows_shell_from_env, resolve_local_working_dir,
         resolve_local_workspace_root, resolve_ssh_connection, send_coalesced_wakeup,
@@ -7640,6 +7683,54 @@ mod tests {
         );
         assert_eq!(normalize_history_command("   "), None);
         assert_eq!(normalize_history_command("\n\t"), None);
+    }
+
+    #[test]
+    fn remote_history_load_command_probes_common_history_files() {
+        // issue #570：明御堡垒机等设备的历史文件不是 bash/zsh 默认位置，
+        // 读取时要覆盖 $HISTFILE 与 .sh_history/.history 等常见写法。
+        let command = build_remote_history_load_command();
+        for expected in [
+            "\"$HISTFILE\"",
+            ".bash_history",
+            ".zsh_history",
+            ".sh_history",
+            ".history",
+            "tail -n 512",
+        ] {
+            assert!(
+                command.contains(expected),
+                "历史读取命令应当覆盖 {expected}：{command}"
+            );
+        }
+        assert_eq!(
+            1,
+            command.matches("sh -lc").count(),
+            "仍然只开一次 exec，避免触发 #532 的受限设备断连"
+        );
+    }
+
+    #[test]
+    fn parse_remote_history_output_reads_every_marked_section() {
+        let output = format!(
+            "\n{marker}\ngit status\ncargo test\n{marker}\n: 1710000000:0;git stash\n{marker}\n\n{marker}\nll -la\n",
+            marker = REMOTE_HISTORY_SPLIT_MARKER
+        );
+
+        let commands = parse_remote_history_output(&output);
+
+        assert_eq!(
+            commands,
+            vec!["git status", "cargo test", "git stash", "ll -la"],
+            "每段都要解析，空段跳过"
+        );
+    }
+
+    #[test]
+    fn parse_remote_history_output_falls_back_without_markers() {
+        let commands = parse_remote_history_output("ls -la\ncd /tmp\n");
+
+        assert_eq!(commands, vec!["ls -la", "cd /tmp"]);
     }
 
     #[test]
