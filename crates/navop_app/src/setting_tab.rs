@@ -3433,6 +3433,13 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         action_id: Some(action_id::SQL_TOGGLE_COMMENT),
         system_hotkey: false,
     },
+    ShortcutEntry {
+        keys_macos: &["f7"],
+        keys_other: &["f7"],
+        label_key: "Settings.Shortcuts.sql_run_cursor_statement",
+        action_id: Some(action_id::SQL_RUN_CURSOR_STATEMENT),
+        system_hotkey: false,
+    },
 ];
 
 const TABLE_SHORTCUTS: &[ShortcutEntry] = &[
@@ -4264,6 +4271,15 @@ mod tests {
             run_all.keys_other,
             &["cmd-shift-enter", "ctrl-shift-enter", "cmd-r", "ctrl-r"]
         );
+
+        let run_cursor_statement = DATABASE_SHORTCUTS
+            .iter()
+            .find(|entry| {
+                entry.action_id == Some(one_core::keybindings::action_id::SQL_RUN_CURSOR_STATEMENT)
+            })
+            .expect("run statement at cursor shortcut");
+        assert_eq!(run_cursor_statement.keys_macos, &["f7"]);
+        assert_eq!(run_cursor_statement.keys_other, &["f7"]);
     }
 
     #[test]

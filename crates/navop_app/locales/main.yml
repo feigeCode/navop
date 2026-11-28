@@ -5617,6 +5617,10 @@ Settings:
       en: Toggle Line Comment
       zh-CN: 注释/取消注释
       zh-HK: 註解/取消註解
+    sql_run_cursor_statement:
+      en: Run Statement at Cursor
+      zh-CN: 运行光标处语句
+      zh-HK: 執行游標處語句
     table_move_selection:
       en: Move Selection
       zh-CN: 移动选区

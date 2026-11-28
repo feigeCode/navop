@@ -31,6 +31,7 @@ pub mod action_id {
     pub const SQL_RUN_QUERY: &str = "sql.run_query";
     pub const SQL_RUN_ALL_QUERY: &str = "sql.run_all_query";
     pub const SQL_TOGGLE_COMMENT: &str = "sql.toggle_comment";
+    pub const SQL_RUN_CURSOR_STATEMENT: &str = "sql.run_cursor_statement";
     pub const TERMINAL_SEND_TAB: &str = "terminal.send_tab";
     pub const TERMINAL_SEND_SHIFT_TAB: &str = "terminal.send_shift_tab";
     pub const TERMINAL_SEND_CTRL_B: &str = "terminal.send_ctrl_b";

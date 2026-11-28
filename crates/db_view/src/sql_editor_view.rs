@@ -86,6 +86,12 @@ const RUN_CURRENT_QUERY_KEY_BINDINGS: [&str; 4] =
 const RUN_ALL_QUERY_KEY_BINDINGS: [&str; 4] =
     ["cmd-shift-enter", "ctrl-shift-enter", "cmd-r", "ctrl-r"];
 
+/// 「运行光标处语句」的默认键位；`f7` 对齐 Navicat（#594）。
+///
+/// 该动作本来只在编辑器的右键菜单里，键盘用户按不到；绑上 F7 之后
+/// 它也会出现在「设置 → 快捷键」，可以按需改掉。
+const RUN_CURSOR_STATEMENT_KEY_BINDINGS: [&str; 1] = ["f7"];
+
 /// 「注释 / 取消注释」的默认键位（#290）。
 ///
 /// 按平台给**单一**默认值，不做双绑：`cmd-/` 在 Windows / Linux 上是 Win 键（按不到），
@@ -223,6 +229,22 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             .into_iter()
             .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ToggleLineComment, Some(SQL_EDITOR_INPUT_CONTEXT), cx)),
     );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::SQL_RUN_CURSOR_STATEMENT,
+            &RUN_CURSOR_STATEMENT_KEY_BINDINGS,
+        )
+        .into_iter()
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                RunCursorStatementSql,
+                Some(SQL_EDITOR_CONTEXT),
+                cx,
+            )
+        }),
+    );
     keybindings
 }
 
@@ -267,6 +289,13 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         toggle_line_comment_defaults(),
         Some(SQL_EDITOR_INPUT_CONTEXT),
         ToggleLineComment,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_RUN_CURSOR_STATEMENT,
+        &RUN_CURSOR_STATEMENT_KEY_BINDINGS,
+        Some(SQL_EDITOR_CONTEXT),
+        RunCursorStatementSql,
     ));
     keybindings
 }
@@ -6795,6 +6824,7 @@ mod tests {
         assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"ctrl-shift-enter"));
         assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"cmd-r"));
         assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"ctrl-r"));
+        assert_eq!(super::RUN_CURSOR_STATEMENT_KEY_BINDINGS, ["f7"]);
     }
 
     #[gpui::test]
