@@ -35,6 +35,8 @@ pub mod action_id {
     pub const SQL_DELETE_LINE: &str = "sql.delete_line";
     pub const SQL_DUPLICATE_LINE: &str = "sql.duplicate_line";
     pub const SQL_SWAP_LINE_UP: &str = "sql.swap_line_up";
+    pub const SQL_UPPERCASE: &str = "sql.uppercase";
+    pub const SQL_LOWERCASE: &str = "sql.lowercase";
     pub const TERMINAL_SEND_TAB: &str = "terminal.send_tab";
     pub const TERMINAL_SEND_SHIFT_TAB: &str = "terminal.send_shift_tab";
     pub const TERMINAL_SEND_CTRL_B: &str = "terminal.send_ctrl_b";

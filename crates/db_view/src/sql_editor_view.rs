@@ -98,6 +98,10 @@ const DELETE_LINE_KEY_BINDINGS: [&str; 1] = ["ctrl-l"];
 const DUPLICATE_LINE_KEY_BINDINGS: [&str; 1] = ["ctrl-d"];
 const SWAP_LINE_UP_KEY_BINDINGS: [&str; 1] = ["ctrl-t"];
 
+/// 大小写转换的默认键位（#594）：`ctrl-u` 转大写、`ctrl-shift-u` 转小写。
+const UPPERCASE_SQL_KEY_BINDINGS: [&str; 1] = ["ctrl-u"];
+const LOWERCASE_SQL_KEY_BINDINGS: [&str; 1] = ["ctrl-shift-u"];
+
 /// 「注释 / 取消注释」的默认键位（#290）。
 ///
 /// 按平台给**单一**默认值，不做双绑：`cmd-/` 在 Windows / Linux 上是 Win 键（按不到），
@@ -205,7 +209,9 @@ gpui::actions!(
         ToggleLineComment,
         DeleteLine,
         DuplicateLine,
-        SwapLineUp
+        SwapLineUp,
+        UppercaseSql,
+        LowercaseSql
     ]
 );
 
@@ -298,6 +304,30 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
                 )
             }),
     );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::SQL_UPPERCASE, &UPPERCASE_SQL_KEY_BINDINGS)
+            .into_iter()
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    UppercaseSql,
+                    Some(SQL_EDITOR_INPUT_CONTEXT),
+                    cx,
+                )
+            }),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::SQL_LOWERCASE, &LOWERCASE_SQL_KEY_BINDINGS)
+            .into_iter()
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    LowercaseSql,
+                    Some(SQL_EDITOR_INPUT_CONTEXT),
+                    cx,
+                )
+            }),
+    );
     keybindings
 }
 
@@ -370,6 +400,20 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         &SWAP_LINE_UP_KEY_BINDINGS,
         Some(SQL_EDITOR_INPUT_CONTEXT),
         SwapLineUp,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_UPPERCASE,
+        &UPPERCASE_SQL_KEY_BINDINGS,
+        Some(SQL_EDITOR_INPUT_CONTEXT),
+        UppercaseSql,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_LOWERCASE,
+        &LOWERCASE_SQL_KEY_BINDINGS,
+        Some(SQL_EDITOR_INPUT_CONTEXT),
+        LowercaseSql,
     ));
     keybindings
 }
@@ -967,6 +1011,61 @@ fn toggle_sql_line_comments(text: &str, selection: Range<usize>) -> LineCommentR
         replacement,
         selection: mapped_selection,
     }
+}
+
+/// 标识符字符集合：大小写转换在无选区时按它向两侧扩展出「一个词」。
+fn is_sql_word_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '$' | '#')
+}
+
+fn sql_word_range_at(text: &str, offset: usize) -> Option<Range<usize>> {
+    let offset = clamp_to_char_boundary(text, offset.min(text.len()));
+    let mut start = offset;
+    for (index, c) in text[..offset].char_indices().rev() {
+        if !is_sql_word_char(c) {
+            break;
+        }
+        start = index;
+    }
+    let mut end = offset;
+    for (index, c) in text[offset..].char_indices() {
+        if !is_sql_word_char(c) {
+            break;
+        }
+        end = offset + index + c.len_utf8();
+    }
+    (start < end).then_some(start..end)
+}
+
+/// `ctrl-u` / `ctrl-shift-u`：把选区（无选区时是光标所在标识符）转成大写 / 小写。
+///
+/// 原文与结果一致时返回 `None`，避免一次无意义的文本替换把撤销栈搅乱。
+fn change_case_edit(text: &str, selection: Range<usize>, upper: bool) -> Option<SqlLineEdit> {
+    let range = if selection.start < selection.end {
+        let start = clamp_to_char_boundary(text, selection.start.min(text.len()));
+        let end = clamp_to_char_boundary(text, selection.end.min(text.len()).max(start));
+        start..end
+    } else {
+        sql_word_range_at(text, selection.start)?
+    };
+    if range.is_empty() {
+        return None;
+    }
+    let original = &text[range.clone()];
+    let replacement = if upper {
+        original.to_uppercase()
+    } else {
+        original.to_lowercase()
+    };
+    if replacement == original {
+        return None;
+    }
+    let selection = range.start..range.start + replacement.len();
+    Some(SqlLineEdit {
+        range,
+        replacement,
+        selection,
+    })
 }
 
 /// 行级编辑结果：把 `[range]` 换成 `replacement`，并把选区放到 `selection`。
@@ -4791,6 +4890,28 @@ impl SqlEditorTab {
         self.apply_sql_line_edit(swap_line_with_previous_edit(&text, selection), window, cx);
     }
 
+    fn handle_uppercase_sql_action(
+        &mut self,
+        _: &UppercaseSql,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.get_sql_text(cx);
+        let selection = self.editor.read(cx).selected_range(cx);
+        self.apply_sql_line_edit(change_case_edit(&text, selection, true), window, cx);
+    }
+
+    fn handle_lowercase_sql_action(
+        &mut self,
+        _: &LowercaseSql,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.get_sql_text(cx);
+        let selection = self.editor.read(cx).selected_range(cx);
+        self.apply_sql_line_edit(change_case_edit(&text, selection, false), window, cx);
+    }
+
     fn handle_run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selected_text = self.editor.read(cx).get_selected_text(cx);
         if selected_text.trim().is_empty() {
@@ -5677,7 +5798,9 @@ impl Render for SqlEditorTab {
             .on_action(cx.listener(Self::handle_toggle_line_comment_action))
             .on_action(cx.listener(Self::handle_delete_line_action))
             .on_action(cx.listener(Self::handle_duplicate_line_action))
-            .on_action(cx.listener(Self::handle_swap_line_up_action));
+            .on_action(cx.listener(Self::handle_swap_line_up_action))
+            .on_action(cx.listener(Self::handle_uppercase_sql_action))
+            .on_action(cx.listener(Self::handle_lowercase_sql_action));
         if result_panel_visible(has_results, results_visible, is_query_executing) {
             div = div
                 .child(self.render_has_results(window, cx))
@@ -7146,10 +7269,49 @@ mod tests {
     }
 
     #[test]
+    fn uppercase_edit_uses_the_selection_when_there_is_one() {
+        let text = "select id from orders";
+        let start = text.find("id").expect("column");
+        let edit = super::change_case_edit(text, start..start + 2, true).expect("edit");
+
+        assert_eq!("select ID from orders", edit.apply_to(text));
+        assert_eq!(start..start + 2, edit.selection);
+    }
+
+    #[test]
+    fn lowercase_edit_expands_to_the_word_under_the_cursor() {
+        let text = "SELECT USER_ID FROM orders";
+        let caret = text.find("USER_ID").expect("column") + 2;
+        let edit = super::change_case_edit(text, caret..caret, false).expect("edit");
+
+        assert_eq!("SELECT user_id FROM orders", edit.apply_to(text));
+    }
+
+    #[test]
+    fn case_edit_is_a_no_op_when_the_text_is_already_in_that_case() {
+        let text = "SELECT id";
+        let keyword = text.find("SELECT").expect("keyword");
+        assert!(super::change_case_edit(text, keyword..keyword + 6, true).is_none());
+        let column = text.find("id").expect("column");
+        assert!(super::change_case_edit(text, column..column, false).is_none());
+    }
+
+    #[test]
+    fn case_edit_leaves_identifiers_outside_the_word_alone() {
+        let text = "select `a`.id";
+        let caret = text.find('a').expect("identifier");
+        let edit = super::change_case_edit(text, caret..caret, true).expect("edit");
+
+        assert_eq!("select `A`.id", edit.apply_to(text));
+    }
+
+    #[test]
     fn line_operation_bindings_follow_navicat_defaults() {
         assert_eq!(super::DELETE_LINE_KEY_BINDINGS, ["ctrl-l"]);
         assert_eq!(super::DUPLICATE_LINE_KEY_BINDINGS, ["ctrl-d"]);
         assert_eq!(super::SWAP_LINE_UP_KEY_BINDINGS, ["ctrl-t"]);
+        assert_eq!(super::UPPERCASE_SQL_KEY_BINDINGS, ["ctrl-u"]);
+        assert_eq!(super::LOWERCASE_SQL_KEY_BINDINGS, ["ctrl-shift-u"]);
     }
 
     #[gpui::test]

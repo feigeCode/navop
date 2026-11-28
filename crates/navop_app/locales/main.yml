@@ -5633,6 +5633,14 @@ Settings:
       en: Swap Line Up
       zh-CN: 与上一行交换
       zh-HK: 與上一行交換
+    sql_uppercase:
+      en: Convert to Uppercase
+      zh-CN: 转换为大写
+      zh-HK: 轉換為大寫
+    sql_lowercase:
+      en: Convert to Lowercase
+      zh-CN: 转换为小写
+      zh-HK: 轉換為小寫
     table_move_selection:
       en: Move Selection
       zh-CN: 移动选区

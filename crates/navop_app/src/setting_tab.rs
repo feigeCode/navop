@@ -3461,6 +3461,20 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         action_id: Some(action_id::SQL_SWAP_LINE_UP),
         system_hotkey: false,
     },
+    ShortcutEntry {
+        keys_macos: &["ctrl-u"],
+        keys_other: &["ctrl-u"],
+        label_key: "Settings.Shortcuts.sql_uppercase",
+        action_id: Some(action_id::SQL_UPPERCASE),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["ctrl-shift-u"],
+        keys_other: &["ctrl-shift-u"],
+        label_key: "Settings.Shortcuts.sql_lowercase",
+        action_id: Some(action_id::SQL_LOWERCASE),
+        system_hotkey: false,
+    },
 ];
 
 const TABLE_SHORTCUTS: &[ShortcutEntry] = &[
@@ -4311,6 +4325,21 @@ mod tests {
                 .iter()
                 .find(|entry| entry.action_id == Some(action))
                 .expect("line operation shortcut");
+            assert_eq!(entry.keys_macos, &[keys]);
+            assert_eq!(entry.keys_other, &[keys]);
+        }
+
+        for (action, keys) in [
+            (one_core::keybindings::action_id::SQL_UPPERCASE, "ctrl-u"),
+            (
+                one_core::keybindings::action_id::SQL_LOWERCASE,
+                "ctrl-shift-u",
+            ),
+        ] {
+            let entry = DATABASE_SHORTCUTS
+                .iter()
+                .find(|entry| entry.action_id == Some(action))
+                .expect("case conversion shortcut");
             assert_eq!(entry.keys_macos, &[keys]);
             assert_eq!(entry.keys_other, &[keys]);
         }
