@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use super::execution_history::{
     ExecutionContext, ExecutionHistory, ExecutionRecord, ExecutionStatus, MAX_EXECUTION_RECORDS,
+    recent_sql_statements,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -123,6 +124,13 @@ impl ExecutionHistoryPanel {
         }
         self.history.clear();
         cx.notify();
+    }
+
+    /// 最近执行过的 SQL（新的在前），给编辑器的 ctrl-h 历史弹层用。
+    ///
+    /// 只读内存里的记录：`new` 时已从仓库加载过，执行时也会实时追加。
+    pub fn recent_sql(&self, limit: usize) -> Vec<String> {
+        recent_sql_statements(self.history.records(), limit)
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {

@@ -1350,6 +1350,14 @@ Query:
     en: Query content is empty
     zh-CN: 查询内容为空
     zh-HK: 查詢內容為空
+  execution_history:
+    en: Recently Executed SQL
+    zh-CN: 最近执行的 SQL
+    zh-HK: 最近執行的 SQL
+  execution_history_empty:
+    en: No SQL has been executed in this editor yet
+    zh-CN: 这个编辑器还没有执行过 SQL
+    zh-HK: 這個編輯器還沒有執行過 SQL
   query_editor_prefix:
     en: Query
     zh-CN: 查询

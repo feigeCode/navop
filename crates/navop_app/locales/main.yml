@@ -5641,6 +5641,10 @@ Settings:
       en: Convert to Lowercase
       zh-CN: 转换为小写
       zh-HK: 轉換為小寫
+    sql_execution_history:
+      en: Recently Executed SQL
+      zh-CN: 最近执行的 SQL
+      zh-HK: 最近執行的 SQL
     table_move_selection:
       en: Move Selection
       zh-CN: 移动选区

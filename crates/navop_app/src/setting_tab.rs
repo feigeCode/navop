@@ -3475,6 +3475,13 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         action_id: Some(action_id::SQL_LOWERCASE),
         system_hotkey: false,
     },
+    ShortcutEntry {
+        keys_macos: &["ctrl-h"],
+        keys_other: &["ctrl-h"],
+        label_key: "Settings.Shortcuts.sql_execution_history",
+        action_id: Some(action_id::SQL_EXECUTION_HISTORY),
+        system_hotkey: false,
+    },
 ];
 
 const TABLE_SHORTCUTS: &[ShortcutEntry] = &[
@@ -4334,6 +4341,10 @@ mod tests {
             (
                 one_core::keybindings::action_id::SQL_LOWERCASE,
                 "ctrl-shift-u",
+            ),
+            (
+                one_core::keybindings::action_id::SQL_EXECUTION_HISTORY,
+                "ctrl-h",
             ),
         ] {
             let entry = DATABASE_SHORTCUTS

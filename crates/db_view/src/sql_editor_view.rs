@@ -40,6 +40,7 @@ use gpui_component::input::{
     RangeDecorationStyle,
 };
 use gpui_component::notification::Notification;
+use gpui_component::scroll::ScrollableElement;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
 use gpui_component::spinner::Spinner;
 use gpui_component::{
@@ -101,6 +102,12 @@ const SWAP_LINE_UP_KEY_BINDINGS: [&str; 1] = ["ctrl-t"];
 /// 大小写转换的默认键位（#594）：`ctrl-u` 转大写、`ctrl-shift-u` 转小写。
 const UPPERCASE_SQL_KEY_BINDINGS: [&str; 1] = ["ctrl-u"];
 const LOWERCASE_SQL_KEY_BINDINGS: [&str; 1] = ["ctrl-shift-u"];
+
+/// 打开「最近执行的 SQL」弹层（#594 的 Navicat 会话历史）：`ctrl-h` 对齐 Navicat。
+const EXECUTION_HISTORY_KEY_BINDINGS: [&str; 1] = ["ctrl-h"];
+
+/// 历史弹层里最多列多少条语句：再多也翻不过来，输入框够用即可。
+const EXECUTION_HISTORY_DIALOG_LIMIT: usize = 12;
 
 /// 「注释 / 取消注释」的默认键位（#290）。
 ///
@@ -211,7 +218,8 @@ gpui::actions!(
         DuplicateLine,
         SwapLineUp,
         UppercaseSql,
-        LowercaseSql
+        LowercaseSql,
+        ShowExecutionHistory
     ]
 );
 
@@ -328,6 +336,22 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
                 )
             }),
     );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::SQL_EXECUTION_HISTORY,
+            &EXECUTION_HISTORY_KEY_BINDINGS,
+        )
+        .into_iter()
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                ShowExecutionHistory,
+                Some(SQL_EDITOR_INPUT_CONTEXT),
+                cx,
+            )
+        }),
+    );
     keybindings
 }
 
@@ -415,7 +439,26 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         Some(SQL_EDITOR_INPUT_CONTEXT),
         LowercaseSql,
     ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_EXECUTION_HISTORY,
+        &EXECUTION_HISTORY_KEY_BINDINGS,
+        Some(SQL_EDITOR_INPUT_CONTEXT),
+        ShowExecutionHistory,
+    ));
     keybindings
+}
+
+/// 历史弹层里每条语句的单行预览：空白压成单个空格，过长截断。
+fn history_statement_preview(statement: &str) -> String {
+    const MAX_CHARS: usize = 96;
+    let single_line = statement.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single_line.chars().count() <= MAX_CHARS {
+        return single_line;
+    }
+    let mut preview: String = single_line.chars().take(MAX_CHARS).collect();
+    preview.push('…');
+    preview
 }
 
 fn secondary_enter_binding(current_shortcuts: &[String], cx: &App) -> KeyBinding {
@@ -1811,6 +1854,8 @@ pub struct SqlEditorTab {
     connection_id: String,
     database_type: DatabaseType,
     sql_result_tab_container: Entity<SqlResultTabContainer>,
+    /// 执行历史面板（与结果页共享），供 `ctrl-h` 的「最近执行的 SQL」弹层读取。
+    execution_history: Entity<ExecutionHistoryPanel>,
     connection_select: Entity<SelectState<SearchableVec<QueryConnectionOption>>>,
     database_select: Entity<SelectState<SearchableVec<String>>>,
     schema_select: Entity<SelectState<SearchableVec<String>>>,
@@ -2007,6 +2052,7 @@ impl SqlEditorTab {
             database_type: config.database_type,
             sql_result_tab_container: cx
                 .new(|cx| SqlResultTabContainer::new(execution_history.clone(), window, cx)),
+            execution_history,
             connection_select: connection_select.clone(),
             database_select: database_select.clone(),
             schema_select: schema_select.clone(),
@@ -4912,6 +4958,72 @@ impl SqlEditorTab {
         self.apply_sql_line_edit(change_case_edit(&text, selection, false), window, cx);
     }
 
+    fn handle_show_execution_history_action(
+        &mut self,
+        _: &ShowExecutionHistory,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let statements = self
+            .execution_history
+            .read(cx)
+            .recent_sql(EXECUTION_HISTORY_DIALOG_LIMIT);
+        if statements.is_empty() {
+            window.push_notification(t!("Query.execution_history_empty").to_string(), cx);
+            return;
+        }
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let items = statements.iter().enumerate().map(|(index, statement)| {
+                let statement = statement.clone();
+                let view = view.clone();
+                Button::new(format!("query-history-item-{index}"))
+                    .ghost()
+                    .w_full()
+                    .child(
+                        div()
+                            .w_full()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(history_statement_preview(&statement)),
+                    )
+                    .on_click(move |_, window, cx| {
+                        view.update(cx, |view, cx| {
+                            view.insert_history_statement(&statement, window, cx);
+                        });
+                        window.close_dialog(cx);
+                    })
+            });
+            dialog
+                .title(t!("Query.execution_history").to_string())
+                .w(px(620.0))
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .max_h(px(420.0))
+                        .overflow_y_scrollbar()
+                        .children(items),
+                )
+        });
+    }
+
+    /// 把历史语句插到光标处（替换当前选区），再把焦点交回编辑器。
+    fn insert_history_statement(
+        &mut self,
+        statement: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selection = self.editor.read(cx).selected_range(cx);
+        let replacement = statement.to_string();
+        let caret = selection.start + replacement.len();
+        self.editor.update(cx, |editor, cx| {
+            editor.replace_range_and_select(selection, replacement, caret..caret, window, cx);
+            let input = editor.input();
+            input.update(cx, |state, cx| state.focus(window, cx));
+        });
+    }
+
     fn handle_run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selected_text = self.editor.read(cx).get_selected_text(cx);
         if selected_text.trim().is_empty() {
@@ -5800,7 +5912,8 @@ impl Render for SqlEditorTab {
             .on_action(cx.listener(Self::handle_duplicate_line_action))
             .on_action(cx.listener(Self::handle_swap_line_up_action))
             .on_action(cx.listener(Self::handle_uppercase_sql_action))
-            .on_action(cx.listener(Self::handle_lowercase_sql_action));
+            .on_action(cx.listener(Self::handle_lowercase_sql_action))
+            .on_action(cx.listener(Self::handle_show_execution_history_action));
         if result_panel_visible(has_results, results_visible, is_query_executing) {
             div = div
                 .child(self.render_has_results(window, cx))
@@ -5821,6 +5934,7 @@ impl Clone for SqlEditorTab {
             connection_id: self.connection_id.clone(),
             database_type: self.database_type.clone(),
             sql_result_tab_container: self.sql_result_tab_container.clone(),
+            execution_history: self.execution_history.clone(),
             connection_select: self.connection_select.clone(),
             database_select: self.database_select.clone(),
             schema_select: self.schema_select.clone(),
@@ -7194,6 +7308,24 @@ mod tests {
         assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"cmd-r"));
         assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"ctrl-r"));
         assert_eq!(super::RUN_CURSOR_STATEMENT_KEY_BINDINGS, ["f7"]);
+        assert_eq!(super::DELETE_LINE_KEY_BINDINGS, ["ctrl-l"]);
+        assert_eq!(super::DUPLICATE_LINE_KEY_BINDINGS, ["ctrl-d"]);
+        assert_eq!(super::SWAP_LINE_UP_KEY_BINDINGS, ["ctrl-t"]);
+        assert_eq!(super::UPPERCASE_SQL_KEY_BINDINGS, ["ctrl-u"]);
+        assert_eq!(super::LOWERCASE_SQL_KEY_BINDINGS, ["ctrl-shift-u"]);
+        assert_eq!(super::EXECUTION_HISTORY_KEY_BINDINGS, ["ctrl-h"]);
+    }
+
+    #[test]
+    fn history_statement_preview_collapses_whitespace_and_truncates() {
+        assert_eq!(
+            "select 1 from t",
+            super::history_statement_preview("select 1\n  from\tt")
+        );
+        let long = "select ".to_string() + &"a".repeat(200);
+        let preview = super::history_statement_preview(&long);
+        assert_eq!(97, preview.chars().count());
+        assert!(preview.ends_with('…'));
     }
 
     #[test]

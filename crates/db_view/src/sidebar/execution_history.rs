@@ -114,6 +114,28 @@ impl ExecutionHistory {
     }
 }
 
+/// 取最近执行过的 SQL 语句（新的在前），供编辑器的历史弹层使用。
+///
+/// 空白语句跳过；连续重复的语句只保留一条 —— 反复执行同一句时，
+/// 历史列表会被同一条塞满（issue #594 的 ctrl-h）。
+pub fn recent_sql_statements(records: &[ExecutionRecord], limit: usize) -> Vec<String> {
+    let mut statements: Vec<String> = Vec::new();
+    for record in records.iter().rev() {
+        let sql = record.sql.trim();
+        if sql.is_empty() {
+            continue;
+        }
+        if statements.last().is_some_and(|last| last == sql) {
+            continue;
+        }
+        statements.push(sql.to_string());
+        if statements.len() >= limit {
+            break;
+        }
+    }
+    statements
+}
+
 impl ExecutionRecord {
     pub fn from_result(context: ExecutionContext, result: &SqlResult) -> Self {
         match result {
