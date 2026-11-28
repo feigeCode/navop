@@ -1,7 +1,7 @@
 use gpui::{
-    Anchor, AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement,
-    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Render, Styled,
-    UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
+    Anchor, AnyElement, App, Context, Entity, ExternalDragPayload, FileDragPaths, FocusHandle,
+    Focusable, IntoElement, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Render,
+    Styled, UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, InteractiveElementExt, Sizable,
@@ -1745,6 +1745,25 @@ pub struct DraggedFileItems {
     pub(crate) source: DragSource,
 }
 
+/// 拖出窗口时交给系统的载荷（issue #608）：只有本地文件能直接交给系统文件管理器；
+/// 远端文件还没有落地到磁盘，交给系统只会是一个不存在的路径。
+pub(crate) fn external_drag_payload_for(items: &DraggedFileItems) -> Option<ExternalDragPayload> {
+    if items.is_remote {
+        return None;
+    }
+    let entries = items
+        .items
+        .iter()
+        .map(|item| {
+            (
+                std::path::PathBuf::from(item.full_path.clone()),
+                item.is_dir,
+            )
+        })
+        .collect::<Vec<_>>();
+    (!entries.is_empty()).then(|| ExternalDragPayload::Files(FileDragPaths::new(entries)))
+}
+
 impl DraggedFileItems {
     pub fn single(item: DraggedFileItem) -> Self {
         let is_remote = item.is_remote;
@@ -1868,14 +1887,30 @@ impl Render for DraggedFileItem {
 #[cfg(test)]
 mod tests {
     use super::{
-        DirectorySizeState, FileColumn, FileContextMenuCapabilities, FileItem,
-        FileListContentState, TransferMenuAction, directory_context_menu_capabilities,
-        display_file_name, file_context_menu_capabilities, file_list_content_state,
-        format_file_size, size_sort_key, transfer_menu_action,
+        DirectorySizeState, DraggedFileItem, DraggedFileItems, FileColumn,
+        FileContextMenuCapabilities, FileItem, FileListContentState, TransferMenuAction,
+        directory_context_menu_capabilities, display_file_name, external_drag_payload_for,
+        file_context_menu_capabilities, file_list_content_state, format_file_size, size_sort_key,
+        transfer_menu_action,
     };
     use crate::endpoint::DragSource;
     use std::collections::HashSet;
     use std::time::UNIX_EPOCH;
+
+    fn dragged_item(name: &str, is_remote: bool) -> DraggedFileItem {
+        DraggedFileItem {
+            name: name.to_string(),
+            size: 1,
+            is_dir: false,
+            full_path: format!("/tmp/{name}"),
+            is_remote,
+            source: DragSource::LocalLeft,
+        }
+    }
+
+    fn dragged_items(items: Vec<DraggedFileItem>, is_remote: bool) -> DraggedFileItems {
+        DraggedFileItems::multiple(items, is_remote, DragSource::LocalLeft)
+    }
 
     fn file_item(size: u64) -> FileItem {
         FileItem {
@@ -2107,6 +2142,35 @@ mod tests {
         );
         assert_eq!(None, file_list_content_state(3, 2, true));
     }
+
+    #[test]
+    fn local_files_can_be_dragged_out_to_the_system_file_manager() {
+        // issue #608：本地文件拖出窗口时交给系统真正的路径。
+        let items = dragged_items(vec![dragged_item("report.csv", false)], false);
+
+        let payload = external_drag_payload_for(&items).expect("本地文件应有系统拖拽载荷");
+
+        let gpui::ExternalDragPayload::Files(paths) = payload;
+        assert_eq!(
+            vec![(std::path::PathBuf::from("/tmp/report.csv"), false)],
+            paths.entries().to_vec()
+        );
+    }
+
+    #[test]
+    fn remote_files_are_not_offered_to_the_system_drag() {
+        // 远端文件还没有落地到磁盘，交给系统会是一个不存在的路径。
+        let items = dragged_items(vec![dragged_item("server.log", true)], true);
+
+        assert!(external_drag_payload_for(&items).is_none());
+    }
+
+    #[test]
+    fn empty_selections_have_no_external_payload() {
+        let items = dragged_items(Vec::new(), false);
+
+        assert!(external_drag_payload_for(&items).is_none());
+    }
 }
 
 impl gpui::EventEmitter<FileListPanelEvent> for FileListPanel {}
@@ -2261,6 +2325,11 @@ impl Render for FileListPanel {
                                         .on_drag(drag_items, |drag, _, _, cx| {
                                             cx.new(|_| drag.clone())
                                         })
+                                        .external_drag_payload(
+                                            |items: &DraggedFileItems, _window, _cx| {
+                                                external_drag_payload_for(items)
+                                            },
+                                        )
                                         .on_drop(cx.listener({
                                             let drop_target = full_path.clone();
                                             move |_this, items: &DraggedFileItems, _window, cx| {

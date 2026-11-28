@@ -10149,6 +10149,20 @@ mod default_open_wiring_tests {
     }
 
     #[test]
+    fn file_rows_offer_local_files_to_the_system_drag() {
+        // issue #608：本地文件行的拖拽要同时提供系统级载荷，才能拖到 Finder/资源管理器。
+        let panel = include_str!("file_list_panel.rs");
+        assert!(
+            panel.contains(".external_drag_payload("),
+            "行元素需要挂 external_drag_payload"
+        );
+        assert!(
+            panel.contains("external_drag_payload_for(items)"),
+            "载荷由 external_drag_payload_for 统一决定"
+        );
+    }
+
+    #[test]
     fn dragging_onto_a_local_directory_row_downloads_into_that_directory() {
         // issue #608：拖到本地面板的子目录上时，落点应是该目录而不是 local_current_path。
         let panel = include_str!("file_list_panel.rs");
