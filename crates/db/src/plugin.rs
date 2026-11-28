@@ -802,6 +802,21 @@ pub trait DatabasePlugin: Send + Sync {
         self.list_functions(connection, database).await
     }
 
+    /// 架构比较专用：返回带完整定义的例程列表。
+    ///
+    /// 默认与 `list_functions_in_schema` 行为一致；PostgreSQL 的常规列表已经不取
+    /// `pg_get_functiondef`（大 schema 上会拖慢加载，见 issue #33），比较路径需要
+    /// 定义时改走本方法。
+    async fn list_functions_for_compare(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<FunctionInfo>> {
+        self.list_functions_in_schema(connection, database, schema)
+            .await
+    }
+
     async fn list_functions_view(
         &self,
         connection: &dyn DbConnection,
@@ -896,6 +911,18 @@ pub trait DatabasePlugin: Send + Sync {
     ) -> Result<Vec<FunctionInfo>> {
         let _ = schema;
         self.list_procedures(connection, database).await
+    }
+
+    /// 架构比较专用：返回带完整定义的存储过程列表，语义同
+    /// [`DatabasePlugin::list_functions_for_compare`]。
+    async fn list_procedures_for_compare(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<FunctionInfo>> {
+        self.list_procedures_in_schema(connection, database, schema)
+            .await
     }
 
     async fn list_procedures_view(

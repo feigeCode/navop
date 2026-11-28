@@ -171,6 +171,13 @@ const TDENGINE_IPC_DRIVER_ID: &str = "tdengine";
 const CLICKHOUSE_IPC_DRIVER_ID: &str = "clickhouse";
 
 /// Database manager - creates database plugins
+/// 例程列表要取哪一类对象；用于把函数/过程两条路径收敛到同一段会话管理代码。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoutineListKind {
+    Function,
+    Procedure,
+}
+
 pub struct DbManager {
     mysql: Arc<dyn DatabasePlugin>,
     postgresql: Arc<dyn DatabasePlugin>,
@@ -4254,38 +4261,34 @@ impl GlobalDbState {
         database: &str,
         schema: Option<String>,
     ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
-        require_tokio_runtime("database metadata query")?;
-        let config = self
-            .get_config(connection_id)
-            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
-        let mut config = config.clone();
-        if config.database_type != DatabaseType::Oracle {
-            config.database = Some(database.to_string());
-        }
+        self.list_routines_in_schema_direct(
+            connection_id,
+            database,
+            schema,
+            RoutineListKind::Function,
+            false,
+        )
+        .await
+    }
 
-        let plugin = self.get_plugin(&config.database_type)?;
-        let session_id = self
-            .connection_manager
-            .create_session(config, &self.db_manager)
-            .await?;
-
-        let result = async {
-            let mut guard = self
-                .connection_manager
-                .get_session_connection(&session_id)
-                .await?;
-            let conn = guard
-                .connection()
-                .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
-            plugin
-                .list_functions_in_schema(conn, database, schema)
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e))
-        }
-        .await;
-
-        self.finish_direct_metadata_session(&session_id, result)
-            .await
+    /// 架构比较用：函数列表带上完整定义。
+    ///
+    /// PostgreSQL 的常规列表不再取 `pg_get_functiondef`（大 schema 上会拖慢加载，
+    /// 见 issue #33），比较需要定义时走这个方法。
+    pub async fn list_functions_in_schema_for_compare_direct(
+        &self,
+        connection_id: &str,
+        database: &str,
+        schema: Option<String>,
+    ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
+        self.list_routines_in_schema_direct(
+            connection_id,
+            database,
+            schema,
+            RoutineListKind::Function,
+            true,
+        )
+        .await
     }
 
     /// Pure async version of `list_procedures_in_schema` — skips all metadata
@@ -4295,6 +4298,42 @@ impl GlobalDbState {
         connection_id: &str,
         database: &str,
         schema: Option<String>,
+    ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
+        self.list_routines_in_schema_direct(
+            connection_id,
+            database,
+            schema,
+            RoutineListKind::Procedure,
+            false,
+        )
+        .await
+    }
+
+    /// 架构比较用：存储过程列表带上完整定义，语义同
+    /// [`Self::list_functions_in_schema_for_compare_direct`]。
+    pub async fn list_procedures_in_schema_for_compare_direct(
+        &self,
+        connection_id: &str,
+        database: &str,
+        schema: Option<String>,
+    ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
+        self.list_routines_in_schema_direct(
+            connection_id,
+            database,
+            schema,
+            RoutineListKind::Procedure,
+            true,
+        )
+        .await
+    }
+
+    async fn list_routines_in_schema_direct(
+        &self,
+        connection_id: &str,
+        database: &str,
+        schema: Option<String>,
+        kind: RoutineListKind,
+        include_definitions: bool,
     ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
         require_tokio_runtime("database metadata query")?;
         let config = self
@@ -4319,10 +4358,24 @@ impl GlobalDbState {
             let conn = guard
                 .connection()
                 .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
-            plugin
-                .list_procedures_in_schema(conn, database, schema)
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e))
+            match (kind, include_definitions) {
+                (RoutineListKind::Function, false) => plugin
+                    .list_functions_in_schema(conn, database, schema)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}", e)),
+                (RoutineListKind::Function, true) => plugin
+                    .list_functions_for_compare(conn, database, schema)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}", e)),
+                (RoutineListKind::Procedure, false) => plugin
+                    .list_procedures_in_schema(conn, database, schema)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}", e)),
+                (RoutineListKind::Procedure, true) => plugin
+                    .list_procedures_for_compare(conn, database, schema)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}", e)),
+            }
         }
         .await;
 

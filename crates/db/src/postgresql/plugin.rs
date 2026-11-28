@@ -91,6 +91,140 @@ impl PostgresPlugin {
         Self
     }
 
+    /// 存储函数列表的元数据查询。
+    ///
+    /// `pg_get_functiondef` 会为每个例程反解析一份完整定义，在大 schema 上会明显拖慢
+    /// 列表加载（issue #33），因此常规列表不取定义，只有架构比较路径才带上。
+    async fn list_function_metadata(
+        connection: &dyn DbConnection,
+        schema: &str,
+        include_definition: bool,
+    ) -> Result<Vec<FunctionInfo>> {
+        let definition_column = if include_definition {
+            ", pg_get_functiondef(p.oid)"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT \
+                p.proname, \
+                pg_get_function_result(p.oid), \
+                pg_get_function_identity_arguments(p.oid), \
+                p.oid::text, \
+                n.nspname{} \
+             FROM pg_proc p \
+             JOIN pg_namespace n ON n.oid = p.pronamespace \
+             WHERE n.nspname = {} \
+               AND p.prokind IN ('f', 'w') \
+             ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)",
+            definition_column,
+            postgres_routine_string_literal(schema),
+        );
+        let result = connection
+            .query(&sql)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to list functions: {}", e))?;
+
+        let SqlResult::Query(query_result) = result else {
+            return Err(anyhow::anyhow!("Unexpected result type"));
+        };
+        let mut functions = Vec::new();
+        for row_index in 0..query_result.rows.len() {
+            let cell = |column_index| {
+                crate::metadata_read::metadata_text(
+                    &query_result,
+                    row_index,
+                    column_index,
+                    "utf8mb4",
+                )
+            };
+            let identity_arguments = cell(2)?;
+            functions.push(FunctionInfo {
+                name: cell(0)?.unwrap_or_default(),
+                schema: cell(4)?,
+                return_type: cell(1)?,
+                parameters: identity_arguments
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                identity_arguments,
+                object_id: cell(3)?,
+                definition: if include_definition { cell(5)? } else { None },
+                comment: None,
+            });
+        }
+        Ok(functions)
+    }
+
+    /// 存储过程列表的元数据查询，性能取舍同 [`Self::list_function_metadata`]。
+    async fn list_procedure_metadata(
+        connection: &dyn DbConnection,
+        schema: &str,
+        include_definition: bool,
+    ) -> Result<Vec<FunctionInfo>> {
+        let definition_column = if include_definition {
+            ", pg_get_functiondef(p.oid)"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT \
+                p.proname, \
+                pg_get_function_identity_arguments(p.oid), \
+                p.oid::text, \
+                n.nspname{} \
+             FROM pg_proc p \
+             JOIN pg_namespace n ON n.oid = p.pronamespace \
+             WHERE n.nspname = {} \
+               AND p.prokind = 'p' \
+             ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)",
+            definition_column,
+            postgres_routine_string_literal(schema),
+        );
+        let result = connection
+            .query(&sql)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to list procedures: {}", e))?;
+
+        let SqlResult::Query(query_result) = result else {
+            return Err(anyhow::anyhow!("Unexpected result type"));
+        };
+        let mut procedures = Vec::new();
+        for row_index in 0..query_result.rows.len() {
+            let cell = |column_index| {
+                crate::metadata_read::metadata_text(
+                    &query_result,
+                    row_index,
+                    column_index,
+                    "utf8mb4",
+                )
+            };
+            let identity_arguments = cell(1)?;
+            procedures.push(FunctionInfo {
+                name: cell(0)?.unwrap_or_default(),
+                schema: cell(3)?,
+                return_type: None,
+                parameters: identity_arguments
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                identity_arguments,
+                object_id: cell(2)?,
+                definition: if include_definition { cell(4)? } else { None },
+                comment: None,
+            });
+        }
+        Ok(procedures)
+    }
+
     /// `schema.table` 引用；无 schema 时仅限定表名。
     ///
     /// 固有方法（非 trait 方法），供本插件构造外部表等 SQL 时复用。
@@ -2565,60 +2699,17 @@ impl DatabasePlugin for PostgresPlugin {
         schema: Option<String>,
     ) -> Result<Vec<FunctionInfo>> {
         let schema = schema.unwrap_or_else(|| "public".to_string());
-        let sql = format!(
-            "SELECT \
-                p.proname, \
-                pg_get_function_result(p.oid), \
-                pg_get_function_identity_arguments(p.oid), \
-                p.oid::text, \
-                n.nspname, \
-                pg_get_functiondef(p.oid) \
-             FROM pg_proc p \
-             JOIN pg_namespace n ON n.oid = p.pronamespace \
-             WHERE n.nspname = {} \
-               AND p.prokind IN ('f', 'w') \
-             ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)",
-            postgres_routine_string_literal(&schema),
-        );
-        let result = connection
-            .query(&sql)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to list functions: {}", e))?;
+        Self::list_function_metadata(connection, &schema, false).await
+    }
 
-        if let SqlResult::Query(query_result) = result {
-            let mut functions = Vec::new();
-            for row_index in 0..query_result.rows.len() {
-                let cell = |column_index| {
-                    crate::metadata_read::metadata_text(
-                        &query_result,
-                        row_index,
-                        column_index,
-                        "utf8mb4",
-                    )
-                };
-                let identity_arguments = cell(2)?;
-                functions.push(FunctionInfo {
-                    name: cell(0)?.unwrap_or_default(),
-                    schema: cell(4)?,
-                    return_type: cell(1)?,
-                    parameters: identity_arguments
-                        .as_deref()
-                        .unwrap_or_default()
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(str::to_string)
-                        .collect(),
-                    identity_arguments,
-                    object_id: cell(3)?,
-                    definition: cell(5)?,
-                    comment: None,
-                });
-            }
-            Ok(functions)
-        } else {
-            Err(anyhow::anyhow!("Unexpected result type"))
-        }
+    async fn list_functions_for_compare(
+        &self,
+        connection: &dyn DbConnection,
+        _database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<FunctionInfo>> {
+        let schema = schema.unwrap_or_else(|| "public".to_string());
+        Self::list_function_metadata(connection, &schema, true).await
     }
 
     async fn list_functions_view(
@@ -2691,59 +2782,17 @@ impl DatabasePlugin for PostgresPlugin {
         schema: Option<String>,
     ) -> Result<Vec<FunctionInfo>> {
         let schema = schema.unwrap_or_else(|| "public".to_string());
-        let sql = format!(
-            "SELECT \
-                p.proname, \
-                pg_get_function_identity_arguments(p.oid), \
-                p.oid::text, \
-                n.nspname, \
-                pg_get_functiondef(p.oid) \
-             FROM pg_proc p \
-             JOIN pg_namespace n ON n.oid = p.pronamespace \
-             WHERE n.nspname = {} \
-               AND p.prokind = 'p' \
-             ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)",
-            postgres_routine_string_literal(&schema),
-        );
-        let result = connection
-            .query(&sql)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to list procedures: {}", e))?;
+        Self::list_procedure_metadata(connection, &schema, false).await
+    }
 
-        if let SqlResult::Query(query_result) = result {
-            let mut procedures = Vec::new();
-            for row_index in 0..query_result.rows.len() {
-                let cell = |column_index| {
-                    crate::metadata_read::metadata_text(
-                        &query_result,
-                        row_index,
-                        column_index,
-                        "utf8mb4",
-                    )
-                };
-                let identity_arguments = cell(1)?;
-                procedures.push(FunctionInfo {
-                    name: cell(0)?.unwrap_or_default(),
-                    schema: cell(3)?,
-                    return_type: None,
-                    parameters: identity_arguments
-                        .as_deref()
-                        .unwrap_or_default()
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(str::to_string)
-                        .collect(),
-                    identity_arguments,
-                    object_id: cell(2)?,
-                    definition: cell(4)?,
-                    comment: None,
-                });
-            }
-            Ok(procedures)
-        } else {
-            Err(anyhow::anyhow!("Unexpected result type"))
-        }
+    async fn list_procedures_for_compare(
+        &self,
+        connection: &dyn DbConnection,
+        _database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<FunctionInfo>> {
+        let schema = schema.unwrap_or_else(|| "public".to_string());
+        Self::list_procedure_metadata(connection, &schema, true).await
     }
 
     async fn list_procedures_view(
@@ -4888,18 +4937,12 @@ mod tests {
         assert_eq!(Some("integer"), functions[0].identity_arguments.as_deref());
         assert_eq!(Some("101"), functions[0].object_id.as_deref());
         assert_eq!(vec!["integer"], functions[0].parameters);
-        assert_eq!(
-            Some("CREATE FUNCTION \"team's\".calculate_total(integer) RETURNS integer"),
-            functions[0].definition.as_deref()
-        );
+        assert_eq!(None, functions[0].definition.as_deref());
         assert_eq!("calculate_total", functions[1].name);
         assert_eq!(Some("text"), functions[1].identity_arguments.as_deref());
         assert_eq!(Some("102"), functions[1].object_id.as_deref());
         assert_eq!(vec!["text"], functions[1].parameters);
-        assert_eq!(
-            Some("CREATE FUNCTION \"team's\".calculate_total(text) RETURNS text"),
-            functions[1].definition.as_deref()
-        );
+        assert_eq!(None, functions[1].definition.as_deref());
 
         let query = connection
             .queries()
@@ -4908,7 +4951,27 @@ mod tests {
             .expect("function metadata query");
         assert!(query.contains("n.nspname = E'team''s'"));
         assert!(query.contains("pg_get_function_identity_arguments"));
-        assert!(query.contains("pg_get_functiondef(p.oid)"));
+        // 常规列表不取 pg_get_functiondef，避免大 schema 上逐例程反解析拖慢加载。
+        assert!(!query.contains("pg_get_functiondef(p.oid)"));
+
+        let functions_with_definitions = plugin
+            .list_functions_for_compare(&connection, "app", Some("team's".to_string()))
+            .await
+            .expect("list functions for compare");
+        assert_eq!(
+            Some("CREATE FUNCTION \"team's\".calculate_total(integer) RETURNS integer"),
+            functions_with_definitions[0].definition.as_deref()
+        );
+        assert_eq!(
+            Some("CREATE FUNCTION \"team's\".calculate_total(text) RETURNS text"),
+            functions_with_definitions[1].definition.as_deref()
+        );
+        let compare_query = connection
+            .queries()
+            .into_iter()
+            .find(|query| query.contains("pg_get_functiondef(p.oid)"))
+            .expect("function compare query");
+        assert!(compare_query.contains("p.prokind IN ('f', 'w')"));
     }
 
     #[tokio::test]
@@ -4930,10 +4993,7 @@ mod tests {
         );
         assert_eq!(Some("201"), procedures[0].object_id.as_deref());
         assert_eq!(vec!["integer", "text"], procedures[0].parameters);
-        assert_eq!(
-            Some("CREATE PROCEDURE operations.sync_orders(integer, text)"),
-            procedures[0].definition.as_deref()
-        );
+        assert_eq!(None, procedures[0].definition.as_deref());
 
         let query = connection
             .queries()
@@ -4941,7 +5001,22 @@ mod tests {
             .find(|query| query.contains("p.prokind = 'p'"))
             .expect("procedure metadata query");
         assert!(query.contains("n.nspname = E'operations'"));
-        assert!(query.contains("pg_get_functiondef(p.oid)"));
+        assert!(!query.contains("pg_get_functiondef(p.oid)"));
+
+        let procedures_with_definitions = plugin
+            .list_procedures_for_compare(&connection, "app", Some("operations".to_string()))
+            .await
+            .expect("list procedures for compare");
+        assert_eq!(
+            Some("CREATE PROCEDURE operations.sync_orders(integer, text)"),
+            procedures_with_definitions[0].definition.as_deref()
+        );
+        let compare_query = connection
+            .queries()
+            .into_iter()
+            .find(|query| query.contains("pg_get_functiondef(p.oid)"))
+            .expect("procedure compare query");
+        assert!(compare_query.contains("p.prokind = 'p'"));
     }
 
     #[tokio::test]
