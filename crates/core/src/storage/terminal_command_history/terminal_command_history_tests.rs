@@ -194,3 +194,45 @@ fn suggestions_only_return_exact_prefix_completions_and_prefer_db_ranking() {
 fn commands(items: Vec<TerminalCommandHistory>) -> Vec<String> {
     items.into_iter().map(|item| item.command).collect()
 }
+
+#[test]
+fn import_shell_history_only_adds_unknown_commands() {
+    // issue #570：从远端 shell 历史文件导入时，只补库里没有的命令，
+    // 已存在的条目不能被改写（否则每次连接都会虚增 use_count）。
+    let repo = test_repository();
+    let scope = TerminalHistoryScope::ssh(7);
+
+    let existing = repo
+        .record_success(&scope, "git status", Some("/repo"), Some(0))
+        .unwrap()
+        .expect("known command is stored");
+    assert_eq!(existing.use_count, 1);
+
+    let imported = vec![
+        "git status".to_string(),
+        "cargo test".to_string(),
+        "  ".to_string(),
+    ];
+    let inserted = repo.import_shell_history(&scope, &imported).unwrap();
+    assert_eq!(inserted, 1, "只有 cargo test 是新的");
+
+    let commands = repo
+        .list(&scope, TerminalCommandHistorySort::Latest, None, 20)
+        .unwrap();
+    assert_eq!(commands.len(), 2);
+
+    let git_status = commands
+        .iter()
+        .find(|entry| entry.command == "git status")
+        .expect("existing command stays");
+    assert_eq!(git_status.use_count, 1, "导入不虚增计数");
+    assert_eq!(git_status.first_used_at, existing.first_used_at);
+
+    assert!(
+        commands.iter().any(|entry| entry.command == "cargo test"),
+        "新命令被导入"
+    );
+
+    // 再次导入同样内容不再插入。
+    assert_eq!(repo.import_shell_history(&scope, &imported).unwrap(), 0);
+}

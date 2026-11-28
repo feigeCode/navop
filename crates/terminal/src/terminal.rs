@@ -3957,6 +3957,20 @@ impl Terminal {
             self.persisted_history = history;
             cx.emit(TerminalModelEvent::Wakeup);
         }
+        // issue #570：把从 shell 历史文件读到的命令补进命令历史库。
+        // 否则堡垒机这类没有 shell 集成（拿不到 OSC 133）的会话，
+        // 历史面板永远是空的——即使远端 .bash_history 里明明有记录。
+        if let (Some(repo), Some(scope)) = (&self.history_repository, &self.history_scope) {
+            match repo.import_shell_history(scope, &self.persisted_history) {
+                Ok(inserted) if inserted > 0 => {
+                    cx.emit(TerminalModelEvent::CommandHistoryChanged);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "failed to import terminal shell history");
+                }
+            }
+        }
     }
 
     /// 采样一次行时间轴。解析器繁忙时跳过，下一个 Wakeup 会补上。
@@ -7468,6 +7482,27 @@ mod tests {
     /// 历史读取在同一个 SSH transport 上额外开 exec channel 执行 `sh -lc ...`；
     /// 锐捷 S6250 这类设备会把它当成非法命令回显并断开连接，现场表现为登录后
     /// 未输入任何内容就刷 `% Unknown command` / `File failed`。
+    #[test]
+    fn loading_shell_history_also_imports_it_into_the_command_history_store() {
+        // issue #570：历史面板读的是持久化命令库。只把 shell 历史文件塞进内存
+        // 不够——没有 shell 集成（拿不到 OSC 133）的会话，面板会一直是空的。
+        let source = include_str!("terminal.rs");
+        let production = source.split("mod tests").next().unwrap_or_default();
+        let body = production
+            .split("fn set_persisted_history")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .expect("set_persisted_history 必须存在");
+        assert!(
+            body.contains("import_shell_history"),
+            "shell 历史文件要导入命令历史库"
+        );
+        assert!(
+            body.contains("CommandHistoryChanged"),
+            "导入成功后要通知历史面板刷新"
+        );
+    }
+
     #[test]
     fn ssh_history_loader_is_gated_by_the_shell_integration_setting() {
         let source = include_str!("terminal.rs");
