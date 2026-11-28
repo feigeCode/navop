@@ -1225,6 +1225,10 @@ TerminalView:
     en: "Clipboard image upload task failed: %{error}"
     zh-CN: "上传剪贴板图片任务失败：%{error}"
     zh-HK: "上傳剪貼簿圖片工作失敗：%{error}"
+  clipboard_image_upload_disabled:
+    en: Image upload to the remote shell is turned off in settings, so the clipboard image was not sent.
+    zh-CN: 设置里关闭了「把图片上传到远端」，剪贴板里的图片没有发送。
+    zh-HK: 設定裡關閉了「把圖片上傳到遠端」，剪貼簿裡的圖片沒有傳送。
   clipboard_image_saved_locally:
     en: "Clipboard image saved locally, path pasted: %{path}"
     zh-CN: "剪贴板图片已保存到本地并粘贴路径：%{path}"

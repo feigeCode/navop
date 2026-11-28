@@ -570,6 +570,32 @@ fn clipboard_image_upload_is_only_for_ssh_shell_paste() {
 }
 
 #[test]
+fn disabled_ssh_image_upload_reports_instead_of_dropping_the_image() {
+    // #529：SSH 终端关掉「图片上传到远端」时，以前会把图片静默丢掉。
+    assert!(clipboard_image_upload_is_disabled(
+        false,
+        TerminalConnectionKind::Ssh,
+        true
+    ));
+    // 没图、或不是 SSH、或上传本来就是开着的，都不该提示。
+    assert!(!clipboard_image_upload_is_disabled(
+        false,
+        TerminalConnectionKind::Ssh,
+        false
+    ));
+    assert!(!clipboard_image_upload_is_disabled(
+        false,
+        TerminalConnectionKind::Local,
+        true
+    ));
+    assert!(!clipboard_image_upload_is_disabled(
+        true,
+        TerminalConnectionKind::Ssh,
+        true
+    ));
+}
+
+#[test]
 fn clipboard_image_upload_intercepts_ssh_tui_modes() {
     for mode in [
         TermMode::ALT_SCREEN,

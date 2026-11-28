@@ -191,6 +191,18 @@ pub(super) fn local_clipboard_image_path(
     ))
 }
 
+/// 剪贴板里是图片、但设置里关掉了「图片上传到远端」：SSH 终端要给出提示，
+/// 而不是像以前那样静默丢弃（#529）。
+pub(super) fn clipboard_image_upload_is_disabled(
+    paste_image_upload_enabled: bool,
+    connection_kind: TerminalConnectionKind,
+    has_clipboard_image: bool,
+) -> bool {
+    has_clipboard_image
+        && !paste_image_upload_enabled
+        && connection_kind == TerminalConnectionKind::Ssh
+}
+
 pub(super) fn should_upload_clipboard_image_to_remote_cli(
     paste_image_upload_enabled: bool,
     connection_kind: TerminalConnectionKind,
