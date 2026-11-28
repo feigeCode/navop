@@ -224,6 +224,38 @@ ConnectionForm:
     en: PRODUCTION
     zh-CN: 生产环境
     zh-HK: 生產環境
+  credential_prompt:
+    en: Prompt for credentials
+    zh-CN: 连接时凭据提示
+    zh-HK: 連線時憑證提示
+  credential_prompt_never:
+    en: Use saved credentials
+    zh-CN: 使用已保存的凭据
+    zh-HK: 使用已儲存的憑證
+  credential_prompt_password:
+    en: Ask for password
+    zh-CN: 每次询问密码
+    zh-HK: 每次詢問密碼
+  credential_prompt_both:
+    en: Ask for username and password
+    zh-CN: 每次询问用户名与密码
+    zh-HK: 每次詢問使用者名稱與密碼
+  credential_prompt_title:
+    en: Enter credentials
+    zh-CN: 输入连接凭据
+    zh-HK: 輸入連線憑證
+  credential_prompt_hint:
+    en: "%{name} asks for credentials on every connection. They are kept in memory only."
+    zh-CN: "「%{name}」设置为每次连接都询问凭据。输入的值只保存在内存中，不会写回连接配置。"
+    zh-HK: "「%{name}」設定為每次連線都詢問憑證。輸入的值只保存在記憶體中，不會寫回連線設定。"
+  credential_prompt_username_required:
+    en: Username cannot be empty.
+    zh-CN: 用户名不能为空。
+    zh-HK: 使用者名稱不能為空。
+  credential_prompt_password_required:
+    en: Password cannot be empty.
+    zh-CN: 密码不能为空。
+    zh-HK: 密碼不能為空。
   general:
     en: General
     zh-CN: 常规

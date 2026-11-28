@@ -46,9 +46,9 @@ use one_core::cloud_sync::TeamOption;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    ConnectionRepository, ConnectionType, DatabaseType, DbConnectionConfig, DbEnvironment,
-    ENVIRONMENT_PARAM, GlobalStorageState, ProxyConfig, ProxyType, StoredConnection, Workspace,
-    get_config_dir,
+    ConnectionRepository, ConnectionType, DatabaseType, DbConnectionConfig, DbCredentialPrompt,
+    DbEnvironment, ENVIRONMENT_PARAM, GlobalStorageState, PROMPT_CREDENTIALS_PARAM, ProxyConfig,
+    ProxyType, StoredConnection, Workspace, get_config_dir,
 };
 use rust_i18n::t;
 use tool_runtime::AiAccessLevel;
@@ -297,9 +297,39 @@ fn with_environment_tab(mut config: DbFormConfig) -> DbFormConfig {
     .default("")
     .options(options);
 
+    // 同一次统一加工里顺带加上「连接时凭据提示」（issue #39）：字段会跟随表单自动
+    // 落到 `extra_params`，不需要给 `DbConnectionConfig` 加新字段。
+    let credential_options = [
+        (
+            DbCredentialPrompt::Never,
+            t!("ConnectionForm.credential_prompt_never"),
+        ),
+        (
+            DbCredentialPrompt::Password,
+            t!("ConnectionForm.credential_prompt_password"),
+        ),
+        (
+            DbCredentialPrompt::UsernameAndPassword,
+            t!("ConnectionForm.credential_prompt_both"),
+        ),
+    ]
+    .into_iter()
+    .map(|(prompt, label)| (prompt.as_param().to_string(), label.to_string()))
+    .collect();
+    let credential_field = FormField::new(
+        PROMPT_CREDENTIALS_PARAM,
+        t!("ConnectionForm.credential_prompt"),
+        FormFieldType::Select,
+    )
+    .optional()
+    .default("")
+    .options(credential_options);
+
     let mut tab_groups = std::mem::take(&mut config.tab_groups);
-    tab_groups
-        .push(TabGroup::new("environment", t!("ConnectionForm.environment")).fields(vec![field]));
+    tab_groups.push(
+        TabGroup::new("environment", t!("ConnectionForm.environment"))
+            .fields(vec![field, credential_field]),
+    );
     config.tab_groups = tab_groups;
     config
 }
@@ -3419,7 +3449,8 @@ mod tests {
     fn stored_ssh_connection(id: i64, name: &str, host: &str) -> StoredConnection {
         let mut connection = StoredConnection::new_ssh(
             name.to_string(),
-            SshParams { otp: None,
+            SshParams {
+                otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
@@ -3983,6 +4014,20 @@ mod environment_tab_tests {
                 .map(|(value, _)| value.as_str())
                 .collect();
             assert_eq!(values, vec!["", "development", "staging", "production"]);
+
+            // issue #39：凭据提示与环境和在同一个统一标签页里。
+            let prompt_field = environment_tabs[0]
+                .fields
+                .iter()
+                .find(|field| field.name == PROMPT_CREDENTIALS_PARAM)
+                .expect("credential prompt field");
+            assert_eq!(FormFieldType::Select, prompt_field.field_type);
+            let prompt_values: Vec<&str> = prompt_field
+                .options
+                .iter()
+                .map(|(value, _)| value.as_str())
+                .collect();
+            assert_eq!(prompt_values, vec!["", "password", "both"]);
         }
     }
 

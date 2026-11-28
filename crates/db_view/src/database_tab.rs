@@ -27,6 +27,7 @@ use gpui::{
     StatefulInteractiveElement as _, Style, Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::WindowExt;
+use gpui_component::input::InputState;
 use gpui_component::{
     ActiveTheme, ElementExt as _, Icon, Sizable, Size, h_flex, notification::Notification, v_flex,
 };
@@ -36,7 +37,9 @@ use one_core::sidebar_contribution::{
     SidebarContribution, SidebarPanelChrome, SidebarPanelId, SidebarPanelPolicy, SidebarPanelSize,
     SidebarPanelStyle, SidebarPlacement, SidebarPlacementSet,
 };
-use one_core::storage::{ActiveConnections, DbConnectionConfig, Workspace};
+use one_core::storage::{
+    ActiveConnections, DbConnectionConfig, DbCredentialPrompt, DbSessionCredentials, Workspace,
+};
 use one_core::{
     storage::StoredConnection,
     tab_container::{TabContainer, TabContent, TabContentEvent, TabItem},
@@ -311,7 +314,7 @@ impl DatabaseTabView {
         })
         .detach();
 
-        Self {
+        let this = Self {
             connections: connections.clone(),
             tab_container,
             db_tree_view,
@@ -328,7 +331,155 @@ impl DatabaseTabView {
             sidebar_render_mode: DatabaseSidebarRenderMode::Embedded,
             resizing: None,
             bounds: Bounds::default(),
+        };
+        // 页签打开后立刻检查是否有连接需要补录凭据（issue #39）。
+        cx.defer_in(window, |this, window, cx| {
+            this.prompt_for_pending_credentials(window, cx);
+        });
+        this
+    }
+
+    /// 找出下一条还需要用户补录凭据的连接（issue #39）。
+    fn pending_connection_prompt(&self, cx: &App) -> Option<(String, String, DbCredentialPrompt)> {
+        let state = cx.try_global::<GlobalDbState>()?.clone();
+        for connection in &self.connections {
+            let Some(connection_id) = connection.id else {
+                continue;
+            };
+            let connection_id = connection_id.to_string();
+            if let Some(prompt) = state.pending_credential_prompt(&connection_id) {
+                return Some((connection_id, connection.name.clone(), prompt));
+            }
         }
+        None
+    }
+
+    /// 连接配置里勾了「连接时凭据提示」时，在打开页签后请用户补录凭据（issue #39）。
+    ///
+    /// 补录的值只进 `GlobalDbState` 的内存表，不写回连接配置；多个连接会依次询问。
+    pub(crate) fn prompt_for_pending_credentials(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((connection_id, connection_name, prompt)) = self.pending_connection_prompt(cx)
+        else {
+            return;
+        };
+        let state = cx.global::<GlobalDbState>().clone();
+        let saved_username = self
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.id.map(|id| id.to_string()) == Some(connection_id.clone())
+            })
+            .and_then(|connection| connection.to_db_connection().ok())
+            .map(|config| config.username)
+            .unwrap_or_default();
+        let existing = state
+            .session_credentials(&connection_id)
+            .unwrap_or_default();
+
+        let username_input = cx.new(|cx| {
+            let mut input =
+                InputState::new(window, cx).placeholder(t!("ConnectionForm.username").to_string());
+            let value = existing
+                .username
+                .clone()
+                .unwrap_or_else(|| saved_username.clone());
+            input.set_value(value, window, cx);
+            input
+        });
+        let password_input = cx.new(|cx| {
+            let mut input = InputState::new(window, cx)
+                .placeholder(t!("ConnectionForm.password").to_string())
+                .masked(true);
+            if let Some(password) = existing.password.clone() {
+                input.set_value(password, window, cx);
+            }
+            input
+        });
+
+        let view = cx.entity();
+        let dialog_state = state.clone();
+        let dialog_connection_id = connection_id.clone();
+        let dialog_name = connection_name.clone();
+        let username_for_ok = username_input.clone();
+        let password_for_ok = password_input.clone();
+
+        window.open_dialog(cx, move |dialog, _window, cx| {
+            let view = view.clone();
+            let dialog_state = dialog_state.clone();
+            let dialog_connection_id = dialog_connection_id.clone();
+            let dialog_name = dialog_name.clone();
+            let username_input = username_for_ok.clone();
+            let password_input = password_for_ok.clone();
+
+            dialog
+                .title(t!("ConnectionForm.credential_prompt_title").to_string())
+                .width(px(460.0))
+                .child(
+                    v_flex()
+                        .gap_3()
+                        .p_4()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(
+                                    t!(
+                                        "ConnectionForm.credential_prompt_hint",
+                                        name = dialog_name.clone()
+                                    )
+                                    .to_string(),
+                                ),
+                        )
+                        .child(username_input.clone())
+                        .child(password_input.clone()),
+                )
+                .confirm()
+                .on_ok(move |_, window, cx| {
+                    let username = username_input.read(cx).text().to_string();
+                    let password = password_input.read(cx).text().to_string();
+                    if prompt.prompts_for_username() && username.trim().is_empty() {
+                        window.push_notification(
+                            Notification::warning(
+                                t!("ConnectionForm.credential_prompt_username_required")
+                                    .to_string(),
+                            ),
+                            cx,
+                        );
+                        return false;
+                    }
+                    if prompt.prompts_for_password() && password.is_empty() {
+                        window.push_notification(
+                            Notification::warning(
+                                t!("ConnectionForm.credential_prompt_password_required")
+                                    .to_string(),
+                            ),
+                            cx,
+                        );
+                        return false;
+                    }
+                    dialog_state.set_session_credentials(
+                        &dialog_connection_id,
+                        DbSessionCredentials {
+                            username: prompt.prompts_for_username().then_some(username),
+                            password: prompt.prompts_for_password().then_some(password),
+                        },
+                    );
+                    // 还有别的连接需要补录时继续问下一条。
+                    window.defer(cx, {
+                        let view = view.clone();
+                        move |window, cx| {
+                            view.update(cx, |this, cx| {
+                                this.prompt_for_pending_credentials(window, cx);
+                            });
+                        }
+                    });
+                    true
+                })
+        });
     }
 
     pub fn with_external_sidebar(mut self) -> Self {
@@ -1187,6 +1338,19 @@ mod tests {
     use db::ipc::{IpcDriverManifest, IpcDriverRegistry};
     use one_core::storage::DatabaseType;
     use std::collections::HashMap;
+
+    #[test]
+    fn opening_a_database_tab_asks_for_pending_credentials() {
+        // issue #39：连接配置要求连接时询问凭据时，页签打开后必须立刻弹出补录框。
+        let source = include_str!("database_tab.rs");
+        let constructor = source
+            .split("pub fn new_with_active_conn(")
+            .nth(1)
+            .expect("constructor");
+        assert!(constructor.contains("prompt_for_pending_credentials(window, cx)"));
+        assert!(source.contains("pending_credential_prompt"));
+        assert!(source.contains("set_session_credentials("));
+    }
 
     fn external_config(driver_id: &str) -> DbConnectionConfig {
         DbConnectionConfig {

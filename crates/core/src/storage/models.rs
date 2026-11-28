@@ -2015,6 +2015,57 @@ impl DbEnvironment {
     }
 }
 
+/// 连接时是否向用户询问凭据（issue #39 的延迟录入）。
+pub const PROMPT_CREDENTIALS_PARAM: &str = "prompt_credentials";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DbCredentialPrompt {
+    /// 直接使用已保存的凭据（旧行为）。
+    #[default]
+    Never,
+    /// 每次连接都询问密码，用户名用连接里保存的。
+    Password,
+    /// 每次连接都询问用户名与密码。
+    UsernameAndPassword,
+}
+
+impl DbCredentialPrompt {
+    pub fn from_param(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "password" => Self::Password,
+            "both" | "username_and_password" => Self::UsernameAndPassword,
+            _ => Self::Never,
+        }
+    }
+
+    pub fn from_params(extra_params: &std::collections::HashMap<String, String>) -> Self {
+        extra_params
+            .get(PROMPT_CREDENTIALS_PARAM)
+            .map(|value| Self::from_param(value))
+            .unwrap_or_default()
+    }
+
+    pub fn as_param(self) -> &'static str {
+        match self {
+            Self::Never => "",
+            Self::Password => "password",
+            Self::UsernameAndPassword => "both",
+        }
+    }
+
+    pub fn prompts(self) -> bool {
+        !matches!(self, Self::Never)
+    }
+
+    pub fn prompts_for_username(self) -> bool {
+        matches!(self, Self::UsernameAndPassword)
+    }
+
+    pub fn prompts_for_password(self) -> bool {
+        matches!(self, Self::Password | Self::UsernameAndPassword)
+    }
+}
+
 /// Connection configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbConnectionConfig {
@@ -2038,6 +2089,40 @@ pub struct DbConnectionConfig {
     pub proxy: Option<ProxyConfig>,
     #[serde(default)]
     pub extra_params: std::collections::HashMap<String, String>,
+}
+
+/// 本次会话中由用户临时输入的凭据（issue #39）。
+///
+/// 只存在内存里，不写回连接配置；连接一旦关闭或应用退出即丢弃。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DbSessionCredentials {
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+impl DbConnectionConfig {
+    /// 该连接是否要求连接时询问凭据。
+    pub fn credential_prompt(&self) -> DbCredentialPrompt {
+        DbCredentialPrompt::from_params(&self.extra_params)
+    }
+
+    /// 把本次会话输入的凭据合并进配置：只有开启了对应提示的字段才会被覆盖，
+    /// 未开启时仍以连接里保存的值为准（issue #39）。
+    pub fn with_session_credentials(mut self, credentials: &DbSessionCredentials) -> Self {
+        let prompt = self.credential_prompt();
+        if prompt.prompts_for_username()
+            && let Some(username) = credentials.username.as_deref()
+            && !username.trim().is_empty()
+        {
+            self.username = username.to_string();
+        }
+        if prompt.prompts_for_password()
+            && let Some(password) = credentials.password.as_deref()
+        {
+            self.password = password.to_string();
+        }
+        self
+    }
 }
 
 impl DbConnectionConfig {
@@ -5733,5 +5818,82 @@ mod environment_tests {
         assert!(environment.is_production());
         assert_eq!("production", environment.as_param());
         assert_eq!("", DbEnvironment::Unspecified.as_param());
+    }
+
+    fn config_with_prompt(prompt: DbCredentialPrompt) -> DbConnectionConfig {
+        let mut params = std::collections::HashMap::new();
+        if !prompt.as_param().is_empty() {
+            params.insert(
+                PROMPT_CREDENTIALS_PARAM.to_string(),
+                prompt.as_param().to_string(),
+            );
+        }
+        DbConnectionConfig {
+            id: "1".to_string(),
+            database_type: DatabaseType::MySQL,
+            name: "local".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 3306,
+            username: "saved-user".to_string(),
+            password: "saved-password".to_string(),
+            credential_reference: None,
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            proxy: None,
+            extra_params: params,
+        }
+    }
+
+    #[test]
+    fn credential_prompt_parses_known_values() {
+        assert_eq!(
+            DbCredentialPrompt::Password,
+            DbCredentialPrompt::from_param("password")
+        );
+        assert_eq!(
+            DbCredentialPrompt::UsernameAndPassword,
+            DbCredentialPrompt::from_param(" BOTH ")
+        );
+        assert_eq!(
+            DbCredentialPrompt::Never,
+            DbCredentialPrompt::from_param("something-else")
+        );
+        assert!(!DbCredentialPrompt::Never.prompts());
+        assert!(DbCredentialPrompt::Password.prompts_for_password());
+        assert!(!DbCredentialPrompt::Password.prompts_for_username());
+        assert!(DbCredentialPrompt::UsernameAndPassword.prompts_for_username());
+    }
+
+    #[test]
+    fn session_credentials_only_override_the_fields_being_prompted() {
+        // 只提示密码：用户名仍用连接里保存的。
+        let password_only = config_with_prompt(DbCredentialPrompt::Password)
+            .with_session_credentials(&DbSessionCredentials {
+                username: Some("typed-user".to_string()),
+                password: Some("typed-password".to_string()),
+            });
+        assert_eq!("saved-user", password_only.username);
+        assert_eq!("typed-password", password_only.password);
+
+        // 用户名 + 密码都提示：两个字段都用本次输入。
+        let both = config_with_prompt(DbCredentialPrompt::UsernameAndPassword)
+            .with_session_credentials(&DbSessionCredentials {
+                username: Some("typed-user".to_string()),
+                password: Some("typed-password".to_string()),
+            });
+        assert_eq!("typed-user", both.username);
+        assert_eq!("typed-password", both.password);
+
+        // 没开提示：本次输入一律忽略。
+        let never = config_with_prompt(DbCredentialPrompt::Never).with_session_credentials(
+            &DbSessionCredentials {
+                username: Some("typed-user".to_string()),
+                password: Some("typed-password".to_string()),
+            },
+        );
+        assert_eq!("saved-user", never.username);
+        assert_eq!("saved-password", never.password);
     }
 }
