@@ -287,6 +287,23 @@ RemoteDesktopForm:
     zh-HK: >-
       Alt+Tab 等系統快捷鍵預設交回本機處理；只有 Windows 原生 RDP 後端在「僅全螢幕」模式下
       才可能把它們轉發給遠端，需要切回本機時請選「僅本機」。
+  label_legacy_security:
+    en: Legacy server compatibility
+    zh-CN: 兼容旧版服务端
+    zh-HK: 相容舊版伺服器
+  legacy_security_hint:
+    en: >-
+      Turn this on when the remote desktop refuses to authenticate (for example an xrdp or
+      Windows Server without NLA). It disables CredSSP and relaxes the authentication level,
+      so security drops; only the Windows native RDP backend reads this policy.
+    zh-CN: >-
+      远端在认证阶段直接拒绝连接时（例如未启用 NLA 的 xrdp、老版本 Windows Server）可以打开：
+      会关闭 CredSSP 并放宽认证级别，安全性随之下降，仅在信任网络下使用；目前只有 Windows
+      原生 RDP 后端读取该策略。
+    zh-HK: >-
+      遠端在認證階段直接拒絕連線時（例如未啟用 NLA 的 xrdp、舊版 Windows Server）可以開啟：
+      會關閉 CredSSP 並放寬認證層級，安全性隨之下降，僅在信任網路下使用；目前只有 Windows
+      原生 RDP 後端讀取該策略。
   label_egfx:
     en: Graphics pipeline (EGFX)
     zh-CN: 图形管线（EGFX）

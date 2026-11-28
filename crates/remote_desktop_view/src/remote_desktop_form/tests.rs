@@ -1,6 +1,9 @@
 use one_core::storage::{RdpAudioMode, RdpKeyboardHookMode, RdpSettings, RemoteDesktopProtocol};
 
-use super::view::{apply_keyboard_hook_mode, keyboard_hook_mode_for};
+use super::view::{
+    apply_keyboard_hook_mode, apply_legacy_security_compatible, keyboard_hook_mode_for,
+    legacy_security_compatible_for,
+};
 use super::{audio_playback_for_protocol, rdp_settings_for_protocol};
 
 #[test]
@@ -171,4 +174,42 @@ fn keyboard_hook_choice_creates_settings_and_keeps_other_fields() {
         RdpKeyboardHookMode::Fullscreen,
         settings.input.keyboard_hook
     );
+}
+
+#[test]
+fn legacy_security_is_off_by_default() {
+    // 默认策略必须仍然要求 CredSSP，兼容模式只能由用户显式打开。
+    assert!(!legacy_security_compatible_for(None));
+    assert!(!legacy_security_compatible_for(Some(
+        &RdpSettings::default()
+    )));
+}
+
+#[test]
+fn enabling_legacy_security_relaxes_credssp_and_authentication() {
+    let mut settings: Option<RdpSettings> = None;
+
+    apply_legacy_security_compatible(&mut settings, true, true);
+
+    let settings = settings.expect("settings created");
+    assert!(!settings.security.enable_credssp);
+    assert_eq!(2, settings.security.authentication_level);
+    assert!(settings.security.public_mode);
+    // 其它字段沿用默认值，不能因为改一个开关就丢掉音频等设置。
+    assert_eq!(RdpAudioMode::Local, settings.audio.mode);
+    assert!(legacy_security_compatible_for(Some(&settings)));
+}
+
+#[test]
+fn disabling_legacy_security_restores_the_default_policy() {
+    let mut settings: Option<RdpSettings> = None;
+    apply_legacy_security_compatible(&mut settings, false, true);
+
+    apply_legacy_security_compatible(&mut settings, false, false);
+
+    let settings = settings.expect("settings kept");
+    assert!(settings.security.enable_credssp);
+    assert_eq!(0, settings.security.authentication_level);
+    assert!(!settings.security.public_mode);
+    assert!(!legacy_security_compatible_for(Some(&settings)));
 }
