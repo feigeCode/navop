@@ -1,8 +1,8 @@
-//! 内置编辑器的文档格式化与校验（issue #621 的第一个切片）。
+//! 内置编辑器的文档格式化与校验（issue #621）。
 //!
-//! 只做「结构化文档 ↔ 文本」这一段：按扩展名识别 JSON / YAML，解析成功时输出
-//! 规范化的文本，解析失败时把错误位置（行、列）带回去给 UI 展示。键名补全、
-//! WASM 语言扩展等留给后续切片。
+//! 只做「结构化文档 ↔ 文本」这一段：按扩展名识别 JSON / YAML / JSONC，解析成功时
+//! 输出规范化的文本（JSONC 只校验不重排，避免丢注释），解析失败时把错误位置
+//!（行、列）带回去给 UI 展示。键名补全、WASM 语言扩展等留给后续切片。
 
 use std::path::Path;
 
@@ -14,7 +14,8 @@ pub enum DocumentFormat {
 }
 
 impl DocumentFormat {
-    /// 按文件名（或路径）识别格式；`.jsonc` 里允许注释，直接解析会失败，故不识别。
+    /// 按文件名（或路径）识别可格式化的格式；`.jsonc` 允许注释，重排会丢注释，
+    /// 因此只参与校验（见 [`validate_document`]），不在这里返回。
     pub fn from_file_name(file_name: &str) -> Option<Self> {
         let extension = Path::new(file_name).extension()?.to_str()?;
         match extension.to_ascii_lowercase().as_str() {
@@ -50,9 +51,34 @@ pub struct FormatError {
     pub message: String,
 }
 
+/// 按扩展名校验文档语法。
+///
+/// 返回 `None` 表示该文件类型不做校验；`.jsonc` 会先忽略注释与尾逗号再解析，
+/// 行列号仍按原文位置给出。
+pub fn validate_document(file_name: &str, text: &str) -> Option<Result<(), FormatError>> {
+    if is_jsonc(file_name) {
+        return Some(validate_jsonc(text));
+    }
+
+    let format = DocumentFormat::from_file_name(file_name)?;
+    Some(match format {
+        DocumentFormat::Json => parse_json(text).map(|_| ()),
+        DocumentFormat::Yaml => parse_yaml(text).map(|_| ()),
+    })
+}
+
+/// 是否是需要「容忍注释」的 JSONC 文件。
+fn is_jsonc(file_name: &str) -> bool {
+    Path::new(file_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonc"))
+}
+
 /// 按扩展名格式化文档。
 ///
 /// 返回 `None` 表示该文件类型不支持格式化（调用方据此提示用户）。
+
 pub fn format_document(file_name: &str, text: &str) -> Option<Result<FormatOutcome, FormatError>> {
     let format = DocumentFormat::from_file_name(file_name)?;
     Some(match format {
@@ -62,11 +88,7 @@ pub fn format_document(file_name: &str, text: &str) -> Option<Result<FormatOutco
 }
 
 fn format_json(text: &str) -> Result<FormatOutcome, FormatError> {
-    let value: serde_json::Value = serde_json::from_str(text).map_err(|error| FormatError {
-        line: Some(error.line()),
-        column: Some(error.column()),
-        message: error.to_string(),
-    })?;
+    let value = parse_json(text)?;
     let formatted = serde_json::to_string_pretty(&value).map_err(|error| FormatError {
         line: None,
         column: None,
@@ -78,20 +100,107 @@ fn format_json(text: &str) -> Result<FormatOutcome, FormatError> {
 }
 
 fn format_yaml(text: &str) -> Result<FormatOutcome, FormatError> {
-    let value: serde_yaml::Value = serde_yaml::from_str(text).map_err(|error| {
-        let location = error.location();
-        FormatError {
-            line: location.as_ref().map(|location| location.line()),
-            column: location.as_ref().map(|location| location.column()),
-            message: error.to_string(),
-        }
-    })?;
+    let value = parse_yaml(text)?;
     let formatted = serde_yaml::to_string(&value).map_err(|error| FormatError {
         line: None,
         column: None,
         message: error.to_string(),
     })?;
     Ok(format_outcome(text, &formatted))
+}
+
+fn parse_json(text: &str) -> Result<serde_json::Value, FormatError> {
+    serde_json::from_str(text).map_err(|error| FormatError {
+        line: Some(error.line()),
+        column: Some(error.column()),
+        message: error.to_string(),
+    })
+}
+
+fn parse_yaml(text: &str) -> Result<serde_yaml::Value, FormatError> {
+    serde_yaml::from_str(text).map_err(|error| {
+        let location = error.location();
+        FormatError {
+            line: location.as_ref().map(|location| location.line()),
+            column: location.as_ref().map(|location| location.column()),
+            message: error.to_string(),
+        }
+    })
+}
+
+fn validate_jsonc(text: &str) -> Result<(), FormatError> {
+    let sanitized = strip_jsonc_extensions(text);
+    parse_json(&sanitized).map(|_| ())
+}
+
+/// 把注释与尾逗号替换成空格（换行保留），这样解析出的行列号仍对应原文位置。
+fn strip_jsonc_extensions(text: &str) -> String {
+    let mut bytes = text.as_bytes().to_vec();
+    let mut index = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        match byte {
+            b'"' => {
+                in_string = true;
+                index += 1;
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    bytes[index] = b' ';
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                bytes[index] = b' ';
+                bytes[index + 1] = b' ';
+                index += 2;
+                while index < bytes.len() {
+                    if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                        bytes[index] = b' ';
+                        bytes[index + 1] = b' ';
+                        index += 2;
+                        break;
+                    }
+                    if bytes[index] != b'\n' {
+                        bytes[index] = b' ';
+                    }
+                    index += 1;
+                }
+            }
+            b',' => {
+                // 尾逗号：后面只跟空白/注释直到 `]` 或 `}` 时按空格处理。
+                let mut lookahead = index + 1;
+                while lookahead < bytes.len()
+                    && matches!(bytes[lookahead], b' ' | b'\t' | b'\r' | b'\n')
+                {
+                    lookahead += 1;
+                }
+                if matches!(bytes.get(lookahead), Some(b']') | Some(b'}')) {
+                    bytes[index] = b' ';
+                }
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+
+    // 只替换了 ASCII 字节，原文其余部分保持不变。
+    String::from_utf8(bytes).unwrap_or_else(|_| text.to_string())
 }
 
 /// 只比较含义上的文本，忽略末尾换行差异：编辑器里常见「少一个结尾换行」。
@@ -182,5 +291,73 @@ mod tests {
             DocumentFormat::from_file_name("/tmp/a/b/CONFIG.YAML"),
             Some(DocumentFormat::Yaml)
         );
+    }
+}
+
+#[cfg(test)]
+mod jsonc_tests {
+    use super::*;
+
+    #[test]
+    fn jsonc_comments_and_trailing_commas_are_accepted() {
+        let text = r#"{
+  // 端口配置
+  "port": 8080, /* 默认值 */
+  "hosts": ["a", "b",],
+}"#;
+
+        assert_eq!(validate_document("config.jsonc", text), Some(Ok(())));
+    }
+
+    #[test]
+    fn jsonc_slashes_inside_strings_are_not_comments() {
+        let text = r#"{
+  "url": "https://example.com/path",
+  "raw": "a /* not a comment */ b"
+}"#;
+
+        assert_eq!(validate_document("config.jsonc", text), Some(Ok(())));
+        assert_eq!(
+            strip_jsonc_extensions(text),
+            text,
+            "字符串内的注释符号必须原样保留"
+        );
+    }
+
+    #[test]
+    fn jsonc_errors_keep_the_original_line_numbers() {
+        let text = "{\n  // 注释\n  \"a\": 1,\n  \"b\" 2,\n}\n";
+
+        let error = validate_document("config.jsonc", text)
+            .expect("jsonc is validated")
+            .expect_err("missing colon is invalid");
+        assert_eq!(error.line, Some(4));
+        assert!(error.column.is_some_and(|column| column >= 6), "{error:?}");
+    }
+
+    #[test]
+    fn jsonc_is_validated_but_never_formatted() {
+        assert_eq!(
+            validate_document("config.jsonc", "{\"a\": 1,}"),
+            Some(Ok(()))
+        );
+        assert_eq!(
+            format_document("config.jsonc", "{\"a\": 1,}"),
+            None,
+            "重排会丢注释，因此不提供格式化"
+        );
+    }
+
+    #[test]
+    fn plain_json_validation_rejects_comments() {
+        let error = validate_document("config.json", "{\n  // 注释\n  \"a\": 1\n}")
+            .expect("json is validated")
+            .expect_err("json does not allow comments");
+        assert_eq!(error.line, Some(2));
+    }
+
+    #[test]
+    fn unsupported_files_are_not_validated() {
+        assert_eq!(validate_document("notes.txt", "anything"), None);
     }
 }

@@ -2,7 +2,7 @@ use crate::diagnostics::{self, EditorTaskDetail, EditorTaskGuard, EditorTaskKind
 use crate::file_policy::{
     EditorMode, FilePolicy, decode_text_content, determine_file_policy_with_limit,
 };
-use crate::formatting::{FormatOutcome, format_document};
+use crate::formatting::{FormatOutcome, format_document, validate_document};
 use crate::language::load_language_for_path;
 use crate::{
     CloseIntercept, RemoteMutationCallback, active_index_after_close, decide_close_intercept,
@@ -683,7 +683,7 @@ impl RemoteFileEditorWindow {
         let text = editor.read(cx).text().to_string();
         // 保存前对 JSON/YAML 做一次校验：语法错误只提示、不阻断保存，
         // 避免用户因为没注意到的缩进问题丢改动（issue #621）。
-        if let Some(Err(error)) = format_document(&tab.remote_path, &text) {
+        if let Some(Err(error)) = validate_document(&tab.remote_path, &text) {
             let message = match (error.line, error.column) {
                 (Some(line), Some(column)) => t!(
                     "RemoteFileEditor.notification.saved_with_parse_error_at",

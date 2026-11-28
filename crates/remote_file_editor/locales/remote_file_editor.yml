@@ -59,9 +59,9 @@ RemoteFileEditor:
       zh-CN: 启动
       zh-HK: 啟動
     format_unsupported:
-      en: This file type cannot be formatted yet
-      zh-CN: 这个文件类型暂不支持格式化
-      zh-HK: 這個檔案類型暫不支援格式化
+      en: Formatting is not available for this file type (JSONC keeps its comments)
+      zh-CN: 这个文件类型暂不支持格式化（JSONC 为保留注释不做重排）
+      zh-HK: 這個檔案類型暫不支援格式化（JSONC 為保留註解不做重排）
     formatted:
       en: Formatted
       zh-CN: 已格式化
