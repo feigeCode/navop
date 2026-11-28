@@ -188,6 +188,7 @@ fn database_setting_group() -> SettingGroup {
         auto_save_switch_item(&defaults),
         auto_save_interval_item(&defaults),
         sql_query_max_rows_item(&defaults),
+        sql_queries_dir_item(&defaults),
         table_row_height_item(&defaults),
         table_column_comment_item(&defaults),
         table_view_mode_item(&defaults),
@@ -310,6 +311,24 @@ fn sql_query_max_rows_item(defaults: &AppSettings) -> SettingItem {
     .description("超过上限的查询结果会被截断。")
 }
 
+/// SQL 查询目录：保存的查询放在哪个目录下（issue #112 第 3 点）。
+fn sql_queries_dir_item(defaults: &AppSettings) -> SettingItem {
+    SettingItem::new(
+        "SQL 查询目录",
+        SettingField::input(
+            |cx: &App| SharedString::from(AppSettings::global(cx).sql_queries_dir.clone()),
+            |val: SharedString, cx: &mut App| {
+                let directory = val.trim().to_string();
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.sql_queries_dir = directory;
+                });
+            },
+        )
+        .default_value(SharedString::from(defaults.sql_queries_dir.clone())),
+    )
+    .description("保存的 SQL 查询放在这里，便于备份或分享；留空时使用配置目录下的 queries 文件夹；修改后重新打开查询库生效。")
+}
+
 /// 数据表格行高。
 fn table_row_height_item(defaults: &AppSettings) -> SettingItem {
     SettingItem::new(
@@ -394,6 +413,7 @@ mod tests {
             "SQL 编辑器字号",
             "悬停提示",
             "表格预览字体",
+            "SQL 查询目录",
         ] {
             assert!(source.contains(title), "数据库页缺少设置项 {title}");
         }

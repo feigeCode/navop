@@ -4,7 +4,7 @@ use anyhow::Result;
 use dashmap::DashMap;
 use gpui::{App, Global};
 use std::any::{Any, TypeId};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -98,11 +98,22 @@ pub fn get_download_dir() -> Option<PathBuf> {
 
 pub fn get_queries_dir() -> Result<PathBuf> {
     let config_dir = get_config_dir()?;
-    let queries_dir = config_dir.join("queries");
+    // 设置里给了 SQL 查询目录就整体切过去（issue #112 第 3 点），否则用配置目录下的 queries。
+    let configured = crate::settings::AppSettings::peek_sql_queries_dir();
+    let queries_dir = resolve_queries_dir(&config_dir, &configured);
     if !queries_dir.exists() {
         std::fs::create_dir_all(&queries_dir)?;
     }
     Ok(queries_dir)
+}
+
+/// 解析查询目录：设置为空（或只有空白）时回退到 `config_dir/queries`。
+pub(crate) fn resolve_queries_dir(config_dir: &Path, configured: &str) -> PathBuf {
+    let configured = configured.trim();
+    if configured.is_empty() {
+        return config_dir.join("queries");
+    }
+    PathBuf::from(configured)
 }
 
 pub fn now() -> i64 {
@@ -116,4 +127,32 @@ pub fn init(cx: &mut App) -> Result<()> {
     let storage = StorageManager::new()?;
     cx.set_global(GlobalStorageState { storage });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_queries_dir;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn queries_dir_falls_back_to_config_dir_when_unset() {
+        let config_dir = Path::new("/tmp/navop-config");
+        assert_eq!(
+            resolve_queries_dir(config_dir, ""),
+            PathBuf::from("/tmp/navop-config/queries")
+        );
+        assert_eq!(
+            resolve_queries_dir(config_dir, "   "),
+            PathBuf::from("/tmp/navop-config/queries")
+        );
+    }
+
+    #[test]
+    fn queries_dir_uses_the_configured_root() {
+        let config_dir = Path::new("/tmp/navop-config");
+        assert_eq!(
+            resolve_queries_dir(config_dir, " /data/navop/queries "),
+            PathBuf::from("/data/navop/queries")
+        );
+    }
 }
