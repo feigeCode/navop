@@ -42,9 +42,13 @@ Ssh:
     zh-CN: 请加载 SSH Agent，或切换为「私钥文件」模式手动指定私钥
     zh-HK: 請加載 SSH Agent，或切換為「私鑰文件」模式手動指定私鑰
   private_key_load_failed:
-    en: Unable to load the SSH private key. Check that the key content and passphrase are correct, and that the format is supported (OpenSSH, RSA, EC, PKCS#8, or PPK).
-    zh-CN: 无法加载 SSH 私钥。请检查私钥内容是否完整、密码短语是否正确，并确认格式受支持（OpenSSH、RSA、EC、PKCS#8 或 PPK）。
-    zh-HK: 無法載入 SSH 私鑰。請檢查私鑰內容是否完整、密碼短語是否正確，並確認格式受支援（OpenSSH、RSA、EC、PKCS#8 或 PPK）。
+    en: Unable to load the SSH private key. Check that the key content and passphrase are correct, and that the format is supported (OpenSSH, RSA, EC, or PKCS#8).
+    zh-CN: 无法加载 SSH 私钥。请检查私钥内容是否完整、密码短语是否正确，并确认格式受支持（OpenSSH、RSA、EC 或 PKCS#8）。
+    zh-HK: 無法載入 SSH 私鑰。請檢查私鑰內容是否完整、密碼短語是否正確，並確認格式受支援（OpenSSH、RSA、EC 或 PKCS#8）。
+  private_key_ppk_unsupported:
+    en: "Unable to load the SSH private key: this is a PuTTY .ppk file, which is not supported. Open it in PuTTYgen and use Conversions → Export OpenSSH key to convert it, then choose the exported key again."
+    zh-CN: "无法加载 SSH 私钥：这是 PuTTY 的 .ppk 格式，暂不支持直接使用。请在 PuTTYgen 中打开该密钥，用 Conversions（转换）→ Export OpenSSH key 导出为 OpenSSH 格式后重新选择。"
+    zh-HK: "無法載入 SSH 私鑰：這是 PuTTY 的 .ppk 格式，暫不支援直接使用。請在 PuTTYgen 中開啟該金鑰，用 Conversions（轉換）→ Export OpenSSH key 匯出為 OpenSSH 格式後重新選擇。"
   auth_keyboard_interactive_required:
     en: The server rejected the current authentication method and requires keyboard-interactive to finish signing in. If this server really uses OTP/second-factor, enable "Two-factor authentication" for this connection and try again; otherwise re-check that the saved password or credentials are correct.
     zh-CN: 服务器拒绝了当前认证方式，并要求用 keyboard-interactive 完成登录。若该服务器确实需要 OTP/二次认证，请在此连接中启用「双因素认证」后重试；若不需要，请先确认密码或凭据是否正确。

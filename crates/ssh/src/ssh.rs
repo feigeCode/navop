@@ -17,7 +17,10 @@ use x11_forwarding::{
     ForwardRequest, X11ForwardingStatus, X11Proxy, X11ProxyHandle, X11Resolution,
 };
 
-use crate::connection_error::{add_jump_channel_rejected_hint, add_private_key_load_hint};
+use crate::connection_error::{
+    add_jump_channel_rejected_hint, add_private_key_load_hint, is_ppk_key_file, looks_like_ppk_key,
+    ppk_unsupported_error,
+};
 use crate::remote_forwarding::RemoteForwardTarget;
 use crate::{
     HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyProxyType, HostKeyRoute,
@@ -868,13 +871,11 @@ async fn add_identities_to_local_agent(identities: &[AgentIdentity]) -> Result<(
             AgentIdentity::PrivateKeyPath {
                 key_path,
                 passphrase,
-            } => load_secret_key(expand_tilde(key_path), passphrase.as_deref())
-                .map_err(|error| add_private_key_load_hint(error.into()))?,
+            } => load_private_key_file(expand_tilde(key_path), passphrase.as_deref())?,
             AgentIdentity::PrivateKeyContent {
                 private_key,
                 passphrase,
-            } => decode_secret_key(private_key, passphrase.as_deref())
-                .map_err(|error| add_private_key_load_hint(error.into()))?,
+            } => decode_private_key_content(private_key, passphrase.as_deref())?,
         };
         agent
             .add_identity(&key, &[])
@@ -1157,16 +1158,30 @@ fn private_key_for_auth(auth: &SshAuth) -> Result<PrivateKey> {
             key_path,
             passphrase,
             ..
-        } => load_secret_key(expand_tilde(key_path), passphrase.as_deref())
-            .map_err(|error| add_private_key_load_hint(error.into())),
+        } => load_private_key_file(expand_tilde(key_path), passphrase.as_deref()),
         SshAuth::PrivateKeyContent {
             private_key,
             passphrase,
             ..
-        } => decode_secret_key(private_key, passphrase.as_deref())
-            .map_err(|error| add_private_key_load_hint(error.into())),
+        } => decode_private_key_content(private_key, passphrase.as_deref()),
         _ => anyhow::bail!("authentication method does not contain a private key"),
     }
+}
+
+/// 从文件加载私钥；先识别 PuTTY `.ppk` 并给出明确的转换引导。
+fn load_private_key_file(path: PathBuf, passphrase: Option<&str>) -> Result<PrivateKey> {
+    if is_ppk_key_file(&path) {
+        return Err(ppk_unsupported_error());
+    }
+    load_secret_key(path, passphrase).map_err(|error| add_private_key_load_hint(error.into()))
+}
+
+/// 从粘贴的文本解码私钥；先识别 PuTTY `.ppk` 并给出明确的转换引导。
+fn decode_private_key_content(content: &str, passphrase: Option<&str>) -> Result<PrivateKey> {
+    if looks_like_ppk_key(content) {
+        return Err(ppk_unsupported_error());
+    }
+    decode_secret_key(content, passphrase).map_err(|error| add_private_key_load_hint(error.into()))
 }
 
 /// 密码认证，并在连接启用了 MFA 回调时优先把认证交给 keyboard-interactive。
@@ -2262,6 +2277,22 @@ mod tests {
         assert!(
             !message.contains("No such file") && !message.contains("os error 2"),
             "inline private key content should not be treated as a file path: {message}"
+        );
+    }
+
+    #[test]
+    fn ppk_private_key_content_has_a_conversion_hint() {
+        let error = private_key_for_auth(&SshAuth::PrivateKeyContent {
+            private_key: "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\n".to_string(),
+            passphrase: None,
+            certificate_path: None,
+        })
+        .expect_err("PuTTY .ppk 私钥应被拒绝并给出转换提示");
+        let message = error.to_string();
+
+        assert!(
+            message.contains(".ppk") && message.contains("PuTTYgen"),
+            "错误信息应引导用 PuTTYgen 转换，实际: {message}"
         );
     }
 

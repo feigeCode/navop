@@ -1,5 +1,7 @@
 use std::error::Error as StdError;
 use std::fmt;
+use std::io::Read as _;
+use std::path::Path;
 
 use anyhow::Error;
 use rust_i18n::t;
@@ -57,6 +59,43 @@ impl StdError for JumpChannelRejected {}
 pub(crate) fn add_private_key_load_hint(error: Error) -> Error {
     Error::new(PrivateKeyLoadFailed {
         message: format!("{}\n\n{error:#}", t!("Ssh.private_key_load_failed")),
+    })
+}
+
+/// PuTTY `.ppk` 文件的固定开头（v2 / v3）。
+const PPK_FILE_MAGIC: &str = "PuTTY-User-Key-File-";
+
+/// 判断私钥文本是否为 PuTTY 的 `.ppk` 封装。
+///
+/// `.ppk` 以 `PuTTY-User-Key-File-2:` 或 `PuTTY-User-Key-File-3:` 开头；
+/// 这里容忍 BOM 和空行，避免复制粘贴时首行多出空白导致漏判。
+pub(crate) fn looks_like_ppk_key(content: &str) -> bool {
+    content
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .starts_with(PPK_FILE_MAGIC)
+}
+
+/// 判断私钥文件是否为 PuTTY 的 `.ppk`。
+///
+/// 只读文件头，不为了探测把整把（可能加密的）密钥读进内存；文件不存在或
+/// 不可读时返回 `false`，让后续加载流程给出原有的错误。
+pub(crate) fn is_ppk_key_file(path: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buffer = [0u8; 64];
+    let Ok(read) = file.take(buffer.len() as u64).read(&mut buffer) else {
+        return false;
+    };
+    looks_like_ppk_key(&String::from_utf8_lossy(&buffer[..read]))
+}
+
+/// `.ppk` 是 PuTTY 自有的封装格式，russh 不支持；若不显式识别，
+/// 用户只会看到 `SshKey: cryptographic error`，误以为是口令错误。
+pub(crate) fn ppk_unsupported_error() -> Error {
+    Error::new(PrivateKeyLoadFailed {
+        message: t!("Ssh.private_key_ppk_unsupported").to_string(),
     })
 }
 
@@ -136,8 +175,11 @@ fn matches_kind(kind: &russh::AlgorithmKind, theirs: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::{
         LegacyAlgorithmRequired, add_jump_channel_rejected_hint, add_legacy_algorithm_hint,
+        is_ppk_key_file, looks_like_ppk_key, ppk_unsupported_error,
     };
 
     fn no_common_algorithm(kind: russh::AlgorithmKind) -> anyhow::Error {
@@ -270,6 +312,65 @@ mod tests {
 
         assert!(error.downcast_ref::<super::JumpChannelRejected>().is_some());
         assert!(error.to_string().contains("jump server"));
+    }
+
+    #[test]
+    fn ppk_signature_is_detected_in_pasted_content() {
+        assert!(looks_like_ppk_key(
+            "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\n"
+        ));
+        assert!(looks_like_ppk_key(
+            "\u{feff}\n  PuTTY-User-Key-File-2: ssh-rsa\n"
+        ));
+        assert!(!looks_like_ppk_key(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk=\n"
+        ));
+        assert!(!looks_like_ppk_key("not a key"));
+    }
+
+    #[test]
+    fn ppk_signature_is_detected_in_a_key_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "navop-ppk-detect-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("系统时间应晚于 UNIX_EPOCH")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).expect("应可创建临时目录");
+        let ppk_path = dir.join("id_ed25519.ppk");
+        fs::write(
+            &ppk_path,
+            "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\n",
+        )
+        .expect("应可写入 .ppk 文件");
+        let openssh_path = dir.join("id_ed25519");
+        fs::write(
+            &openssh_path,
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk=\n",
+        )
+        .expect("应可写入 OpenSSH 私钥");
+
+        assert!(is_ppk_key_file(&ppk_path));
+        assert!(!is_ppk_key_file(&openssh_path));
+        assert!(!is_ppk_key_file(&dir.join("missing.ppk")));
+
+        fs::remove_dir_all(&dir).expect("应可清理临时目录");
+    }
+
+    #[test]
+    fn ppk_error_explains_the_conversion_step() {
+        let message = ppk_unsupported_error().to_string();
+
+        assert!(
+            message.contains(".ppk"),
+            "错误信息应指出格式，实际: {message}"
+        );
+        assert!(
+            message.contains("PuTTYgen"),
+            "错误信息应给出转换工具，实际: {message}"
+        );
     }
 
     #[test]
