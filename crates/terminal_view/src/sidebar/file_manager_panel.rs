@@ -718,6 +718,31 @@ struct RemoteClipboardEntry {
     size: u64,
 }
 
+/// 面板内拖拽的条目（issue #320：把文件/目录拖到目录行上即移动）。
+#[derive(Clone, Debug)]
+struct FileManagerDrag {
+    name: String,
+    source_path: String,
+    is_dir: bool,
+    size: u64,
+}
+
+impl Render for FileManagerDrag {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("file-manager-drag-ghost")
+            .cursor_grab()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .bg(cx.theme().background)
+            .border_1()
+            .border_color(cx.theme().border)
+            .text_sm()
+            .child(self.name.clone())
+    }
+}
+
 #[derive(Clone, Debug)]
 struct RemoteFileClipboard {
     kind: RemoteClipboardKind,
@@ -1330,6 +1355,11 @@ fn clipboard_entries_for_selection(
             })
         })
         .collect()
+}
+
+/// 拖到自身所在目录时无需移动（issue #320）。
+fn drag_move_has_no_effect(source_path: &str, target_dir: &str, name: &str) -> bool {
+    join_remote_path(target_dir, name) == source_path
 }
 
 fn should_use_context_selection(selected_indices: &HashSet<usize>, filtered_ix: usize) -> bool {
@@ -2769,6 +2799,39 @@ impl FileManagerPanel {
             cx,
         );
         cx.notify();
+    }
+
+    /// 把面板内拖拽的条目移动到目标目录（issue #320）。
+    ///
+    /// 复用「剪切 + 粘贴」的远端命令路径：设置一个只含该条目的剪切剪贴板，
+    /// 再调用 [`Self::paste_remote_file_clipboard`] 完成移动与刷新。
+    fn move_dragged_entry_to(
+        &mut self,
+        drag: &FileManagerDrag,
+        target_dir: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if drag.is_dir && remote_path_is_same_or_descendant(&drag.source_path, &target_dir) {
+            window.push_notification(
+                Notification::error(t!("FileManager.invalid_paste_target")),
+                cx,
+            );
+            return;
+        }
+        if drag_move_has_no_effect(&drag.source_path, &target_dir, &drag.name) {
+            return;
+        }
+        self.file_clipboard = Some(RemoteFileClipboard {
+            kind: RemoteClipboardKind::Cut,
+            entries: vec![RemoteClipboardEntry {
+                name: drag.name.clone(),
+                source_path: drag.source_path.clone(),
+                is_dir: drag.is_dir,
+                size: drag.size,
+            }],
+        });
+        self.paste_remote_file_clipboard(target_dir, window, cx);
     }
 
     fn paste_remote_file_clipboard(
@@ -6343,6 +6406,10 @@ impl FileManagerPanel {
                                 this.prepare_uploads(file_paths, &remote_dir, window, cx);
                             }
                         }))
+                        .on_drop(cx.listener(|this, drag: &FileManagerDrag, window, cx| {
+                            let target_dir = this.current_path.clone();
+                            this.move_dragged_entry_to(drag, target_dir, window, cx);
+                        }))
                         .child(
                             uniform_list("fm-file-list", total_count, {
                                 cx.processor(
@@ -6386,10 +6453,35 @@ impl FileManagerPanel {
                                                 let ctx_full_path = full_path.clone();
                                                 let ctx_is_dir = is_dir;
                                                 let ctx_view = view.clone();
+                                                let drag_payload = FileManagerDrag {
+                                                    name: item_name.clone(),
+                                                    source_path: full_path.clone(),
+                                                    is_dir,
+                                                    size: item.size,
+                                                };
                                                 div()
                                                     .id(list_ix)
                                                     .cursor_pointer()
                                                     .hover(move |s| s.bg(hover))
+                                                    .on_drag(drag_payload, |drag, _, _, cx| {
+                                                        cx.new(|_| drag.clone())
+                                                    })
+                                                    .on_drop(cx.listener({
+                                                        let drop_target = full_path.clone();
+                                                        move |this,
+                                                              drag: &FileManagerDrag,
+                                                              window,
+                                                              cx| {
+                                                            if is_dir {
+                                                                this.move_dragged_entry_to(
+                                                                    drag,
+                                                                    drop_target.clone(),
+                                                                    window,
+                                                                    cx,
+                                                                );
+                                                            }
+                                                        }
+                                                    }))
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         cx.listener(
@@ -8374,6 +8466,43 @@ mod tests {
         assert_eq!(1, targets.len());
         assert_eq!("safe.txt", targets[0].name);
         assert_eq!("/srv/app/safe.txt", targets[0].path);
+    }
+
+    #[test]
+    fn dragging_onto_the_same_directory_has_no_effect() {
+        assert!(super::drag_move_has_no_effect(
+            "/srv/app/a.txt",
+            "/srv/app",
+            "a.txt"
+        ));
+        assert!(!super::drag_move_has_no_effect(
+            "/srv/app/a.txt",
+            "/srv/app",
+            "b.txt"
+        ));
+        assert!(!super::drag_move_has_no_effect(
+            "/srv/app/a.txt",
+            "/srv/other",
+            "a.txt"
+        ));
+    }
+
+    #[test]
+    fn file_manager_rows_expose_drag_and_directory_drop_targets() {
+        let source = include_str!("file_manager_panel.rs");
+
+        assert!(
+            source.contains(".on_drag(drag_payload"),
+            "file rows must start a drag session"
+        );
+        assert!(
+            source.contains("move_dragged_entry_to"),
+            "dragging must reuse the move helper"
+        );
+        assert!(
+            source.contains("RemoteClipboardKind::Cut"),
+            "a drag move is implemented as cut + paste"
+        );
     }
 
     #[test]
