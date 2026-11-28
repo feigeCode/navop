@@ -33,6 +33,10 @@ pub struct FilterValue {
     pub count: usize,
     pub checked: bool,
     pub selected: bool,
+    /// 用户手动输入、当前结果集里并不存在的值（issue #305）。
+    ///
+    /// 这类条目没有计数可显示，也不参与「全选」的「所有值」判定。
+    pub custom: bool,
 }
 
 impl FilterValue {
@@ -43,6 +47,19 @@ impl FilterValue {
             count,
             checked: false,
             selected: false,
+            custom: false,
+        }
+    }
+
+    /// 用户手动输入的筛选值：不在当前结果集里，计数无意义。
+    pub fn custom(value: String) -> Self {
+        Self {
+            key: FilterValueKey::Text(value.clone()),
+            value,
+            count: 0,
+            checked: false,
+            selected: false,
+            custom: true,
         }
     }
 
@@ -53,6 +70,7 @@ impl FilterValue {
             count,
             checked: false,
             selected: false,
+            custom: false,
         }
     }
 
@@ -136,7 +154,12 @@ impl RenderOnce for FilterListItem {
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(format!("({})", self.value.count)),
+                    .child(if self.value.custom {
+                        // 语言无关的「手动输入」标记，避免在 one_ui 里引入 i18n。
+                        "✎".to_string()
+                    } else {
+                        format!("({})", self.value.count)
+                    }),
             )
     }
 }
@@ -170,11 +193,21 @@ impl FilterPanel {
     }
 
     pub fn get_selected_values(&self) -> HashSet<FilterValueKey> {
-        self.values
+        // 手动输入的自定义值只存在于 `filtered_values` 里，必须一并收集，
+        // 否则勾了「beta」也不会真正参与筛选（issue #305）。
+        let mut selected: HashSet<FilterValueKey> = self
+            .values
             .iter()
-            .filter(|v| v.selected)
-            .map(|v| v.key.clone())
-            .collect()
+            .filter(|value| value.selected)
+            .map(|value| value.key.clone())
+            .collect();
+        selected.extend(
+            self.filtered_values
+                .iter()
+                .filter(|value| value.selected && value.custom)
+                .map(|value| value.key.clone()),
+        );
+        selected
     }
 
     pub fn toggle_value(&mut self, key: &FilterValueKey) {
@@ -224,7 +257,7 @@ impl FilterPanel {
     }
 
     fn update_filtered_values(&mut self, search_query: String) {
-        if search_query.is_empty() {
+        if search_query.trim().is_empty() {
             self.filtered_values = self.values.clone();
         } else {
             let query_lower = search_query.to_lowercase();
@@ -234,6 +267,18 @@ impl FilterPanel {
                 .filter(|v| v.value.to_lowercase().contains(&query_lower))
                 .cloned()
                 .collect();
+            // issue #305：结果集里没有这个值时，允许用户直接把输入的文本当筛选值用，
+            // 否则只能从「已加载到的值」里选，筛选前几页之外的枚举值根本选不到。
+            let trimmed = search_query.trim();
+            if !trimmed.is_empty()
+                && !self
+                    .filtered_values
+                    .iter()
+                    .any(|value| value.key == FilterValueKey::Text(trimmed.to_string()))
+            {
+                self.filtered_values
+                    .push(FilterValue::custom(trimmed.to_string()));
+            }
         }
     }
 
@@ -300,5 +345,63 @@ impl ListDelegate for FilterPanel {
     ) {
         self.selected_index = ix;
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn panel(values: Vec<FilterValue>) -> FilterPanel {
+        FilterPanel::new(values)
+    }
+
+    #[test]
+    fn searching_a_missing_value_offers_it_as_a_custom_entry() {
+        // issue #305：结果集里只有已加载的行，筛选前几页之外的值必须能手动输入。
+        let mut panel = panel(vec![FilterValue::new("alpha".to_string(), 2)]);
+
+        panel.update_filtered_values("beta".to_string());
+
+        let custom = panel
+            .filtered_values()
+            .iter()
+            .find(|value| value.custom)
+            .expect("custom entry");
+        assert_eq!(custom.key, FilterValueKey::Text("beta".to_string()));
+        assert_eq!(0, custom.count);
+    }
+
+    #[test]
+    fn searching_a_known_value_does_not_add_a_duplicate_custom_entry() {
+        let mut panel = panel(vec![FilterValue::new("alpha".to_string(), 2)]);
+
+        panel.update_filtered_values("alpha".to_string());
+
+        assert!(!panel.filtered_values().iter().any(|value| value.custom));
+        assert_eq!(1, panel.filtered_values().len());
+    }
+
+    #[test]
+    fn custom_entries_can_be_toggled_like_listed_values() {
+        let mut panel = panel(vec![FilterValue::new("alpha".to_string(), 2)]);
+        panel.update_filtered_values("beta".to_string());
+
+        panel.toggle_value(&FilterValueKey::Text("beta".to_string()));
+
+        assert!(
+            panel
+                .get_selected_values()
+                .contains(&FilterValueKey::Text("beta".to_string()))
+        );
+    }
+
+    #[test]
+    fn blank_search_query_keeps_the_plain_value_list() {
+        let mut panel = panel(vec![FilterValue::new("alpha".to_string(), 2)]);
+
+        panel.update_filtered_values("   ".to_string());
+
+        assert_eq!(1, panel.filtered_values().len());
     }
 }
