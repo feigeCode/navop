@@ -328,6 +328,7 @@ fn connect_config(
         allow_legacy_algorithms: false,
         forward_agent: false,
         agent_identities: Vec::new(),
+        proxy_command: None,
     }
 }
 

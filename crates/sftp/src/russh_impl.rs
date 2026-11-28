@@ -3987,6 +3987,7 @@ mod tests {
             allow_legacy_algorithms: false,
             forward_agent: false,
             agent_identities: Vec::new(),
+            proxy_command: None,
         };
 
         let config =
@@ -4021,6 +4022,7 @@ mod tests {
             allow_legacy_algorithms: false,
             forward_agent: false,
             agent_identities: Vec::new(),
+            proxy_command: None,
         };
 
         let default_config =
@@ -4069,6 +4071,7 @@ mod tests {
             allow_legacy_algorithms: false,
             forward_agent: false,
             agent_identities: Vec::new(),
+            proxy_command: None,
         };
 
         let modern =
@@ -4191,6 +4194,7 @@ mod tests {
             allow_legacy_algorithms: false,
             forward_agent: false,
             agent_identities: Vec::new(),
+            proxy_command: None,
         };
 
         let transport =

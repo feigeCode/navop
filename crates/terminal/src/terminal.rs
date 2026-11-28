@@ -726,6 +726,7 @@ fn resolve_ssh_connection(
             .proxy
             .as_ref()
             .map(sftp_transfer::proxy_connect_config),
+        proxy_command: params.proxy_command.clone(),
         keyboard_interactive_responder: None,
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: params.x11_forwarding.unwrap_or(false),
@@ -6902,6 +6903,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -6974,6 +6976,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -7053,6 +7056,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -7118,6 +7122,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );

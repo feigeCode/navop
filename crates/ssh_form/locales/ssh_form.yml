@@ -658,6 +658,18 @@ SSH:
     en: Proxy Password
     zh-CN: 代理密码
     zh-HK: 代理密碼
+  proxy_command:
+    en: ProxyCommand
+    zh-CN: ProxyCommand
+    zh-HK: ProxyCommand
+  proxy_command_placeholder:
+    en: e.g. cloudflared access tcp -T %h:%p
+    zh-CN: 例如 cloudflared access tcp -T %h:%p
+    zh-HK: 例如 cloudflared access tcp -T %h:%p
+  proxy_command_desc:
+    en: Runs a local command and uses its stdin/stdout as the SSH transport. %h and %p expand to the target host and port; when set, jump server and proxy settings are ignored.
+    zh-CN: 通过本机命令的 stdin/stdout 建立 SSH 连接，%h、%p 会替换成目标主机与端口；配置后忽略跳板机与代理设置。
+    zh-HK: 透過本機命令的 stdin/stdout 建立 SSH 連線，%h、%p 會替換成目標主機與連接埠；設定後忽略跳板機與代理設定。
   # 高级设置
   connect_timeout:
     en: Connect Timeout (s)

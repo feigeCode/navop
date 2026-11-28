@@ -1365,6 +1365,7 @@ mod tests {
                 account_expect: Default::default(),
                 forward_agent: None,
                 agent_forward_key: None,
+                proxy_command: None,
             },
             None,
         )
@@ -1907,6 +1908,7 @@ mod tests {
             account_expect: Default::default(),
             forward_agent: None,
             agent_forward_key: None,
+            proxy_command: None,
         })
         .expect("serialize SSH params");
         conn.with_connection(|conn| {

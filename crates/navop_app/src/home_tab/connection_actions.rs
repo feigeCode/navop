@@ -455,6 +455,7 @@ mod sensitive_copy_tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         )

@@ -228,6 +228,7 @@ fn ssh_connection(port: u16, username: String, password: String) -> StoredConnec
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         },
         None,
     );

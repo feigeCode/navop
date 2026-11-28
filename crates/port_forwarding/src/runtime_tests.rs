@@ -42,6 +42,7 @@ fn ssh_connection(id: i64) -> StoredConnection {
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         },
         None,
     );

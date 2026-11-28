@@ -6697,6 +6697,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -6753,6 +6754,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -6795,6 +6797,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -6934,6 +6937,7 @@ mod tests {
             allow_legacy_algorithms: false,
             forward_agent: false,
             agent_identities: Vec::new(),
+            proxy_command: None,
         }))
     }
 

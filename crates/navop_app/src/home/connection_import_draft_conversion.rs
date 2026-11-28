@@ -259,6 +259,7 @@ fn to_ssh_connection(
         icon: None,
         icon_file_path: None,
         account_expect: Default::default(),
+        proxy_command: None,
     };
     Ok(StoredConnection::new_ssh(name, params, None))
 }

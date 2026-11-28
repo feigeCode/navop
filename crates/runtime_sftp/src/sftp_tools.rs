@@ -273,6 +273,7 @@ fn ssh_config_from_params(params: &SshParams) -> SshConnectConfig {
         } else {
             Vec::new()
         },
+        proxy_command: None,
     }
 }
 

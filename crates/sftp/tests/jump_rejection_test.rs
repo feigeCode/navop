@@ -106,6 +106,7 @@ async fn sftp_jump_direct_tcpip_rejection_surfaces_hint_and_server_description()
         allow_legacy_algorithms: false,
         forward_agent: false,
         agent_identities: Vec::new(),
+        proxy_command: None,
     };
 
     let result = RusshSftpClient::connect(config).await;

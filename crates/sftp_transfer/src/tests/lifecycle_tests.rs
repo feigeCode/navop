@@ -348,6 +348,7 @@ fn stored_connection() -> StoredConnection {
             os_id: None,
             icon: None,
             icon_file_path: None,
+            proxy_command: None,
         },
         None,
     )

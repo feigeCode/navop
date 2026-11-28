@@ -729,6 +729,7 @@ mod tests {
             allow_legacy_algorithms: false,
             forward_agent: false,
             agent_identities: Vec::new(),
+            proxy_command: None,
         };
 
         // 1) 认证阶段：验证码由客户端本地生成并自动提交，不应留下待人工输入的请求。

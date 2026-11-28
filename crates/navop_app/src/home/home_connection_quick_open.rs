@@ -300,6 +300,7 @@ pub(crate) fn temporary_ssh_connection_with_encoding(
         os_id: None,
         icon: None,
         icon_file_path: None,
+        proxy_command: None,
     };
     Some(StoredConnection::new_ssh(name, params, None))
 }

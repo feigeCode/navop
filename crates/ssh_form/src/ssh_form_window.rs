@@ -359,6 +359,7 @@ pub struct SshFormWindow {
     proxy_username_input: Entity<InputState>,
     proxy_password_input: Entity<InputState>,
     proxy_credential_picker: Entity<CredentialReferencePicker>,
+    proxy_command_input: Entity<InputState>,
 
     // 高级设置
     connect_timeout_input: Entity<InputState>,
@@ -1008,6 +1009,8 @@ impl SshFormWindow {
                 .placeholder(t!("SSH.proxy_password"))
                 .masked(true)
         });
+        let proxy_command_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t!("SSH.proxy_command_placeholder")));
 
         // 高级设置
         let connect_timeout_input = cx.new(|cx| {
@@ -1360,6 +1363,11 @@ impl SshFormWindow {
                         proxy_password_input.update(cx, |s, cx| s.set_value(password, window, cx));
                     }
                 }
+
+                // 加载 ProxyCommand（issue #540）
+                if let Some(ref command) = params.proxy_command {
+                    proxy_command_input.update(cx, |s, cx| s.set_value(command, window, cx));
+                }
             }
             workspace_id = conn.workspace_id;
 
@@ -1555,6 +1563,7 @@ impl SshFormWindow {
             proxy_username_input,
             proxy_password_input,
             proxy_credential_picker,
+            proxy_command_input,
             connect_timeout_input,
             keepalive_interval_input,
             keepalive_max_input,
@@ -2060,6 +2069,11 @@ impl SshFormWindow {
             jump_server,
             disabled_jump_server,
             proxy,
+            proxy_command: {
+                let command = self.proxy_command_input.read(cx).text().to_string();
+                let command = command.trim().to_string();
+                (!command.is_empty()).then_some(command)
+            },
             os_id: self.detected_os_id.clone(),
             icon: self.manual_icon.clone(),
             icon_file_path: self.custom_icon_file_path.clone(),
@@ -2098,6 +2112,7 @@ impl SshFormWindow {
             keepalive_max: params.keepalive_max,
             jump_server,
             proxy,
+            proxy_command: params.proxy_command.clone(),
             keyboard_interactive_responder: None,
             host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: params.x11_forwarding.unwrap_or(false),
@@ -4014,6 +4029,17 @@ impl SshFormWindow {
                         })),
                 ),
             )
+            .child(self.render_form_row(
+                &t!("SSH.proxy_command"),
+                self.render_form_input(&self.proxy_command_input),
+            ))
+            .child(
+                div()
+                    .w_full()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("SSH.proxy_command_desc").to_string()),
+            )
             .when(enable_proxy, |this| {
                 this.child(
                     self.render_form_row(
@@ -4670,6 +4696,7 @@ mod tests {
             forward_agent: None,
             agent_forward_key: None,
             account_expect: Default::default(),
+            proxy_command: None,
         }
     }
 

@@ -59,6 +59,7 @@ fn referenced_ssh_with_jump() -> StoredConnection {
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         },
         Some(7),
     );

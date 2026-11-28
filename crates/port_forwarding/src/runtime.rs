@@ -256,6 +256,7 @@ fn build_ssh_connect_config(params: &SshParams) -> SshConnectConfig {
         } else {
             Vec::new()
         },
+        proxy_command: None,
     }
 }
 

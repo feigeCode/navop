@@ -589,6 +589,12 @@ pub struct SshParams {
     /// 代理配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
+    /// OpenSSH 风格的 ProxyCommand（issue #540）。
+    ///
+    /// `%h`/`%p` 会替换成目标主机与端口；命令的 stdin/stdout 作为 SSH 传输层。
+    /// 与跳板机、代理互斥，同时存在时优先使用本字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_command: Option<String>,
     /// 远端操作系统 ID（测试连接时从 /etc/os-release 探测，用于连接图标展示）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os_id: Option<String>,
@@ -3135,6 +3141,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             Some(7),
         );
@@ -3369,6 +3376,7 @@ mod tests {
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         };
         assert_eq!(
             "root@localhost:22",
@@ -4562,6 +4570,7 @@ mod serial_tests {
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         };
         let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
         assert!(json.contains("\"os_id\":\"ubuntu\""));
@@ -4608,6 +4617,28 @@ mod serial_tests {
 
         let parsed: SshParams = serde_json::from_str(&json).expect("SshParams 应可反序列化");
         assert_eq!(parsed.allow_legacy_algorithms, Some(true));
+    }
+
+    #[test]
+    fn ssh_params_proxy_command_round_trips_and_legacy_json_defaults_none() {
+        let legacy: SshParams = serde_json::from_str(
+            r#"{"host":"example.com","port":22,"username":"root","auth_method":"Agent"}"#,
+        )
+        .expect("旧连接缺少 ProxyCommand 字段时应可反序列化");
+        assert!(legacy.proxy_command.is_none());
+        let legacy_json = serde_json::to_string(&legacy).expect("SshParams 应可序列化");
+        assert!(!legacy_json.contains("proxy_command"));
+
+        let mut params = legacy;
+        params.proxy_command = Some("cloudflared access tcp -T %h:%p".to_string());
+        let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
+        assert!(json.contains("proxy_command"));
+
+        let parsed: SshParams = serde_json::from_str(&json).expect("SshParams 应可反序列化");
+        assert_eq!(
+            parsed.proxy_command.as_deref(),
+            Some("cloudflared access tcp -T %h:%p")
+        );
     }
 
     #[test]
@@ -4846,6 +4877,7 @@ mod serial_tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -5188,6 +5220,7 @@ mod serial_tests {
             os_id: None,
             icon: None,
             icon_file_path: None,
+            proxy_command: None,
         }
     }
 
@@ -5427,6 +5460,7 @@ mod serial_tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );

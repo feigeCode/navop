@@ -98,6 +98,7 @@ pub(crate) fn unused_ssh_config_placeholder() -> SshConnectConfig {
         allow_legacy_algorithms: false,
         forward_agent: false,
         agent_identities: Vec::new(),
+        proxy_command: None,
     }
 }
 
@@ -207,6 +208,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         )

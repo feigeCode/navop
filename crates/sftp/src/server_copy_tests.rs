@@ -114,6 +114,7 @@ fn direct_config(host: &str) -> SshConnectConfig {
         allow_legacy_algorithms: false,
         forward_agent: false,
         agent_identities: Vec::new(),
+        proxy_command: None,
     }
 }
 
