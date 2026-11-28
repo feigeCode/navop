@@ -3561,7 +3561,7 @@ impl Terminal {
             backend.shutdown();
         }
         self.take_ssh_session_manager(cx);
-        self.prepare_surface_for_reconnect();
+        self.prepare_surface_for_reconnect(false);
         self.connection_state = ConnectionState::Connecting;
         self.set_connection_active(false, cx);
 
@@ -5192,7 +5192,7 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
-            self.prepare_surface_for_reconnect();
+            self.prepare_surface_for_reconnect(true);
 
             let generation = self.next_connection_generation();
             self.record_connection_generation_marker(generation);
@@ -5235,7 +5235,7 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
-            self.prepare_surface_for_reconnect();
+            self.prepare_surface_for_reconnect(false);
             let generation = self.next_connection_generation();
             self.record_connection_generation_marker(generation);
             let recording_tap = self.recording_tap();
@@ -5262,7 +5262,7 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
-            self.prepare_surface_for_reconnect();
+            self.prepare_surface_for_reconnect(false);
             let generation = self.next_connection_generation();
             self.record_connection_generation_marker(generation);
             self.telnet_credential_request = None;
@@ -5279,7 +5279,7 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
-            self.prepare_surface_for_reconnect();
+            self.prepare_surface_for_reconnect(false);
             self.connection_state = ConnectionState::Connecting;
             self.set_connection_active(false, cx);
             let generation = self.next_connection_generation();
@@ -5333,14 +5333,29 @@ impl Terminal {
         true
     }
 
-    fn prepare_surface_for_reconnect(&mut self) {
-        // Keep the primary grid and scrollback, but never carry a stale full-screen
-        // alternate-screen application (such as Vim) into the replacement backend.
+    /// 清空当前画面与回滚缓冲，用于用户手动重连时丢弃旧会话残留（#592）。
+    fn clear_terminal_screen_and_scrollback<T>(term: &mut Term<T>)
+    where
+        T: alacritty_terminal::event::EventListener,
+    {
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        processor.advance(term, b"\x1b[2J\x1b[3J\x1b[H");
+        term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+    }
+
+    fn prepare_surface_for_reconnect(&mut self, reset_screen: bool) {
+        // 默认保留主网格与回滚，只退出残留的全屏程序（如 Vim），
+        // 但绝不把上一个后端留下的全屏应用画面带进新连接。
         let mut term = self.term.lock();
         if term.mode().contains(TermMode::ALT_SCREEN) {
             let mut processor: Processor<StdSyncHandler> = Processor::new();
             processor.advance(&mut *term, b"\x1b[?1049l");
             term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+        }
+        if reset_screen {
+            // 用户手动重连时清掉旧会话画面与回滚，避免堡垒机菜单之类的残留文字
+            // 让人误以为没有重新连接（#592）。
+            Self::clear_terminal_screen_and_scrollback(&mut *term);
         }
         drop(term);
         self.child_exited = None;
@@ -5414,7 +5429,7 @@ impl Terminal {
         if let Some(backend) = self.backend.take() {
             backend.shutdown();
         }
-        self.prepare_surface_for_reconnect();
+        self.prepare_surface_for_reconnect(false);
 
         let generation = self.next_connection_generation();
         self.record_connection_generation_marker(generation);
@@ -8232,6 +8247,35 @@ mod tests {
     }
 
     #[test]
+    fn manual_reconnect_preparation_clears_the_stale_screen_and_scrollback() {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (term, _event_proxy, _colors, _performance_metrics) =
+            Terminal::create_term_with_metrics(
+                80,
+                24,
+                10_000,
+                event_tx.clone(),
+                Arc::new(TerminalPerformanceMetrics::enabled()),
+            );
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        processor.advance(&mut *term.lock(), b"bastion menu: 17");
+        {
+            let term = term.lock();
+            assert_eq!(term.grid()[Line(0)][Column(0)].c, 'b');
+        }
+
+        // 手动重连前的清理要能把旧会话画面与回滚一起清掉（#592）。
+        {
+            let mut term = term.lock();
+            Terminal::clear_terminal_screen_and_scrollback(&mut term);
+        }
+        let term = term.lock();
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, ' ');
+        assert_eq!(term.grid()[Line(0)][Column(16)].c, ' ');
+        assert_eq!(term.columns(), 80);
+    }
+
+    #[test]
     fn reconnect_preparation_preserves_buffer_and_clears_stale_connection_metadata() {
         let (event_tx, _event_rx) = unbounded_channel();
         let (term, event_proxy, _colors, performance_metrics) = Terminal::create_term_with_metrics(
@@ -8321,7 +8365,7 @@ mod tests {
         assert_eq!(1, window.render_samples);
         assert_eq!(4_000_000.0, window.average_render_ns);
 
-        terminal.prepare_surface_for_reconnect();
+        terminal.prepare_surface_for_reconnect(false);
         assert!(Arc::ptr_eq(
             &shared_metrics,
             &terminal.performance_metrics()
@@ -8428,6 +8472,10 @@ mod tests {
         assert!(
             helper.contains("service.retire(identity.connection_key())"),
             "the helper must retire the registry slot"
+        );
+        assert!(
+            reconnect.contains("prepare_surface_for_reconnect(true)"),
+            "manual SSH reconnect must clear the stale screen and scrollback (#592)"
         );
     }
 
