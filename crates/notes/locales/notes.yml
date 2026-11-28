@@ -281,6 +281,14 @@ Notes:
     en: New Markdown Document
     zh-CN: 新建 Markdown 文档
     zh-HK: 新增 Markdown 文件
+  new_text:
+    en: New Text Note
+    zh-CN: 新建文本笔记
+    zh-HK: 新增文字筆記
+  new_text_document:
+    en: New Text Document
+    zh-CN: 新建文本文档
+    zh-HK: 新增文字檔案
   new_folder:
     en: New Folder
     zh-CN: 新建文件夹

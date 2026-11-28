@@ -22,15 +22,19 @@ impl NotesView {
     ) -> anyhow::Result<()> {
         let document_id = descriptor.document_id.clone();
         if !self.markdown_sessions.contains_key(&document_id) {
-            // 没有记住过的文档用设置里的默认视图，而不是固定所见即所得（#132）。
+            // 没有记住过的文档用设置里的默认视图，而不是固定所见即所得（#132）；
+            // 纯文本文档（#429）没有所见即所得视图，固定用源码模式。
             let configured_default =
                 one_core::settings::AppSettings::current(cx).notes_markdown_default_view_mode;
-            let mode = self
-                .tree
-                .markdown_view_modes
-                .get(&document_id)
-                .copied()
-                .unwrap_or_else(|| default_markdown_view_mode(configured_default));
+            let mode = if descriptor.format.is_plain_text() {
+                MarkdownViewMode::Source
+            } else {
+                self.tree
+                    .markdown_view_modes
+                    .get(&document_id)
+                    .copied()
+                    .unwrap_or_else(|| default_markdown_view_mode(configured_default))
+            };
             self.tree
                 .markdown_view_modes
                 .entry(document_id.clone())
@@ -279,6 +283,9 @@ impl NotesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.is_plain_text_document(document_id) && mode != MarkdownViewMode::Source {
+            return;
+        }
         let current = self
             .markdown_sessions
             .get(document_id)
@@ -300,6 +307,14 @@ impl NotesView {
             notify_operation_error(window, cx, error);
         }
         cx.notify();
+    }
+
+    /// 纯文本文档（issue #429）：没有 Markdown 渲染，只保留源码编辑视图。
+    pub(crate) fn is_plain_text_document(&self, document_id: &str) -> bool {
+        self.markdown_sessions
+            .get(document_id)
+            .and_then(|session| session.relative_path.extension())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"))
     }
 
     pub(crate) fn markdown_editor_view_mode_changed(

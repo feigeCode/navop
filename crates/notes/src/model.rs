@@ -37,6 +37,23 @@ pub enum DocumentFormat {
     #[default]
     #[serde(alias = "rich_text")]
     Markdown,
+    /// 纯文本笔记（issue #429）。没有 Markdown 渲染，只在源码视图里编辑。
+    Text,
+}
+
+impl DocumentFormat {
+    /// 该格式落盘时使用的文件后缀。
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::Markdown => ".md",
+            Self::Text => ".txt",
+        }
+    }
+
+    /// 是否为纯文本：不提供所见即所得视图。
+    pub fn is_plain_text(self) -> bool {
+        matches!(self, Self::Text)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -134,6 +151,28 @@ mod tests {
             r#""markdown""#,
             serde_json::to_string(&state.last_created_format).unwrap()
         );
+    }
+
+    #[test]
+    fn text_format_round_trips_and_keeps_markdown_as_default() {
+        let json = serde_json::to_string(&DocumentFormat::Text).unwrap();
+        assert_eq!(r#""text""#, json);
+        assert_eq!(
+            DocumentFormat::Text,
+            serde_json::from_str::<DocumentFormat>(&json).unwrap()
+        );
+        assert_eq!(DocumentFormat::Markdown, DocumentFormat::default());
+        assert!(DocumentFormat::Text.is_plain_text());
+        assert!(!DocumentFormat::Markdown.is_plain_text());
+    }
+
+    #[test]
+    fn last_created_text_format_persists() {
+        let mut state = NotebookUiState::default();
+        state.last_created_format = DocumentFormat::Text;
+        let restored: NotebookUiState =
+            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        assert_eq!(DocumentFormat::Text, restored.last_created_format);
     }
 
     #[test]

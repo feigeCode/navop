@@ -121,10 +121,16 @@ impl NotesView {
         let theme = self.resolved_editor_theme(cx);
         let session = self.markdown_sessions.get(document_id);
         let status = markdown_status(session, self.tree.markdown_save_mode);
-        let follow_default_target = crate::markdown_mode::markdown_default_mode_target(
-            mode,
-            AppSettings::current(cx).notes_markdown_default_view_mode,
-        );
+        // 纯文本文档（#429）没有所见即所得视图，模式切换与「跟随默认视图」都不适用。
+        let plain_text = self.is_plain_text_document(document_id);
+        let follow_default_target = (!plain_text)
+            .then(|| {
+                crate::markdown_mode::markdown_default_mode_target(
+                    mode,
+                    AppSettings::current(cx).notes_markdown_default_view_mode,
+                )
+            })
+            .flatten();
         let follow_default_id = document_id.to_owned();
         let save_disabled = session.is_none_or(|session| {
             !matches!(
@@ -145,7 +151,9 @@ impl NotesView {
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.background)
-            .child(self.render_source_toggle(document_id, mode, cx))
+            .when(!plain_text, |toolbar| {
+                toolbar.child(self.render_source_toggle(document_id, mode, cx))
+            })
             .when_some(follow_default_target, |toolbar, target| {
                 toolbar.child(
                     Button::new("markdown-follow-default")
