@@ -1779,6 +1779,11 @@ impl NavopApp {
         cx.set_global(GlobalTabContainer {
             tab_container: tab_container.clone(),
         });
+
+        // issue #112 第 1 点：重启后恢复上次的标签页。
+        // 快照里只保存能由领域 TabRestorer 重建的标签，恢复出的标签走后台打开，
+        // 由 `app_kit::tabs` 在下一个窗口周期统一接管。
+        app_kit::tabs::install(tab_container.clone(), window, cx);
         let tab_container_clone = tab_container.clone();
         let home_page = cx.new(|cx| HomePage::new(tab_container_clone, window, cx));
         cx.set_global(GlobalHomePage {
@@ -2521,6 +2526,23 @@ mod tests {
         assert!(constructor.contains("StartupDefaultPage::AiWorkbench"));
         assert!(constructor.contains("home.add_ai_workbench_tab(window, cx)"));
         assert!(!constructor.contains("DefaultAgentChatPanel::new_workbench"));
+    }
+
+    #[test]
+    fn tab_session_snapshot_is_installed_for_the_main_tab_container() {
+        // issue #112 第 1 点：主标签容器必须接入 `app_kit::tabs`，
+        // 否则 dump 出来的 tab_state.json 永远不会被读回。
+        let source = include_str!("navop_app.rs");
+        let constructor = source
+            .split("pub fn new(window:")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("fn persist_connection_sidebar_expanded")
+                    .next()
+            })
+            .expect("application constructor");
+        assert!(constructor.contains("app_kit::tabs::install(tab_container.clone(), window, cx)"));
     }
 
     #[test]
