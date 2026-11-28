@@ -3130,7 +3130,6 @@ dependencies = [
  "gpui-pre-sum-tree",
  "image",
  "json5",
- "json_view",
  "lsp-types",
  "once_cell",
  "one-assets",

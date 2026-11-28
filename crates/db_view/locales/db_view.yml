@@ -2626,6 +2626,18 @@ TableDataGrid:
     en: Select exactly one record first
     zh-CN: 请先选中一条记录
     zh-HK: 請先選中一筆記錄
+  record_json_format:
+    en: Format
+    zh-CN: 格式化
+    zh-HK: 格式化
+  record_json_compact:
+    en: Compact
+    zh-CN: 压缩
+    zh-HK: 壓縮
+  record_json_invalid:
+    en: The editor does not contain valid JSON
+    zh-CN: 当前内容不是有效的 JSON
+    zh-HK: 目前內容不是有效的 JSON
   vertical_record:
     en: "Record %{index}"
     zh-CN: "记录 %{index}"
