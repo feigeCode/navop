@@ -681,6 +681,23 @@ impl RemoteFileEditorWindow {
         }
 
         let text = editor.read(cx).text().to_string();
+        // 保存前对 JSON/YAML 做一次校验：语法错误只提示、不阻断保存，
+        // 避免用户因为没注意到的缩进问题丢改动（issue #621）。
+        if let Some(Err(error)) = format_document(&tab.remote_path, &text) {
+            let message = match (error.line, error.column) {
+                (Some(line), Some(column)) => t!(
+                    "RemoteFileEditor.notification.saved_with_parse_error_at",
+                    line = line,
+                    column = column,
+                    message = error.message
+                ),
+                _ => t!(
+                    "RemoteFileEditor.notification.saved_with_parse_error",
+                    message = error.message
+                ),
+            };
+            window.push_notification(Notification::warning(message.to_string()), cx);
+        }
         tab.saving = true;
         tab.status_message = t!("RemoteFileEditor.status.saving").to_string();
         cx.notify();
