@@ -176,6 +176,21 @@ pub(super) fn clipboard_image_from_item(item: &ClipboardItem) -> Option<Image> {
     })
 }
 
+/// 本地粘贴图片时的临时目录名（相对系统临时目录）。
+pub(super) const LOCAL_PASTE_IMAGE_DIR: &str = "navop-pasted-images";
+
+/// 本地粘贴图片的落盘路径：`<temp>/navop-pasted-images/image-<timestamp>.<ext>`。
+pub(super) fn local_clipboard_image_path(
+    directory: &std::path::Path,
+    format: ImageFormat,
+    timestamp_millis: u128,
+) -> std::path::PathBuf {
+    directory.join(format!(
+        "image-{timestamp_millis}.{}",
+        image_format_extension(format)
+    ))
+}
+
 pub(super) fn should_upload_clipboard_image_to_remote_cli(
     paste_image_upload_enabled: bool,
     connection_kind: TerminalConnectionKind,

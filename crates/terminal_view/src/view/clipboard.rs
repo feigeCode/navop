@@ -111,6 +111,15 @@ impl TerminalView {
                     return;
                 }
             }
+            // 本地/串口终端没有远端可上传：把图片存到临时目录再粘贴路径，
+            // 避免像以前那样整段粘贴静默失败（#529）。SSH 终端关闭图片上传时
+            // 仍保持旧行为，不把本地路径误发到远端 shell。
+            if connection_kind != TerminalConnectionKind::Ssh {
+                if let Some(image) = clipboard_image_from_item(&clipboard) {
+                    self.paste_clipboard_image_to_local_cli(image, window, cx);
+                    return;
+                }
+            }
             if let Some(text) = clipboard.text() {
                 self.paste_text(&text, window, cx);
             }

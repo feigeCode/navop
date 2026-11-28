@@ -1225,6 +1225,14 @@ TerminalView:
     en: "Clipboard image upload task failed: %{error}"
     zh-CN: "上传剪贴板图片任务失败：%{error}"
     zh-HK: "上傳剪貼簿圖片工作失敗：%{error}"
+  clipboard_image_saved_locally:
+    en: "Clipboard image saved locally, path pasted: %{path}"
+    zh-CN: "剪贴板图片已保存到本地并粘贴路径：%{path}"
+    zh-HK: "剪貼簿圖片已儲存到本機並貼上路徑：%{path}"
+  clipboard_image_save_local_failed:
+    en: "Failed to save the clipboard image locally: %{error}"
+    zh-CN: "保存剪贴板图片到本地失败：%{error}"
+    zh-HK: "儲存剪貼簿圖片到本機失敗：%{error}"
   terminal_size_changed:
     en: "Terminal size changed: %{old} -> %{new}, cell_width=%{cell_width}, line_height=%{line_height}, bounds=%{bounds}"
     zh-CN: "终端尺寸变化: %{old} -> %{new}, cell_width=%{cell_width}, line_height=%{line_height}, bounds=%{bounds}"

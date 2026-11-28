@@ -588,6 +588,22 @@ fn clipboard_image_upload_intercepts_ssh_tui_modes() {
 }
 
 #[test]
+fn local_clipboard_image_path_uses_extension_of_the_format() {
+    use crate::view::helpers::local_clipboard_image_path;
+    use gpui::ImageFormat;
+
+    let directory = std::path::Path::new("/tmp/navop-pasted-images");
+    assert_eq!(
+        local_clipboard_image_path(directory, ImageFormat::Png, 42),
+        std::path::PathBuf::from("/tmp/navop-pasted-images/image-42.png")
+    );
+    assert_eq!(
+        local_clipboard_image_path(directory, ImageFormat::Jpeg, 7),
+        std::path::PathBuf::from("/tmp/navop-pasted-images/image-7.jpg")
+    );
+}
+
+#[test]
 fn terminal_focus_report_emits_csi_i_and_o_only_when_focus_in_out_enabled() {
     use super::super::initialization::terminal_focus_report_sequence;
 
