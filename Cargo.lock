@@ -11877,6 +11877,8 @@ dependencies = [
  "process-util",
  "raw-window-handle",
  "rust-i18n",
+ "serde_json",
+ "serde_yaml",
  "sftp",
  "smol",
  "tokio",

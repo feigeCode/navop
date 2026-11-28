@@ -26,6 +26,10 @@ RemoteFileEditor:
       en: Soft Wrap
       zh-CN: 自动换行
       zh-HK: 自動換行
+    format:
+      en: Format
+      zh-CN: 格式化
+      zh-HK: 格式化
     close_tab:
       en: Close Tab
       zh-CN: 关闭页签
@@ -54,6 +58,26 @@ RemoteFileEditor:
       en: Launch
       zh-CN: 启动
       zh-HK: 啟動
+    format_unsupported:
+      en: This file type cannot be formatted yet
+      zh-CN: 这个文件类型暂不支持格式化
+      zh-HK: 這個檔案類型暫不支援格式化
+    formatted:
+      en: Formatted
+      zh-CN: 已格式化
+      zh-HK: 已格式化
+    format_unchanged:
+      en: Already formatted
+      zh-CN: 已经是格式化结果
+      zh-HK: 已經是格式化結果
+    format_failed:
+      en: "Format failed: %{message}"
+      zh-CN: "格式化失败：%{message}"
+      zh-HK: "格式化失敗：%{message}"
+    format_failed_at:
+      en: "Format failed at line %{line}, column %{column}: %{message}"
+      zh-CN: "格式化失败于第 %{line} 行第 %{column} 列：%{message}"
+      zh-HK: "格式化失敗於第 %{line} 行第 %{column} 欄：%{message}"
   status:
     loading:
       en: Loading...

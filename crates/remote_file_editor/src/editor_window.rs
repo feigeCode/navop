@@ -2,6 +2,7 @@ use crate::diagnostics::{self, EditorTaskDetail, EditorTaskGuard, EditorTaskKind
 use crate::file_policy::{
     EditorMode, FilePolicy, decode_text_content, determine_file_policy_with_limit,
 };
+use crate::formatting::{FormatOutcome, format_document};
 use crate::language::load_language_for_path;
 use crate::{
     CloseIntercept, RemoteMutationCallback, active_index_after_close, decide_close_intercept,
@@ -29,13 +30,20 @@ use rust_i18n::t;
 use sftp::{RemoteFileClient, SharedRemoteFileClient};
 use std::sync::{Arc, Mutex as StdMutex, Once, OnceLock};
 
-actions!(remote_file_editor, [OpenSearch, OpenReplace]);
+actions!(
+    remote_file_editor,
+    [OpenSearch, OpenReplace, FormatDocument]
+);
 
 const REMOTE_FILE_EDITOR_CONTEXT: &str = "RemoteFileEditor";
 #[cfg(target_os = "macos")]
 const REMOTE_EDITOR_SEARCH_SHORTCUT: &str = "cmd-f";
 #[cfg(not(target_os = "macos"))]
 const REMOTE_EDITOR_SEARCH_SHORTCUT: &str = "ctrl-f";
+#[cfg(target_os = "macos")]
+const REMOTE_EDITOR_FORMAT_SHORTCUT: &str = "cmd-shift-f";
+#[cfg(not(target_os = "macos"))]
+const REMOTE_EDITOR_FORMAT_SHORTCUT: &str = "ctrl-shift-f";
 #[cfg(target_os = "macos")]
 const REMOTE_EDITOR_REPLACE_SHORTCUT: &str = "cmd-r";
 #[cfg(not(target_os = "macos"))]
@@ -200,12 +208,38 @@ fn init_keybinding_items(cx: &App) -> Vec<KeyBinding> {
     keybindings.extend(
         shortcuts_for(cx, action_id::REMOTE_EDITOR_SEARCH, &[search_shortcut()])
             .into_iter()
-            .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, OpenSearch, Some(REMOTE_FILE_EDITOR_CONTEXT), cx)),
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    OpenSearch,
+                    Some(REMOTE_FILE_EDITOR_CONTEXT),
+                    cx,
+                )
+            }),
     );
     keybindings.extend(
         shortcuts_for(cx, action_id::REMOTE_EDITOR_REPLACE, &[replace_shortcut()])
             .into_iter()
-            .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, OpenReplace, Some(REMOTE_FILE_EDITOR_CONTEXT), cx)),
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    OpenReplace,
+                    Some(REMOTE_FILE_EDITOR_CONTEXT),
+                    cx,
+                )
+            }),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::REMOTE_EDITOR_FORMAT, &[format_shortcut()])
+            .into_iter()
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    FormatDocument,
+                    Some(REMOTE_FILE_EDITOR_CONTEXT),
+                    cx,
+                )
+            }),
     );
     keybindings
 }
@@ -226,6 +260,13 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         Some(REMOTE_FILE_EDITOR_CONTEXT),
         OpenReplace,
     ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::REMOTE_EDITOR_FORMAT,
+        &[format_shortcut()],
+        Some(REMOTE_FILE_EDITOR_CONTEXT),
+        FormatDocument,
+    ));
     keybindings
 }
 
@@ -235,6 +276,10 @@ fn search_shortcut() -> &'static str {
 
 fn replace_shortcut() -> &'static str {
     REMOTE_EDITOR_REPLACE_SHORTCUT
+}
+
+fn format_shortcut() -> &'static str {
+    REMOTE_EDITOR_FORMAT_SHORTCUT
 }
 
 fn editor_window_title(remote_path: &str) -> String {
@@ -1019,6 +1064,76 @@ impl RemoteFileEditorWindow {
         self.trigger_replace(window, cx);
     }
 
+    fn on_action_format_document(
+        &mut self,
+        _: &FormatDocument,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.format_active_document(window, cx);
+    }
+
+    /// 按扩展名格式化当前页签的 JSON/YAML 文档（issue #621）。
+    fn format_active_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_tab() else {
+            return;
+        };
+        if tab.loading || tab.saving {
+            return;
+        }
+        let Some(editor) = tab.editor.clone() else {
+            return;
+        };
+        let file_name = tab.remote_path.clone();
+        let text = editor.read(cx).text().to_string();
+        let Some(result) = format_document(&file_name, &text) else {
+            self.set_active_status(
+                t!("RemoteFileEditor.status.format_unsupported").to_string(),
+                cx,
+            );
+            return;
+        };
+
+        match result {
+            Ok(FormatOutcome::Formatted(formatted)) => {
+                editor.update(cx, |state, cx| {
+                    state.set_value(formatted, window, cx);
+                });
+                self.set_active_status(t!("RemoteFileEditor.status.formatted").to_string(), cx);
+            }
+            Ok(FormatOutcome::Unchanged) => {
+                self.set_active_status(
+                    t!("RemoteFileEditor.status.format_unchanged").to_string(),
+                    cx,
+                );
+            }
+            Err(error) => {
+                let message = match (error.line, error.column) {
+                    (Some(line), Some(column)) => t!(
+                        "RemoteFileEditor.status.format_failed_at",
+                        line = line,
+                        column = column,
+                        message = error.message
+                    )
+                    .to_string(),
+                    _ => t!(
+                        "RemoteFileEditor.status.format_failed",
+                        message = error.message
+                    )
+                    .to_string(),
+                };
+                self.set_active_status(message, cx);
+            }
+        }
+    }
+
+    fn set_active_status(&mut self, message: String, cx: &mut Context<Self>) {
+        if let Some(tab) = self.active_tab_mut() {
+            tab.status_message = message;
+            cx.notify();
+        }
+    }
+
     fn trigger_replace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(editor) = self.active_tab().and_then(|tab| tab.editor.as_ref()) else {
             return;
@@ -1143,6 +1258,15 @@ impl RemoteFileEditorWindow {
                     .disabled(disabled)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.save(false, window, cx);
+                    })),
+            )
+            .child(
+                Button::new("remote-file-format")
+                    .label(t!("RemoteFileEditor.action.format"))
+                    .with_size(Size::Small)
+                    .disabled(disabled)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.format_active_document(window, cx);
                     })),
             )
             .child(
@@ -1309,6 +1433,7 @@ impl Render for RemoteFileEditorWindow {
             .key_context(REMOTE_FILE_EDITOR_CONTEXT)
             .on_action(cx.listener(Self::on_action_open_search))
             .on_action(cx.listener(Self::on_action_open_replace))
+            .on_action(cx.listener(Self::on_action_format_document))
             .child(self.render_tabs(cx))
             .child(self.render_toolbar(cx))
             .child(v_flex().flex_1().child(self.render_body(window, cx)))

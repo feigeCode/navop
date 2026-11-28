@@ -11,6 +11,7 @@ mod external_launcher;
 mod external_rules;
 mod external_session;
 mod file_policy;
+mod formatting;
 mod language;
 mod open_routing;
 mod remote_mutation;

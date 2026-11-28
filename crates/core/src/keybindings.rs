@@ -58,6 +58,7 @@ pub mod action_id {
     pub const TERMINAL_SCROLL_PAGE_DOWN: &str = "terminal.scroll_page_down";
     pub const REMOTE_EDITOR_SEARCH: &str = "remote_editor.search";
     pub const REMOTE_EDITOR_REPLACE: &str = "remote_editor.replace";
+    pub const REMOTE_EDITOR_FORMAT: &str = "remote_editor.format";
     pub const REDIS_CLEAR_OUTPUT: &str = "redis.clear_output";
     pub const REDIS_COPY: &str = "redis.copy";
     pub const REDIS_PASTE: &str = "redis.paste";
