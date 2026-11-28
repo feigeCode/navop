@@ -54,6 +54,7 @@ impl PersistentConnectionSidebar {
                 selected_ids.clone(),
                 move_targets,
             ))
+            .child(edit_ssh_username_button(home.clone(), selected_ids.clone()))
             .child(delete_connections_button(home.clone(), selected_ids))
             .child(exit_batch_mode_button(home))
             .into_any_element()
@@ -177,6 +178,19 @@ fn append_move_targets(
         })
 }
 
+fn edit_ssh_username_button(home: gpui::Entity<HomePage>, selected_ids: Vec<i64>) -> IconButton {
+    let disabled = selected_ids.is_empty();
+    IconButton::new("persistent-edit-selected-ssh-usernames", IconName::Edit)
+        .role(IconButtonRole::Compact)
+        .tooltip(t!("Connection.batch_edit_ssh_username"))
+        .disabled(disabled)
+        .on_click(move |_, window, cx| {
+            home.update(cx, |home, cx| {
+                home.edit_selected_ssh_usernames(selected_ids.clone(), window, cx);
+            });
+        })
+}
+
 fn delete_connections_button(home: gpui::Entity<HomePage>, selected_ids: Vec<i64>) -> IconButton {
     let disabled = selected_ids.is_empty();
     IconButton::new("persistent-delete-selected-connections", IconName::Remove)
@@ -206,6 +220,7 @@ mod tests {
         let source = include_str!("batch_toolbar.rs");
         assert!(source.contains("persistent-select-visible-connections"));
         assert!(source.contains("persistent-move-selected-connections"));
+        assert!(source.contains("persistent-edit-selected-ssh-usernames"));
         assert!(source.contains("persistent-delete-selected-connections"));
         assert!(source.contains("persistent-exit-batch-connections"));
         assert!(source.contains(".icon(IconName::ListChecks)"));

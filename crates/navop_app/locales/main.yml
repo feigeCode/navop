@@ -2614,6 +2614,26 @@ Connection:
     en: Exit Batch Operations
     zh-CN: 退出批量操作
     zh-HK: 退出批量操作
+  batch_edit_ssh_username:
+    en: Edit SSH Username
+    zh-CN: 批量修改 SSH 用户名
+    zh-HK: 批量修改 SSH 使用者名稱
+  batch_edit_username_hint:
+    en: "Set the same username for the %{count} selected SSH connections."
+    zh-CN: "将为选中的 %{count} 个 SSH 连接设置同一个用户名。"
+    zh-HK: "將為選中的 %{count} 個 SSH 連線設定同一個使用者名稱。"
+  batch_edit_username_placeholder:
+    en: New username
+    zh-CN: 新用户名
+    zh-HK: 新使用者名稱
+  batch_edit_username_empty:
+    en: Username cannot be empty.
+    zh-CN: 用户名不能为空。
+    zh-HK: 使用者名稱不能為空。
+  batch_edit_no_ssh:
+    en: None of the selected connections is an SSH connection.
+    zh-CN: 选中的连接里没有 SSH 连接。
+    zh-HK: 選中的連線裡沒有 SSH 連線。
   batch_delete_confirm:
     en: "Are you sure you want to delete the %{count} selected connections?"
     zh-CN: "确定要删除选中的 %{count} 个连接吗？"
