@@ -1831,6 +1831,16 @@ impl SftpView {
                         this.on_local_path_changed(path.clone(), cx);
                     }
                 }
+                FileListPanelEvent::DroppedOnDirectory { target_path, items } => {
+                    if this.left_remote.is_none() {
+                        this.handle_dragged_drop_to_local_directory(
+                            items.clone(),
+                            PathBuf::from(target_path.clone()),
+                            window,
+                            cx,
+                        );
+                    }
+                }
                 _ => {
                     this.handle_local_context_menu_event(event, window, cx);
                 }
@@ -5729,6 +5739,22 @@ impl SftpView {
         }
     }
 
+    /// 拖拽落到本地面板的某个目录行上：下载路由交给公共实现，其他路由忽略。
+    fn handle_dragged_drop_to_local_directory(
+        &mut self,
+        dragged: DraggedFileItems,
+        local_dir: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match transfer_route(self.left_endpoint_kind(), dragged.source, PaneSide::Left) {
+            Some(TransferRoute::Download) => {
+                self.handle_remote_files_drop_to_local_dir(dragged, local_dir, window, cx);
+            }
+            _ => {}
+        }
+    }
+
     fn handle_dragged_drop_to_right(
         &mut self,
         dragged: DraggedFileItems,
@@ -6138,17 +6164,37 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let local_path = self.local_current_path.clone();
+        self.handle_remote_files_drop_to_local_dir(dragged, local_path, window, cx);
+    }
+
+    /// 把远端拖拽内容下载到指定本地目录（issue #608：落点不再固定当前目录）。
+    fn handle_remote_files_drop_to_local_dir(
+        &mut self,
+        dragged: DraggedFileItems,
+        local_path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.close_state.is_closing() {
             return;
         }
-        tracing::info!("handle_remote_files_drop_to_local: {} items", dragged.len());
+        tracing::info!(
+            "handle_remote_files_drop_to_local_dir: {} items -> {}",
+            dragged.len(),
+            local_path.display()
+        );
 
         if self.sftp_client.is_none() {
-            tracing::warn!("handle_remote_files_drop_to_local: no sftp client");
+            tracing::warn!("handle_remote_files_drop_to_local_dir: no sftp client");
             return;
         };
 
-        let local_path = self.local_current_path.clone();
+        if !local_path.is_dir() {
+            window.push_notification(Notification::error(t!("Error.not_a_directory")), cx);
+            return;
+        }
+
         let local_names: std::collections::HashSet<String> = match std::fs::read_dir(&local_path) {
             Ok(entries) => entries
                 .flatten()
@@ -10005,6 +10051,35 @@ mod default_open_wiring_tests {
             .map(|offset| body_start + offset)
             .unwrap_or(source.len());
         &source[start..end]
+    }
+
+    #[test]
+    fn dragging_onto_a_local_directory_row_downloads_into_that_directory() {
+        // issue #608：拖到本地面板的子目录上时，落点应是该目录而不是 local_current_path。
+        let panel = include_str!("file_list_panel.rs");
+        assert!(
+            panel.contains("DroppedOnDirectory"),
+            "目录行需要把落点上报给视图"
+        );
+
+        let source = include_str!("lib.rs");
+        let routed = method_body(source, "handle_dragged_drop_to_local_directory");
+        assert!(
+            routed.contains("handle_remote_files_drop_to_local_dir"),
+            "下载路由复用目录落点实现"
+        );
+
+        let default_drop = method_body(source, "handle_remote_files_drop_to_local");
+        assert!(
+            default_drop.contains("handle_remote_files_drop_to_local_dir"),
+            "默认落点也走同一实现"
+        );
+
+        let into_dir = method_body(source, "handle_remote_files_drop_to_local_dir");
+        assert!(
+            into_dir.contains("execute_downloads"),
+            "指定目录后仍复用传输队列"
+        );
     }
 
     #[test]

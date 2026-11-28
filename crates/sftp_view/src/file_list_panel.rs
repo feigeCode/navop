@@ -1653,6 +1653,11 @@ pub enum FileListPanelEvent {
         name: String,
         full_path: String,
     },
+    /// 拖拽内容落到某个目录行上（`target_path` 是目标目录的完整路径，issue #608）
+    DroppedOnDirectory {
+        target_path: String,
+        items: DraggedFileItems,
+    },
     Edit {
         full_path: String,
     },
@@ -2256,6 +2261,20 @@ impl Render for FileListPanel {
                                         .on_drag(drag_items, |drag, _, _, cx| {
                                             cx.new(|_| drag.clone())
                                         })
+                                        .on_drop(cx.listener({
+                                            let drop_target = full_path.clone();
+                                            move |_this, items: &DraggedFileItems, _window, cx| {
+                                                // 只有本地面板的目录行接住拖拽；远端目录落点交给服务端搬运（待补）。
+                                                if !drop_target.is_empty() && is_dir && !is_remote {
+                                                    cx.emit(
+                                                        FileListPanelEvent::DroppedOnDirectory {
+                                                            target_path: drop_target.clone(),
+                                                            items: items.clone(),
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                        }))
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(

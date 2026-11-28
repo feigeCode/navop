@@ -740,6 +740,10 @@ Error:
     en: A folder cannot be pasted into itself or one of its descendants
     zh-CN: 文件夹不能粘贴到自身或其子目录
     zh-HK: 文件夾不能貼上到自身或其子目錄
+  not_a_directory:
+    en: The drop target is not a directory
+    zh-CN: 拖拽落点不是目录
+    zh-HK: 拖曳落點不是目錄
   paste_failed:
     en: "Paste failed: %{error}"
     zh-CN: "粘贴失败：%{error}"
