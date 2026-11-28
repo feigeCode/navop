@@ -3470,9 +3470,9 @@ Settings:
         zh-CN: 笔记默认视图
         zh-HK: 筆記預設檢視
       default_view_mode_desc:
-        en: View used when a Markdown note is opened for the first time. Switch any note between WYSIWYG and source with the toolbar button.
-        zh-CN: 首次打开 Markdown 笔记时使用的视图。单个笔记随时可用工具栏按钮在「所见即所得」与「源码」之间切换。
-        zh-HK: 首次開啟 Markdown 筆記時使用的檢視。單篇筆記可隨時用工具列按鈕在「所見即所得」與「原始碼」之間切換。
+        en: View used when a Markdown note is opened for the first time. Already open note tabs keep their current view and show a "Follow default view" hint in the toolbar.
+        zh-CN: 首次打开 Markdown 笔记时使用的视图。已打开的笔记页签保持当前视图，并在工具栏显示「跟随默认视图」提示。
+        zh-HK: 首次開啟 Markdown 筆記時使用的檢視。已開啟的筆記頁籤維持目前檢視，並在工具列顯示「跟隨預設檢視」提示。
       default_view_mode_wysiwyg:
         en: WYSIWYG
         zh-CN: 所见即所得
