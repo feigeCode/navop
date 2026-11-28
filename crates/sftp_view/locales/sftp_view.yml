@@ -94,6 +94,14 @@ Common:
     en: Download
     zh-CN: 下载
     zh-HK: 下載
+  download_to_directory:
+    en: Download To...
+    zh-CN: 下载到…
+    zh-HK: 下載到…
+  download_to_directory_prompt:
+    en: Choose download directory
+    zh-CN: 选择下载目录
+    zh-HK: 選擇下載目錄
   upload:
     en: Upload
     zh-CN: 上传

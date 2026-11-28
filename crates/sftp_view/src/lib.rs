@@ -4934,6 +4934,19 @@ impl SftpView {
     }
 
     fn download_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let local_path = self.local_current_path.clone();
+        self.download_selected_into(local_path, window, cx);
+    }
+
+    /// 把远端选中的条目下载到指定本地目录（issue #608：拖出 / 「下载到…」）。
+    ///
+    /// 与 [`Self::download_selected`] 共用冲突检测与传输队列，只是目标目录由调用方给定。
+    fn download_selected_into(
+        &mut self,
+        local_path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.sftp_client.is_none() {
             return;
         };
@@ -4943,7 +4956,6 @@ impl SftpView {
             return;
         }
 
-        let local_path = self.local_current_path.clone();
         let remote_path = self.remote_current_path.clone();
 
         let local_names: std::collections::HashSet<String> = match std::fs::read_dir(&local_path) {
@@ -7519,6 +7531,7 @@ impl SftpView {
                                         move |menu, window, _cx| {
                                             let paste_view = remote_actions_view.clone();
                                             let paste_target_dir = paste_target_dir.clone();
+                                            let download_to_view = remote_actions_view.clone();
                                             let new_file_view = remote_actions_view.clone();
                                             let new_folder_view = remote_actions_view.clone();
                                             let delete_view = remote_actions_view.clone();
@@ -7540,6 +7553,21 @@ impl SftpView {
                                                     )),
                                             )
                                             .separator()
+                                            .item(
+                                                PopupMenuItem::new(
+                                                    t!("File.download_to_directory").to_string(),
+                                                )
+                                                .icon(IconName::ArrowDown)
+                                                .disabled(!has_selection || !is_connected)
+                                                .on_click(window.listener_for(
+                                                    &download_to_view,
+                                                    move |this, _, window, cx| {
+                                                        this.download_selected_to_directory(
+                                                            window, cx,
+                                                        );
+                                                    },
+                                                )),
+                                            )
                                             .item(
                                                 PopupMenuItem::new(t!("File.new_file").to_string())
                                                     .icon(IconName::File)
@@ -9977,6 +10005,37 @@ mod default_open_wiring_tests {
             .map(|offset| body_start + offset)
             .unwrap_or(source.len());
         &source[start..end]
+    }
+
+    #[test]
+    fn downloading_to_a_chosen_directory_reuses_the_shared_transfer_path() {
+        // issue #608：把远端文件拖出窗口/「下载到…」时目标目录要能指定，
+        // 但冲突检测与传输队列必须复用同一条路径。
+        let source = include_str!("lib.rs");
+        assert!(source.contains("File.download_to_directory"));
+
+        let selected = method_body(source, "download_selected");
+        assert!(
+            selected.contains("download_selected_into"),
+            "default download delegates to the shared helper"
+        );
+
+        let into = method_body(source, "download_selected_into");
+        assert!(
+            into.contains("execute_downloads"),
+            "shared helper still feeds the transfer queue"
+        );
+
+        let menu = include_str!("context_menu_handler.rs");
+        let prompt = method_body(menu, "download_selected_to_directory");
+        assert!(
+            prompt.contains("prompt_for_paths"),
+            "download-to asks for a local directory first"
+        );
+        assert!(
+            prompt.contains("download_selected_into"),
+            "chosen directory is passed to the shared helper"
+        );
     }
 
     #[test]
