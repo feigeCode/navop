@@ -1839,6 +1839,14 @@ impl SftpView {
                             window,
                             cx,
                         );
+                    } else {
+                        this.handle_dragged_drop_to_remote_directory(
+                            items.clone(),
+                            PaneSide::Left,
+                            target_path.clone(),
+                            window,
+                            cx,
+                        );
                     }
                 }
                 _ => {
@@ -1866,6 +1874,15 @@ impl SftpView {
                 }
                 FileListPanelEvent::PathChanged(path) => {
                     this.on_remote_path_changed(path.clone(), cx);
+                }
+                FileListPanelEvent::DroppedOnDirectory { target_path, items } => {
+                    this.handle_dragged_drop_to_remote_directory(
+                        items.clone(),
+                        PaneSide::Right,
+                        target_path.clone(),
+                        window,
+                        cx,
+                    );
                 }
                 _ => {
                     this.handle_remote_context_menu_event(event, window, cx);
@@ -5739,6 +5756,26 @@ impl SftpView {
         }
     }
 
+    /// 拖拽落到远端面板的某个目录行上：上传或服务端搬运到该目录。
+    fn handle_dragged_drop_to_remote_directory(
+        &mut self,
+        dragged: DraggedFileItems,
+        target_side: PaneSide,
+        target_dir: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match transfer_route(self.left_endpoint_kind(), dragged.source, target_side) {
+            Some(TransferRoute::Upload) => {
+                self.handle_local_files_drop_to_remote_dir(dragged, target_dir, window, cx);
+            }
+            Some(TransferRoute::ServerToServer { .. }) => {
+                self.enqueue_server_copy_into(dragged, target_side, Some(target_dir), window, cx);
+            }
+            _ => {}
+        }
+    }
+
     /// 拖拽落到本地面板的某个目录行上：下载路由交给公共实现，其他路由忽略。
     fn handle_dragged_drop_to_local_directory(
         &mut self,
@@ -5787,10 +5824,23 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.enqueue_server_copy_into(dragged, target_side, None, window, cx);
+    }
+
+    /// 服务端搬运；`target_dir_override` 用于「拖到目录行」时把落点改成该目录。
+    fn enqueue_server_copy_into(
+        &mut self,
+        dragged: DraggedFileItems,
+        target_side: PaneSide,
+        target_dir_override: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.close_state.is_closing() {
             return;
         }
-        let (source_config, target_config, target_dir) = match (dragged.source, target_side) {
+        let (source_config, target_config, default_target_dir) = match (dragged.source, target_side)
+        {
             (DragSource::RemoteLeft, PaneSide::Right) => {
                 let Some(left) = self.left_remote.as_ref() else {
                     return;
@@ -5813,6 +5863,7 @@ impl SftpView {
             }
             _ => return,
         };
+        let target_dir = target_dir_override.unwrap_or(default_target_dir);
         let items = dragged
             .items
             .into_iter()
@@ -6260,6 +6311,18 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let remote_path = self.remote_current_path.clone();
+        self.handle_local_files_drop_to_remote_dir(dragged, remote_path, window, cx);
+    }
+
+    /// 把本地拖拽内容上传到指定远端目录（issue #608：落点可为目录行）。
+    fn handle_local_files_drop_to_remote_dir(
+        &mut self,
+        dragged: DraggedFileItems,
+        remote_path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.close_state.is_closing() {
             return;
         }
@@ -6288,7 +6351,6 @@ impl SftpView {
             return;
         }
 
-        let remote_path = self.remote_current_path.clone();
         let view = cx.entity().clone();
 
         let list_task = Tokio::spawn(cx, {
@@ -10051,6 +10113,39 @@ mod default_open_wiring_tests {
             .map(|offset| body_start + offset)
             .unwrap_or(source.len());
         &source[start..end]
+    }
+
+    #[test]
+    fn dragging_onto_a_remote_directory_row_targets_that_directory() {
+        // issue #608：远端目录行落点要按上传/服务端搬运分派到该目录，而不是当前目录。
+        let source = include_str!("lib.rs");
+        let routed = method_body(source, "handle_dragged_drop_to_remote_directory");
+        assert!(
+            routed.contains("handle_local_files_drop_to_remote_dir"),
+            "上传路由接受目标目录"
+        );
+        assert!(
+            routed.contains("enqueue_server_copy_into"),
+            "服务端搬运路由接受目标目录"
+        );
+
+        let server_copy = method_body(source, "enqueue_server_copy_into");
+        assert!(
+            server_copy.contains("target_dir_override"),
+            "服务端搬运支持覆盖落点目录"
+        );
+
+        let default_copy = method_body(source, "enqueue_server_copy");
+        assert!(
+            default_copy.contains("enqueue_server_copy_into"),
+            "默认拖到空白处仍复用同一实现"
+        );
+
+        let upload = method_body(source, "handle_local_files_drop_to_remote_dir");
+        assert!(
+            upload.contains("list_dir(&remote_path)"),
+            "冲突检测使用落点目录"
+        );
     }
 
     #[test]

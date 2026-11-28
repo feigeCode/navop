@@ -2264,8 +2264,8 @@ impl Render for FileListPanel {
                                         .on_drop(cx.listener({
                                             let drop_target = full_path.clone();
                                             move |_this, items: &DraggedFileItems, _window, cx| {
-                                                // 只有本地面板的目录行接住拖拽；远端目录落点交给服务端搬运（待补）。
-                                                if !drop_target.is_empty() && is_dir && !is_remote {
+                                                // 目录行把落点上报给视图，由视图按面板侧别决定是下载、上传还是服务端搬运。
+                                                if !drop_target.is_empty() && is_dir {
                                                     cx.emit(
                                                         FileListPanelEvent::DroppedOnDirectory {
                                                             target_path: drop_target.clone(),
