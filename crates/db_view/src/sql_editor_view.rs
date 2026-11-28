@@ -92,6 +92,12 @@ const RUN_ALL_QUERY_KEY_BINDINGS: [&str; 4] =
 /// 它也会出现在「设置 → 快捷键」，可以按需改掉。
 const RUN_CURSOR_STATEMENT_KEY_BINDINGS: [&str; 1] = ["f7"];
 
+/// 行操作三件套的默认键位，对齐 Navicat（#594）：`ctrl-l` 删行、`ctrl-d` 复制行、
+/// `ctrl-t` 与上一行交换。
+const DELETE_LINE_KEY_BINDINGS: [&str; 1] = ["ctrl-l"];
+const DUPLICATE_LINE_KEY_BINDINGS: [&str; 1] = ["ctrl-d"];
+const SWAP_LINE_UP_KEY_BINDINGS: [&str; 1] = ["ctrl-t"];
+
 /// 「注释 / 取消注释」的默认键位（#290）。
 ///
 /// 按平台给**单一**默认值，不做双绑：`cmd-/` 在 Windows / Linux 上是 Win 键（按不到），
@@ -193,7 +199,14 @@ fn suggested_save_as_file_name(current: &Path) -> String {
 
 gpui::actions!(
     sql_editor_view,
-    [RunCurrentQuery, RunAllQuery, ToggleLineComment]
+    [
+        RunCurrentQuery,
+        RunAllQuery,
+        ToggleLineComment,
+        DeleteLine,
+        DuplicateLine,
+        SwapLineUp
+    ]
 );
 
 pub fn init(cx: &mut App) {
@@ -244,6 +257,46 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
                 cx,
             )
         }),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::SQL_DELETE_LINE, &DELETE_LINE_KEY_BINDINGS)
+            .into_iter()
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    DeleteLine,
+                    Some(SQL_EDITOR_INPUT_CONTEXT),
+                    cx,
+                )
+            }),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::SQL_DUPLICATE_LINE,
+            &DUPLICATE_LINE_KEY_BINDINGS,
+        )
+        .into_iter()
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                DuplicateLine,
+                Some(SQL_EDITOR_INPUT_CONTEXT),
+                cx,
+            )
+        }),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::SQL_SWAP_LINE_UP, &SWAP_LINE_UP_KEY_BINDINGS)
+            .into_iter()
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    SwapLineUp,
+                    Some(SQL_EDITOR_INPUT_CONTEXT),
+                    cx,
+                )
+            }),
     );
     keybindings
 }
@@ -296,6 +349,27 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         &RUN_CURSOR_STATEMENT_KEY_BINDINGS,
         Some(SQL_EDITOR_CONTEXT),
         RunCursorStatementSql,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_DELETE_LINE,
+        &DELETE_LINE_KEY_BINDINGS,
+        Some(SQL_EDITOR_INPUT_CONTEXT),
+        DeleteLine,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_DUPLICATE_LINE,
+        &DUPLICATE_LINE_KEY_BINDINGS,
+        Some(SQL_EDITOR_INPUT_CONTEXT),
+        DuplicateLine,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_SWAP_LINE_UP,
+        &SWAP_LINE_UP_KEY_BINDINGS,
+        Some(SQL_EDITOR_INPUT_CONTEXT),
+        SwapLineUp,
     ));
     keybindings
 }
@@ -893,6 +967,121 @@ fn toggle_sql_line_comments(text: &str, selection: Range<usize>) -> LineCommentR
         replacement,
         selection: mapped_selection,
     }
+}
+
+/// 行级编辑结果：把 `[range]` 换成 `replacement`，并把选区放到 `selection`。
+#[derive(Debug, PartialEq, Eq)]
+struct SqlLineEdit {
+    range: Range<usize>,
+    replacement: String,
+    selection: Range<usize>,
+}
+
+impl SqlLineEdit {
+    #[cfg(test)]
+    fn apply_to(&self, text: &str) -> String {
+        let mut text = text.to_owned();
+        text.replace_range(self.range.clone(), &self.replacement);
+        text
+    }
+}
+
+/// 选区覆盖到的整行块：`start` 是首行行首，`end` 覆盖到块尾换行符之后
+/// （文件末尾没有换行符时就到 `text.len()`）。
+fn selected_line_block(text: &str, selection: Range<usize>) -> Option<Range<usize>> {
+    if text.is_empty() {
+        return None;
+    }
+    let start = clamp_to_char_boundary(text, selection.start.min(text.len()));
+    let end = clamp_to_char_boundary(text, selection.end.min(text.len()).max(start));
+    let block_start = text[..start]
+        .rfind('\n')
+        .map_or(0, |newline| newline + 1);
+    // 选区正好以换行结尾时不要把下一行算进来，否则删行会多删一行。
+    let effective_end = if end > start && text.as_bytes().get(end - 1) == Some(&b'\n') {
+        end - 1
+    } else {
+        end
+    };
+    let line_end = text[effective_end..]
+        .find('\n')
+        .map_or(text.len(), |newline| effective_end + newline);
+    let block_end = if line_end < text.len() {
+        line_end + 1
+    } else {
+        text.len()
+    };
+    Some(block_start..block_end)
+}
+
+/// `ctrl-l`：删除选中行（无选区时是光标所在行）。
+///
+/// 删最后一行且没有尾随换行时，一并删掉它前面的换行符，避免留下一个空行。
+fn delete_lines_edit(text: &str, selection: Range<usize>) -> Option<SqlLineEdit> {
+    let block = selected_line_block(text, selection)?;
+    let range = if text[block.clone()].ends_with('\n') || block.start == 0 {
+        block.clone()
+    } else {
+        block.start - 1..block.end
+    };
+    let caret = block.start.min(text.len() - block.len());
+    Some(SqlLineEdit {
+        range,
+        replacement: String::new(),
+        selection: caret..caret,
+    })
+}
+
+/// `ctrl-d`：把选中行（无选区时是光标所在行）复制到下一行，光标留在原行行首。
+fn duplicate_lines_edit(text: &str, selection: Range<usize>) -> Option<SqlLineEdit> {
+    let block = selected_line_block(text, selection)?;
+    let content = text[block.clone()].to_string();
+    let replacement = if content.ends_with('\n') {
+        content
+    } else {
+        format!("\n{content}")
+    };
+    Some(SqlLineEdit {
+        range: block.end..block.end,
+        replacement,
+        selection: block.start..block.start,
+    })
+}
+
+/// `ctrl-t`：把光标所在行与上一行交换；光标在第一行时不动。
+fn swap_line_with_previous_edit(text: &str, selection: Range<usize>) -> Option<SqlLineEdit> {
+    let block = selected_line_block(text, selection)?;
+    if block.start == 0 {
+        return None;
+    }
+    let previous_end = block.start - 1;
+    let previous_start = text[..previous_end]
+        .rfind('\n')
+        .map_or(0, |newline| newline + 1);
+    let current = &text[block.clone()];
+    let previous = &text[previous_start..previous_end];
+    let current_has_newline = current.ends_with('\n');
+    let separator = if current.contains("\r\n") || previous.ends_with('\r') {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    fn strip_trailing(line: &str) -> &str {
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        line.strip_suffix('\r').unwrap_or(line)
+    }
+    let mut replacement = String::new();
+    replacement.push_str(strip_trailing(current));
+    replacement.push_str(separator);
+    replacement.push_str(strip_trailing(previous));
+    if current_has_newline {
+        replacement.push_str(separator);
+    }
+    Some(SqlLineEdit {
+        range: previous_start..block.end,
+        replacement,
+        selection: previous_start..previous_start,
+    })
 }
 
 fn map_offset_after_edits(offset: usize, edits: &[OffsetEdit], bias_after_insert: bool) -> usize {
@@ -4548,6 +4737,60 @@ impl SqlEditorTab {
         });
     }
 
+    /// 把行级编辑结果写回编辑器；`None` 表示无需改动（例如已在第一行按交换）。
+    fn apply_sql_line_edit(
+        &mut self,
+        edit: Option<SqlLineEdit>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(edit) = edit else {
+            return;
+        };
+        self.editor.update(cx, |editor, cx| {
+            editor.replace_range_and_select(
+                edit.range,
+                edit.replacement,
+                edit.selection,
+                window,
+                cx,
+            );
+        });
+    }
+
+    fn handle_delete_line_action(
+        &mut self,
+        _: &DeleteLine,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.get_sql_text(cx);
+        let selection = self.editor.read(cx).selected_range(cx);
+        self.apply_sql_line_edit(delete_lines_edit(&text, selection), window, cx);
+    }
+
+    fn handle_duplicate_line_action(
+        &mut self,
+        _: &DuplicateLine,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.get_sql_text(cx);
+        let selection = self.editor.read(cx).selected_range(cx);
+        self.apply_sql_line_edit(duplicate_lines_edit(&text, selection), window, cx);
+    }
+
+    fn handle_swap_line_up_action(
+        &mut self,
+        _: &SwapLineUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.get_sql_text(cx);
+        let selection = self.editor.read(cx).selected_range(cx);
+        self.apply_sql_line_edit(swap_line_with_previous_edit(&text, selection), window, cx);
+    }
+
     fn handle_run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selected_text = self.editor.read(cx).get_selected_text(cx);
         if selected_text.trim().is_empty() {
@@ -5431,7 +5674,10 @@ impl Render for SqlEditorTab {
             .on_action(cx.listener(Self::handle_run_all_query_action))
             .on_action(cx.listener(Self::handle_run_selected_sql_action))
             .on_action(cx.listener(Self::handle_run_cursor_statement_sql_action))
-            .on_action(cx.listener(Self::handle_toggle_line_comment_action));
+            .on_action(cx.listener(Self::handle_toggle_line_comment_action))
+            .on_action(cx.listener(Self::handle_delete_line_action))
+            .on_action(cx.listener(Self::handle_duplicate_line_action))
+            .on_action(cx.listener(Self::handle_swap_line_up_action));
         if result_panel_visible(has_results, results_visible, is_query_executing) {
             div = div
                 .child(self.render_has_results(window, cx))
@@ -6825,6 +7071,85 @@ mod tests {
         assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"cmd-r"));
         assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"ctrl-r"));
         assert_eq!(super::RUN_CURSOR_STATEMENT_KEY_BINDINGS, ["f7"]);
+    }
+
+    #[test]
+    fn delete_lines_edit_removes_the_line_under_the_cursor() {
+        let text = "select 1;\nselect 2;\nselect 3;";
+        let caret = text.find("select 2;").expect("second line");
+        let edit = super::delete_lines_edit(text, caret..caret).expect("edit");
+
+        assert_eq!("select 1;\nselect 3;", edit.apply_to(text));
+        assert_eq!(caret..caret, edit.selection);
+    }
+
+    #[test]
+    fn delete_lines_edit_drops_the_previous_newline_on_the_last_line() {
+        let text = "select 1;\nselect 2;";
+        let caret = text.find("select 2;").expect("second line");
+        let edit = super::delete_lines_edit(text, caret..caret).expect("edit");
+
+        assert_eq!("select 1;", edit.apply_to(text));
+    }
+
+    #[test]
+    fn delete_lines_edit_removes_every_line_touched_by_the_selection() {
+        let text = "a\nb\nc\nd";
+        let start = text.find('b').expect("second line");
+        let end = text.find("c\n").expect("third line") + 2;
+        let edit = super::delete_lines_edit(text, start..end).expect("edit");
+
+        assert_eq!("a\nd", edit.apply_to(text));
+    }
+
+    #[test]
+    fn duplicate_lines_edit_copies_the_current_line_below() {
+        let text = "a\nb\nc";
+        let caret = text.find('b').expect("second line");
+        let edit = super::duplicate_lines_edit(text, caret..caret).expect("edit");
+
+        assert_eq!("a\nb\nb\nc", edit.apply_to(text));
+        assert_eq!(caret..caret, edit.selection);
+    }
+
+    #[test]
+    fn duplicate_lines_edit_appends_a_newline_for_the_last_line() {
+        let text = "a\nb";
+        let caret = text.find('b').expect("second line");
+        let edit = super::duplicate_lines_edit(text, caret..caret).expect("edit");
+
+        assert_eq!("a\nb\nb", edit.apply_to(text));
+    }
+
+    #[test]
+    fn swap_line_with_previous_edit_moves_the_cursor_line_up() {
+        let text = "a\nb";
+        let caret = text.find('b').expect("second line");
+        let edit = super::swap_line_with_previous_edit(text, caret..caret).expect("edit");
+
+        assert_eq!("b\na", edit.apply_to(text));
+        assert_eq!(0..0, edit.selection);
+    }
+
+    #[test]
+    fn swap_line_with_previous_edit_is_a_no_op_on_the_first_line() {
+        assert!(super::swap_line_with_previous_edit("a\nb", 0..0).is_none());
+    }
+
+    #[test]
+    fn swap_line_with_previous_edit_preserves_crlf() {
+        let text = "a\r\nb\r\n";
+        let caret = text.find('b').expect("second line");
+        let edit = super::swap_line_with_previous_edit(text, caret..caret).expect("edit");
+
+        assert_eq!("b\r\na\r\n", edit.apply_to(text));
+    }
+
+    #[test]
+    fn line_operation_bindings_follow_navicat_defaults() {
+        assert_eq!(super::DELETE_LINE_KEY_BINDINGS, ["ctrl-l"]);
+        assert_eq!(super::DUPLICATE_LINE_KEY_BINDINGS, ["ctrl-d"]);
+        assert_eq!(super::SWAP_LINE_UP_KEY_BINDINGS, ["ctrl-t"]);
     }
 
     #[gpui::test]

@@ -5621,6 +5621,18 @@ Settings:
       en: Run Statement at Cursor
       zh-CN: 运行光标处语句
       zh-HK: 執行游標處語句
+    sql_delete_line:
+      en: Delete Line
+      zh-CN: 删除当前行
+      zh-HK: 刪除目前行
+    sql_duplicate_line:
+      en: Duplicate Line
+      zh-CN: 复制当前行
+      zh-HK: 複製目前行
+    sql_swap_line_up:
+      en: Swap Line Up
+      zh-CN: 与上一行交换
+      zh-HK: 與上一行交換
     table_move_selection:
       en: Move Selection
       zh-CN: 移动选区

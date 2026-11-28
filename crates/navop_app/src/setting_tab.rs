@@ -3440,6 +3440,27 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         action_id: Some(action_id::SQL_RUN_CURSOR_STATEMENT),
         system_hotkey: false,
     },
+    ShortcutEntry {
+        keys_macos: &["ctrl-l"],
+        keys_other: &["ctrl-l"],
+        label_key: "Settings.Shortcuts.sql_delete_line",
+        action_id: Some(action_id::SQL_DELETE_LINE),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["ctrl-d"],
+        keys_other: &["ctrl-d"],
+        label_key: "Settings.Shortcuts.sql_duplicate_line",
+        action_id: Some(action_id::SQL_DUPLICATE_LINE),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["ctrl-t"],
+        keys_other: &["ctrl-t"],
+        label_key: "Settings.Shortcuts.sql_swap_line_up",
+        action_id: Some(action_id::SQL_SWAP_LINE_UP),
+        system_hotkey: false,
+    },
 ];
 
 const TABLE_SHORTCUTS: &[ShortcutEntry] = &[
@@ -4280,6 +4301,19 @@ mod tests {
             .expect("run statement at cursor shortcut");
         assert_eq!(run_cursor_statement.keys_macos, &["f7"]);
         assert_eq!(run_cursor_statement.keys_other, &["f7"]);
+
+        for (action, keys) in [
+            (one_core::keybindings::action_id::SQL_DELETE_LINE, "ctrl-l"),
+            (one_core::keybindings::action_id::SQL_DUPLICATE_LINE, "ctrl-d"),
+            (one_core::keybindings::action_id::SQL_SWAP_LINE_UP, "ctrl-t"),
+        ] {
+            let entry = DATABASE_SHORTCUTS
+                .iter()
+                .find(|entry| entry.action_id == Some(action))
+                .expect("line operation shortcut");
+            assert_eq!(entry.keys_macos, &[keys]);
+            assert_eq!(entry.keys_other, &[keys]);
+        }
     }
 
     #[test]
