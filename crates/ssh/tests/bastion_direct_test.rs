@@ -98,6 +98,7 @@ async fn bastion_direct_connects_without_direct_tcpip_channel() {
         allow_legacy_algorithms: false,
         forward_agent: false,
         agent_identities: Vec::new(),
+        proxy_command: None,
     };
 
     let mut client = RusshClient::connect(config)

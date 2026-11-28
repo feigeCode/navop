@@ -1225,6 +1225,18 @@ TerminalView:
     en: "Clipboard image upload task failed: %{error}"
     zh-CN: "上传剪贴板图片任务失败：%{error}"
     zh-HK: "上傳剪貼簿圖片工作失敗：%{error}"
+  clipboard_image_upload_disabled:
+    en: Image upload to the remote shell is turned off in settings, so the clipboard image was not sent.
+    zh-CN: 设置里关闭了「把图片上传到远端」，剪贴板里的图片没有发送。
+    zh-HK: 設定裡關閉了「把圖片上傳到遠端」，剪貼簿裡的圖片沒有傳送。
+  clipboard_image_saved_locally:
+    en: "Clipboard image saved locally, path pasted: %{path}"
+    zh-CN: "剪贴板图片已保存到本地并粘贴路径：%{path}"
+    zh-HK: "剪貼簿圖片已儲存到本機並貼上路徑：%{path}"
+  clipboard_image_save_local_failed:
+    en: "Failed to save the clipboard image locally: %{error}"
+    zh-CN: "保存剪贴板图片到本地失败：%{error}"
+    zh-HK: "儲存剪貼簿圖片到本機失敗：%{error}"
   terminal_size_changed:
     en: "Terminal size changed: %{old} -> %{new}, cell_width=%{cell_width}, line_height=%{line_height}, bounds=%{bounds}"
     zh-CN: "终端尺寸变化: %{old} -> %{new}, cell_width=%{cell_width}, line_height=%{line_height}, bounds=%{bounds}"
@@ -1768,6 +1780,10 @@ QuickCommand:
     zh-HK: 刪除
 
 HistoryCommand:
+  remote_history_unavailable:
+    en: No shell history was found for this session. The device may block reading history files or keep it somewhere else.
+    zh-CN: 这个会话没有读到历史命令。设备可能禁止读取历史文件，或把历史写在了其他位置。
+    zh-HK: 這個工作階段沒有讀到歷史指令。裝置可能禁止讀取歷史檔案，或把歷史寫在其他位置。
   search:
     en: Search
     zh-CN: 搜索

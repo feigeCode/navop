@@ -340,6 +340,7 @@ fn ssh_connection_from_link(link: &JumpLink) -> StoredConnection {
         icon: None,
         icon_file_path: None,
         remote_file: None,
+        proxy_command: None,
     };
     let mut connection = StoredConnection::new_ssh(link.label.clone(), params, None);
     // 临时会话不参与云同步；id 为 None，打开后自动成为一次性标签页。

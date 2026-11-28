@@ -200,6 +200,62 @@ Connection:
 # 连接表单
 ConnectionForm:
   # 标签组
+  environment:
+    en: Environment
+    zh-CN: 环境
+    zh-HK: 環境
+  environment_unset:
+    en: Not marked
+    zh-CN: 未标记
+    zh-HK: 未標記
+  environment_development:
+    en: Development
+    zh-CN: 开发
+    zh-HK: 開發
+  environment_staging:
+    en: Staging
+    zh-CN: 测试
+    zh-HK: 測試
+  environment_production:
+    en: Production
+    zh-CN: 生产
+    zh-HK: 生產
+  production_badge:
+    en: PRODUCTION
+    zh-CN: 生产环境
+    zh-HK: 生產環境
+  credential_prompt:
+    en: Prompt for credentials
+    zh-CN: 连接时凭据提示
+    zh-HK: 連線時憑證提示
+  credential_prompt_never:
+    en: Use saved credentials
+    zh-CN: 使用已保存的凭据
+    zh-HK: 使用已儲存的憑證
+  credential_prompt_password:
+    en: Ask for password
+    zh-CN: 每次询问密码
+    zh-HK: 每次詢問密碼
+  credential_prompt_both:
+    en: Ask for username and password
+    zh-CN: 每次询问用户名与密码
+    zh-HK: 每次詢問使用者名稱與密碼
+  credential_prompt_title:
+    en: Enter credentials
+    zh-CN: 输入连接凭据
+    zh-HK: 輸入連線憑證
+  credential_prompt_hint:
+    en: "%{name} asks for credentials on every connection. They are kept in memory only."
+    zh-CN: "「%{name}」设置为每次连接都询问凭据。输入的值只保存在内存中，不会写回连接配置。"
+    zh-HK: "「%{name}」設定為每次連線都詢問憑證。輸入的值只保存在記憶體中，不會寫回連線設定。"
+  credential_prompt_username_required:
+    en: Username cannot be empty.
+    zh-CN: 用户名不能为空。
+    zh-HK: 使用者名稱不能為空。
+  credential_prompt_password_required:
+    en: Password cannot be empty.
+    zh-CN: 密码不能为空。
+    zh-HK: 密碼不能為空。
   general:
     en: General
     zh-CN: 常规
@@ -1089,6 +1145,26 @@ Table:
     en: Table Comment
     zh-CN: 表注释
     zh-HK: 表註釋
+  batch_add_columns:
+    en: Add Columns in Bulk
+    zh-CN: 批量添加列
+    zh-HK: 批次新增欄
+  batch_add_columns_placeholder:
+    en: "email VARCHAR(255)"
+    zh-CN: email VARCHAR(255)
+    zh-HK: email VARCHAR(255)
+  batch_add_columns_hint:
+    en: "One per line: name, or name TYPE(length). Types not in the list keep the default type and are reported."
+    zh-CN: 一行一条：列名，或「列名 类型(长度)」；类型不在列表里时按默认类型添加并提示。
+    zh-HK: 一行一條：欄名，或「欄名 類型(長度)」；類型不在清單裡時按預設類型新增並提示。
+  batch_add_columns_unknown_type:
+    en: "Unknown type for: %{types} (kept the default type)"
+    zh-CN: 以下类型不在当前数据库的类型列表里，已按默认类型添加：%{types}
+    zh-HK: 以下類型不在目前資料庫的類型清單裡，已按預設類型新增：%{types}
+  batch_add_columns_empty:
+    en: Enter at least one column name
+    zh-CN: 请至少输入一个列名
+    zh-HK: 請至少輸入一個欄名
   add_column:
     en: Add Column
     zh-CN: 添加列
@@ -1350,6 +1426,14 @@ Query:
     en: Query content is empty
     zh-CN: 查询内容为空
     zh-HK: 查詢內容為空
+  execution_history:
+    en: Recently Executed SQL
+    zh-CN: 最近执行的 SQL
+    zh-HK: 最近執行的 SQL
+  execution_history_empty:
+    en: No SQL has been executed in this editor yet
+    zh-CN: 这个编辑器还没有执行过 SQL
+    zh-HK: 這個編輯器還沒有執行過 SQL
   query_editor_prefix:
     en: Query
     zh-CN: 查询
@@ -1450,6 +1534,10 @@ Query:
     en: Save
     zh-CN: 保存
     zh-HK: 儲存
+  save_as_file:
+    en: Save As File...
+    zh-CN: 另存为文件…
+    zh-HK: 另存為檔案…
   save_query_title:
     en: Save Query
     zh-CN: 保存查询

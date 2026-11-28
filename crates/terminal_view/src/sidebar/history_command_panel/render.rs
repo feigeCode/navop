@@ -284,7 +284,11 @@ impl HistoryCommandPanel {
                 div()
                     .text_sm()
                     .text_color(self.colors.muted_foreground)
-                    .child(t!("HistoryCommand.no_commands").to_string()),
+                    .child(if self.remote_history_unavailable {
+                        t!("HistoryCommand.remote_history_unavailable").to_string()
+                    } else {
+                        t!("HistoryCommand.no_commands").to_string()
+                    }),
             )
     }
 }

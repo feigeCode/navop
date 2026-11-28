@@ -4,8 +4,15 @@ use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, div,
     prelude::FluentBuilder,
 };
-use gpui_component::{Disableable, Icon, Sizable, button::Button, h_flex, switch::Switch, v_flex};
+use gpui_component::{
+    Disableable, Icon, Sizable,
+    button::{Button, ButtonVariants},
+    h_flex,
+    switch::Switch,
+    v_flex,
+};
 use one_assets::IconName;
+use one_core::settings::AppSettings;
 use rust_i18n::t;
 
 impl NotesView {
@@ -114,6 +121,17 @@ impl NotesView {
         let theme = self.resolved_editor_theme(cx);
         let session = self.markdown_sessions.get(document_id);
         let status = markdown_status(session, self.tree.markdown_save_mode);
+        // 纯文本文档（#429）没有所见即所得视图，模式切换与「跟随默认视图」都不适用。
+        let plain_text = self.is_plain_text_document(document_id);
+        let follow_default_target = (!plain_text)
+            .then(|| {
+                crate::markdown_mode::markdown_default_mode_target(
+                    mode,
+                    AppSettings::current(cx).notes_markdown_default_view_mode,
+                )
+            })
+            .flatten();
+        let follow_default_id = document_id.to_owned();
         let save_disabled = session.is_none_or(|session| {
             !matches!(
                 session.state.sync_state,
@@ -133,7 +151,23 @@ impl NotesView {
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.background)
-            .child(self.render_source_toggle(document_id, mode, cx))
+            .when(!plain_text, |toolbar| {
+                toolbar.child(self.render_source_toggle(document_id, mode, cx))
+            })
+            .when_some(follow_default_target, |toolbar, target| {
+                toolbar.child(
+                    Button::new("markdown-follow-default")
+                        .debug_selector(|| "markdown-follow-default".to_owned())
+                        .ghost()
+                        .small()
+                        .flex_shrink_0()
+                        .label(t!("Notes.markdown_follow_default").to_string())
+                        .tooltip(t!("Notes.markdown_follow_default_tooltip").to_string())
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            view.set_markdown_mode(&follow_default_id, target, window, cx);
+                        })),
+                )
+            })
             .child(div().flex_1().min_w_0().overflow_hidden().when_some(
                 status,
                 |status_view, status| {

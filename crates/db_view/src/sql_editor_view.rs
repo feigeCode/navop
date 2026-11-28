@@ -28,11 +28,13 @@ use futures::channel::oneshot;
 use futures::stream::{self, StreamExt};
 use gpui::prelude::*;
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, Context, Element, Entity,
+    AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, Context,
+    Element, Entity,
     EventEmitter, FocusHandle, Focusable, Hsla, IntoElement, KeyBinding, MouseMoveEvent,
     MouseUpEvent, NoAction, ParentElement, Pixels, Point, Render, SharedString, Styled,
     Subscription, Task, WeakEntity, Window, div, px,
 };
+use gpui_component::StyledExt;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_component::dialog::DialogFooter;
 use gpui_component::input::{
@@ -40,6 +42,7 @@ use gpui_component::input::{
     RangeDecorationStyle,
 };
 use gpui_component::notification::Notification;
+use gpui_component::scroll::ScrollableElement;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
 use gpui_component::spinner::Spinner;
 use gpui_component::{
@@ -51,7 +54,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::settings::AppSettings;
 use one_core::storage::{
-    DatabaseType, QueryDirectoryScope, SqlFileNameError, default_query_directory,
+    DatabaseType, DbEnvironment, QueryDirectoryScope, SqlFileNameError, default_query_directory,
     sql_file_path_for_name,
 };
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
@@ -76,8 +79,37 @@ const PANEL_MIN_SIZE: Pixels = px(100.0);
 const RESULT_PANEL_DEFAULT_SIZE: Pixels = px(400.0);
 const SQL_EDITOR_CONTEXT: &str = "SqlEditor";
 const SQL_EDITOR_INPUT_CONTEXT: &str = "SqlEditor > Input";
-const RUN_CURRENT_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-enter", "ctrl-enter"];
-const RUN_ALL_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-shift-enter", "ctrl-shift-enter"];
+/// 「运行当前语句 / 选中内容」的默认键位。
+///
+/// `cmd-shift-r` / `ctrl-shift-r` 是 Navicat 的「运行选中」组合（#594），与
+/// `enter` 系列并存：老用户不必改习惯，从 Navicat 迁过来的用户直接能用。
+const RUN_CURRENT_QUERY_KEY_BINDINGS: [&str; 4] =
+    ["cmd-enter", "ctrl-enter", "cmd-shift-r", "ctrl-shift-r"];
+/// 「运行全部」的默认键位；`cmd-r` / `ctrl-r` 对齐 Navicat（#594）。
+const RUN_ALL_QUERY_KEY_BINDINGS: [&str; 4] =
+    ["cmd-shift-enter", "ctrl-shift-enter", "cmd-r", "ctrl-r"];
+
+/// 「运行光标处语句」的默认键位；`f7` 对齐 Navicat（#594）。
+///
+/// 该动作本来只在编辑器的右键菜单里，键盘用户按不到；绑上 F7 之后
+/// 它也会出现在「设置 → 快捷键」，可以按需改掉。
+const RUN_CURSOR_STATEMENT_KEY_BINDINGS: [&str; 1] = ["f7"];
+
+/// 行操作三件套的默认键位，对齐 Navicat（#594）：`ctrl-l` 删行、`ctrl-d` 复制行、
+/// `ctrl-t` 与上一行交换。
+const DELETE_LINE_KEY_BINDINGS: [&str; 1] = ["ctrl-l"];
+const DUPLICATE_LINE_KEY_BINDINGS: [&str; 1] = ["ctrl-d"];
+const SWAP_LINE_UP_KEY_BINDINGS: [&str; 1] = ["ctrl-t"];
+
+/// 大小写转换的默认键位（#594）：`ctrl-u` 转大写、`ctrl-shift-u` 转小写。
+const UPPERCASE_SQL_KEY_BINDINGS: [&str; 1] = ["ctrl-u"];
+const LOWERCASE_SQL_KEY_BINDINGS: [&str; 1] = ["ctrl-shift-u"];
+
+/// 打开「最近执行的 SQL」弹层（#594 的 Navicat 会话历史）：`ctrl-h` 对齐 Navicat。
+const EXECUTION_HISTORY_KEY_BINDINGS: [&str; 1] = ["ctrl-h"];
+
+/// 历史弹层里最多列多少条语句：再多也翻不过来，输入框够用即可。
+const EXECUTION_HISTORY_DIALOG_LIMIT: usize = 12;
 
 /// 「注释 / 取消注释」的默认键位（#290）。
 ///
@@ -160,9 +192,37 @@ fn write_new_sql_file(file_path: &Path, sql: &str) -> io::Result<()> {
         .and_then(|mut file| std::io::Write::write_all(&mut file, sql.as_bytes()))
 }
 
+/// 「另存为」时给系统对话框返回的路径补上 `.sql` 后缀；用户自己写了后缀就保持原样。
+fn sql_file_path_with_extension(mut file_path: PathBuf) -> PathBuf {
+    if file_path.extension().is_none() {
+        file_path.set_extension("sql");
+    }
+    file_path
+}
+
+/// 「另存为」对话框的默认文件名：沿用当前文件的名字，取不到时退回 `query.sql`。
+fn suggested_save_as_file_name(current: &Path) -> String {
+    current
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| "query.sql".to_string())
+}
+
 gpui::actions!(
     sql_editor_view,
-    [RunCurrentQuery, RunAllQuery, ToggleLineComment]
+    [
+        RunCurrentQuery,
+        RunAllQuery,
+        ToggleLineComment,
+        DeleteLine,
+        DuplicateLine,
+        SwapLineUp,
+        UppercaseSql,
+        LowercaseSql,
+        ShowExecutionHistory
+    ]
 );
 
 pub fn init(cx: &mut App) {
@@ -197,6 +257,102 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         toggle_line_comment_shortcuts(cx)
             .into_iter()
             .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ToggleLineComment, Some(SQL_EDITOR_INPUT_CONTEXT), cx)),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::SQL_RUN_CURSOR_STATEMENT,
+            &RUN_CURSOR_STATEMENT_KEY_BINDINGS,
+        )
+        .into_iter()
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                RunCursorStatementSql,
+                Some(SQL_EDITOR_CONTEXT),
+                cx,
+            )
+        }),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::SQL_DELETE_LINE, &DELETE_LINE_KEY_BINDINGS)
+            .into_iter()
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    DeleteLine,
+                    Some(SQL_EDITOR_INPUT_CONTEXT),
+                    cx,
+                )
+            }),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::SQL_DUPLICATE_LINE,
+            &DUPLICATE_LINE_KEY_BINDINGS,
+        )
+        .into_iter()
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                DuplicateLine,
+                Some(SQL_EDITOR_INPUT_CONTEXT),
+                cx,
+            )
+        }),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::SQL_SWAP_LINE_UP, &SWAP_LINE_UP_KEY_BINDINGS)
+            .into_iter()
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    SwapLineUp,
+                    Some(SQL_EDITOR_INPUT_CONTEXT),
+                    cx,
+                )
+            }),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::SQL_UPPERCASE, &UPPERCASE_SQL_KEY_BINDINGS)
+            .into_iter()
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    UppercaseSql,
+                    Some(SQL_EDITOR_INPUT_CONTEXT),
+                    cx,
+                )
+            }),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::SQL_LOWERCASE, &LOWERCASE_SQL_KEY_BINDINGS)
+            .into_iter()
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    LowercaseSql,
+                    Some(SQL_EDITOR_INPUT_CONTEXT),
+                    cx,
+                )
+            }),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::SQL_EXECUTION_HISTORY,
+            &EXECUTION_HISTORY_KEY_BINDINGS,
+        )
+        .into_iter()
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                ShowExecutionHistory,
+                Some(SQL_EDITOR_INPUT_CONTEXT),
+                cx,
+            )
+        }),
     );
     keybindings
 }
@@ -243,7 +399,68 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         Some(SQL_EDITOR_INPUT_CONTEXT),
         ToggleLineComment,
     ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_RUN_CURSOR_STATEMENT,
+        &RUN_CURSOR_STATEMENT_KEY_BINDINGS,
+        Some(SQL_EDITOR_CONTEXT),
+        RunCursorStatementSql,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_DELETE_LINE,
+        &DELETE_LINE_KEY_BINDINGS,
+        Some(SQL_EDITOR_INPUT_CONTEXT),
+        DeleteLine,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_DUPLICATE_LINE,
+        &DUPLICATE_LINE_KEY_BINDINGS,
+        Some(SQL_EDITOR_INPUT_CONTEXT),
+        DuplicateLine,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_SWAP_LINE_UP,
+        &SWAP_LINE_UP_KEY_BINDINGS,
+        Some(SQL_EDITOR_INPUT_CONTEXT),
+        SwapLineUp,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_UPPERCASE,
+        &UPPERCASE_SQL_KEY_BINDINGS,
+        Some(SQL_EDITOR_INPUT_CONTEXT),
+        UppercaseSql,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_LOWERCASE,
+        &LOWERCASE_SQL_KEY_BINDINGS,
+        Some(SQL_EDITOR_INPUT_CONTEXT),
+        LowercaseSql,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_EXECUTION_HISTORY,
+        &EXECUTION_HISTORY_KEY_BINDINGS,
+        Some(SQL_EDITOR_INPUT_CONTEXT),
+        ShowExecutionHistory,
+    ));
     keybindings
+}
+
+/// 历史弹层里每条语句的单行预览：空白压成单个空格，过长截断。
+fn history_statement_preview(statement: &str) -> String {
+    const MAX_CHARS: usize = 96;
+    let single_line = statement.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single_line.chars().count() <= MAX_CHARS {
+        return single_line;
+    }
+    let mut preview: String = single_line.chars().take(MAX_CHARS).collect();
+    preview.push('…');
+    preview
 }
 
 fn secondary_enter_binding(current_shortcuts: &[String], cx: &App) -> KeyBinding {
@@ -839,6 +1056,176 @@ fn toggle_sql_line_comments(text: &str, selection: Range<usize>) -> LineCommentR
         replacement,
         selection: mapped_selection,
     }
+}
+
+/// 标识符字符集合：大小写转换在无选区时按它向两侧扩展出「一个词」。
+fn is_sql_word_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '$' | '#')
+}
+
+fn sql_word_range_at(text: &str, offset: usize) -> Option<Range<usize>> {
+    let offset = clamp_to_char_boundary(text, offset.min(text.len()));
+    let mut start = offset;
+    for (index, c) in text[..offset].char_indices().rev() {
+        if !is_sql_word_char(c) {
+            break;
+        }
+        start = index;
+    }
+    let mut end = offset;
+    for (index, c) in text[offset..].char_indices() {
+        if !is_sql_word_char(c) {
+            break;
+        }
+        end = offset + index + c.len_utf8();
+    }
+    (start < end).then_some(start..end)
+}
+
+/// `ctrl-u` / `ctrl-shift-u`：把选区（无选区时是光标所在标识符）转成大写 / 小写。
+///
+/// 原文与结果一致时返回 `None`，避免一次无意义的文本替换把撤销栈搅乱。
+fn change_case_edit(text: &str, selection: Range<usize>, upper: bool) -> Option<SqlLineEdit> {
+    let range = if selection.start < selection.end {
+        let start = clamp_to_char_boundary(text, selection.start.min(text.len()));
+        let end = clamp_to_char_boundary(text, selection.end.min(text.len()).max(start));
+        start..end
+    } else {
+        sql_word_range_at(text, selection.start)?
+    };
+    if range.is_empty() {
+        return None;
+    }
+    let original = &text[range.clone()];
+    let replacement = if upper {
+        original.to_uppercase()
+    } else {
+        original.to_lowercase()
+    };
+    if replacement == original {
+        return None;
+    }
+    let selection = range.start..range.start + replacement.len();
+    Some(SqlLineEdit {
+        range,
+        replacement,
+        selection,
+    })
+}
+
+/// 行级编辑结果：把 `[range]` 换成 `replacement`，并把选区放到 `selection`。
+#[derive(Debug, PartialEq, Eq)]
+struct SqlLineEdit {
+    range: Range<usize>,
+    replacement: String,
+    selection: Range<usize>,
+}
+
+impl SqlLineEdit {
+    #[cfg(test)]
+    fn apply_to(&self, text: &str) -> String {
+        let mut text = text.to_owned();
+        text.replace_range(self.range.clone(), &self.replacement);
+        text
+    }
+}
+
+/// 选区覆盖到的整行块：`start` 是首行行首，`end` 覆盖到块尾换行符之后
+/// （文件末尾没有换行符时就到 `text.len()`）。
+fn selected_line_block(text: &str, selection: Range<usize>) -> Option<Range<usize>> {
+    if text.is_empty() {
+        return None;
+    }
+    let start = clamp_to_char_boundary(text, selection.start.min(text.len()));
+    let end = clamp_to_char_boundary(text, selection.end.min(text.len()).max(start));
+    let block_start = text[..start]
+        .rfind('\n')
+        .map_or(0, |newline| newline + 1);
+    // 选区正好以换行结尾时不要把下一行算进来，否则删行会多删一行。
+    let effective_end = if end > start && text.as_bytes().get(end - 1) == Some(&b'\n') {
+        end - 1
+    } else {
+        end
+    };
+    let line_end = text[effective_end..]
+        .find('\n')
+        .map_or(text.len(), |newline| effective_end + newline);
+    let block_end = if line_end < text.len() {
+        line_end + 1
+    } else {
+        text.len()
+    };
+    Some(block_start..block_end)
+}
+
+/// `ctrl-l`：删除选中行（无选区时是光标所在行）。
+///
+/// 删最后一行且没有尾随换行时，一并删掉它前面的换行符，避免留下一个空行。
+fn delete_lines_edit(text: &str, selection: Range<usize>) -> Option<SqlLineEdit> {
+    let block = selected_line_block(text, selection)?;
+    let range = if text[block.clone()].ends_with('\n') || block.start == 0 {
+        block.clone()
+    } else {
+        block.start - 1..block.end
+    };
+    let caret = block.start.min(text.len() - block.len());
+    Some(SqlLineEdit {
+        range,
+        replacement: String::new(),
+        selection: caret..caret,
+    })
+}
+
+/// `ctrl-d`：把选中行（无选区时是光标所在行）复制到下一行，光标留在原行行首。
+fn duplicate_lines_edit(text: &str, selection: Range<usize>) -> Option<SqlLineEdit> {
+    let block = selected_line_block(text, selection)?;
+    let content = text[block.clone()].to_string();
+    let replacement = if content.ends_with('\n') {
+        content
+    } else {
+        format!("\n{content}")
+    };
+    Some(SqlLineEdit {
+        range: block.end..block.end,
+        replacement,
+        selection: block.start..block.start,
+    })
+}
+
+/// `ctrl-t`：把光标所在行与上一行交换；光标在第一行时不动。
+fn swap_line_with_previous_edit(text: &str, selection: Range<usize>) -> Option<SqlLineEdit> {
+    let block = selected_line_block(text, selection)?;
+    if block.start == 0 {
+        return None;
+    }
+    let previous_end = block.start - 1;
+    let previous_start = text[..previous_end]
+        .rfind('\n')
+        .map_or(0, |newline| newline + 1);
+    let current = &text[block.clone()];
+    let previous = &text[previous_start..previous_end];
+    let current_has_newline = current.ends_with('\n');
+    let separator = if current.contains("\r\n") || previous.ends_with('\r') {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    fn strip_trailing(line: &str) -> &str {
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        line.strip_suffix('\r').unwrap_or(line)
+    }
+    let mut replacement = String::new();
+    replacement.push_str(strip_trailing(current));
+    replacement.push_str(separator);
+    replacement.push_str(strip_trailing(previous));
+    if current_has_newline {
+        replacement.push_str(separator);
+    }
+    Some(SqlLineEdit {
+        range: previous_start..block.end,
+        replacement,
+        selection: previous_start..previous_start,
+    })
 }
 
 fn map_offset_after_edits(offset: usize, edits: &[OffsetEdit], bias_after_insert: bool) -> usize {
@@ -1469,6 +1856,8 @@ pub struct SqlEditorTab {
     connection_id: String,
     database_type: DatabaseType,
     sql_result_tab_container: Entity<SqlResultTabContainer>,
+    /// 执行历史面板（与结果页共享），供 `ctrl-h` 的「最近执行的 SQL」弹层读取。
+    execution_history: Entity<ExecutionHistoryPanel>,
     connection_select: Entity<SelectState<SearchableVec<QueryConnectionOption>>>,
     database_select: Entity<SelectState<SearchableVec<String>>>,
     schema_select: Entity<SelectState<SearchableVec<String>>>,
@@ -1665,6 +2054,7 @@ impl SqlEditorTab {
             database_type: config.database_type,
             sql_result_tab_container: cx
                 .new(|cx| SqlResultTabContainer::new(execution_history.clone(), window, cx)),
+            execution_history,
             connection_select: connection_select.clone(),
             database_select: database_select.clone(),
             schema_select: schema_select.clone(),
@@ -4494,6 +4884,148 @@ impl SqlEditorTab {
         });
     }
 
+    /// 把行级编辑结果写回编辑器；`None` 表示无需改动（例如已在第一行按交换）。
+    fn apply_sql_line_edit(
+        &mut self,
+        edit: Option<SqlLineEdit>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(edit) = edit else {
+            return;
+        };
+        self.editor.update(cx, |editor, cx| {
+            editor.replace_range_and_select(
+                edit.range,
+                edit.replacement,
+                edit.selection,
+                window,
+                cx,
+            );
+        });
+    }
+
+    fn handle_delete_line_action(
+        &mut self,
+        _: &DeleteLine,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.get_sql_text(cx);
+        let selection = self.editor.read(cx).selected_range(cx);
+        self.apply_sql_line_edit(delete_lines_edit(&text, selection), window, cx);
+    }
+
+    fn handle_duplicate_line_action(
+        &mut self,
+        _: &DuplicateLine,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.get_sql_text(cx);
+        let selection = self.editor.read(cx).selected_range(cx);
+        self.apply_sql_line_edit(duplicate_lines_edit(&text, selection), window, cx);
+    }
+
+    fn handle_swap_line_up_action(
+        &mut self,
+        _: &SwapLineUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.get_sql_text(cx);
+        let selection = self.editor.read(cx).selected_range(cx);
+        self.apply_sql_line_edit(swap_line_with_previous_edit(&text, selection), window, cx);
+    }
+
+    fn handle_uppercase_sql_action(
+        &mut self,
+        _: &UppercaseSql,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.get_sql_text(cx);
+        let selection = self.editor.read(cx).selected_range(cx);
+        self.apply_sql_line_edit(change_case_edit(&text, selection, true), window, cx);
+    }
+
+    fn handle_lowercase_sql_action(
+        &mut self,
+        _: &LowercaseSql,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.get_sql_text(cx);
+        let selection = self.editor.read(cx).selected_range(cx);
+        self.apply_sql_line_edit(change_case_edit(&text, selection, false), window, cx);
+    }
+
+    fn handle_show_execution_history_action(
+        &mut self,
+        _: &ShowExecutionHistory,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let statements = self
+            .execution_history
+            .read(cx)
+            .recent_sql(EXECUTION_HISTORY_DIALOG_LIMIT);
+        if statements.is_empty() {
+            window.push_notification(t!("Query.execution_history_empty").to_string(), cx);
+            return;
+        }
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let items = statements.iter().enumerate().map(|(index, statement)| {
+                let statement = statement.clone();
+                let view = view.clone();
+                Button::new(format!("query-history-item-{index}"))
+                    .ghost()
+                    .w_full()
+                    .child(
+                        div()
+                            .w_full()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(history_statement_preview(&statement)),
+                    )
+                    .on_click(move |_, window, cx| {
+                        view.update(cx, |view, cx| {
+                            view.insert_history_statement(&statement, window, cx);
+                        });
+                        window.close_dialog(cx);
+                    })
+            });
+            dialog
+                .title(t!("Query.execution_history").to_string())
+                .w(px(620.0))
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .max_h(px(420.0))
+                        .overflow_y_scrollbar()
+                        .children(items),
+                )
+        });
+    }
+
+    /// 把历史语句插到光标处（替换当前选区），再把焦点交回编辑器。
+    fn insert_history_statement(
+        &mut self,
+        statement: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selection = self.editor.read(cx).selected_range(cx);
+        let replacement = statement.to_string();
+        let caret = selection.start + replacement.len();
+        self.editor.update(cx, |editor, cx| {
+            editor.replace_range_and_select(selection, replacement, caret..caret, window, cx);
+            let input = editor.input();
+            input.update(cx, |state, cx| state.focus(window, cx));
+        });
+    }
+
     fn handle_run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selected_text = self.editor.read(cx).get_selected_text(cx);
         if selected_text.trim().is_empty() {
@@ -4769,6 +5301,55 @@ impl SqlEditorTab {
         window.push_notification(Notification::error(message).autohide(true), cx);
     }
 
+    /// 「另存为…」：交给系统保存对话框选目标路径，写入当前 SQL 后把页签绑定到该文件，
+    /// 之后的保存直接覆盖这份文件，方便把查询分享出去。
+    fn handle_save_query_as_file(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let sql = self.get_sql_text(cx);
+        if sql.trim().is_empty() {
+            window.push_notification(t!("Query.query_content_empty").to_string(), cx);
+            return;
+        }
+        let directory = self
+            .file_path
+            .read()
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let suggested_name = suggested_save_as_file_name(&self.file_path.read());
+        let prompt = cx.prompt_for_new_path(&directory, Some(&suggested_name));
+        cx.spawn_in(window, async move |view, cx| {
+            let path = match prompt.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Ok(None)) => return,
+                Ok(Err(error)) => {
+                    view.update_in(cx, |view, window, cx| {
+                        view.notify_save_failed(io::Error::other(error.to_string()), window, cx);
+                    })
+                    .ok();
+                    return;
+                }
+                Err(_) => return,
+            };
+            let file_path = sql_file_path_with_extension(path);
+            let write_result = write_sql_file(&file_path, &sql);
+            view.update_in(cx, move |view, window, cx| match write_result {
+                Ok(()) => {
+                    *view.file_path.write() = file_path;
+                    view.requires_name.store(false, Ordering::Relaxed);
+                    view.finish_successful_save(window, cx);
+                }
+                Err(error) => view.notify_save_failed(error, window, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn finish_successful_save(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.is_dirty.store(false, Ordering::Relaxed);
         window.push_notification(t!("Query.query_saved").to_string(), cx);
@@ -5001,6 +5582,32 @@ impl SqlEditorTab {
 
     /// 参考 dbx EditorToolbar 的紧凑工具栏：左侧彩色图标按钮，右侧连接/数据库选择。
     /// 手动事务组（模式切换 + 提交/回滚）保留在左侧动作区之后。
+    /// 生产环境徽标：连接表单里把「环境」标成「生产」时显示。
+    ///
+    /// 未标记、开发、测试都不显示，保证老连接的行为不变。
+    fn production_environment_badge(&self, cx: &App) -> Option<AnyElement> {
+        let config = cx.global::<GlobalDbState>().get_config(&self.connection_id)?;
+        if !DbEnvironment::from_params(&config.extra_params).is_production() {
+            return None;
+        }
+
+        Some(
+            div()
+                .id("query-production-badge")
+                .h(px(20.0))
+                .px_2()
+                .rounded_sm()
+                .flex()
+                .items_center()
+                .bg(cx.theme().danger.opacity(0.12))
+                .text_xs()
+                .font_semibold()
+                .text_color(cx.theme().danger)
+                .child(t!("ConnectionForm.production_badge").to_string())
+                .into_any_element(),
+        )
+    }
+
     fn render_query_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let connection_select = self.connection_select.clone();
         let database_select = self.database_select.clone();
@@ -5075,6 +5682,9 @@ impl SqlEditorTab {
                     cx,
                 ),
             })
+            // issue #30 第 5 点：连接被标记为生产环境时，工具栏常驻红色提示，
+            // 让「这条 SQL 要打在哪」始终可见。
+            .children(self.production_environment_badge(cx))
             // 运行中在工具栏上同步给出反馈：查询数据量大时面板可能被挤得很窄，
             // 仅靠面板内的加载态不足以说明“执行已提交”。这里刻意不读
             // `total_elapsed_ms`，避免编辑器（含 SQL 输入）被计时器每 100ms
@@ -5129,6 +5739,18 @@ impl SqlEditorTab {
                     loading: false,
                 },
                 cx.listener(Self::handle_save_query),
+                cx,
+            ))
+            .child(Self::query_toolbar_button(
+                QueryToolbarButtonSpec {
+                    id: "save-query-as",
+                    icon: IconName::FolderOpen,
+                    color: cx.theme().primary,
+                    tooltip: t!("Query.save_as_file").into(),
+                    disabled: false,
+                    loading: false,
+                },
+                cx.listener(Self::handle_save_query_as_file),
                 cx,
             ))
             .when(supports_transactions, |toolbar| {
@@ -5316,7 +5938,13 @@ impl Render for SqlEditorTab {
             .on_action(cx.listener(Self::handle_run_all_query_action))
             .on_action(cx.listener(Self::handle_run_selected_sql_action))
             .on_action(cx.listener(Self::handle_run_cursor_statement_sql_action))
-            .on_action(cx.listener(Self::handle_toggle_line_comment_action));
+            .on_action(cx.listener(Self::handle_toggle_line_comment_action))
+            .on_action(cx.listener(Self::handle_delete_line_action))
+            .on_action(cx.listener(Self::handle_duplicate_line_action))
+            .on_action(cx.listener(Self::handle_swap_line_up_action))
+            .on_action(cx.listener(Self::handle_uppercase_sql_action))
+            .on_action(cx.listener(Self::handle_lowercase_sql_action))
+            .on_action(cx.listener(Self::handle_show_execution_history_action));
         if result_panel_visible(has_results, results_visible, is_query_executing) {
             div = div
                 .child(self.render_has_results(window, cx))
@@ -5337,6 +5965,7 @@ impl Clone for SqlEditorTab {
             connection_id: self.connection_id.clone(),
             database_type: self.database_type.clone(),
             sql_result_tab_container: self.sql_result_tab_container.clone(),
+            execution_history: self.execution_history.clone(),
             connection_select: self.connection_select.clone(),
             database_select: self.database_select.clone(),
             schema_select: self.schema_select.clone(),
@@ -5563,11 +6192,12 @@ mod tests {
         match_sql_to_statement_marker, metadata_scope_selection, preferred_default_database,
         query_connection_context_label, query_connection_ids, query_file_path_for_name,
         query_toolbar_action, result_panel_visible, schema_changed_event_matches_scope,
-        should_render_schema_select,
+        should_render_schema_select, sql_file_path_with_extension,
         sql_text_for_run_all, sql_text_for_toolbar_run, statement_for_gutter_marker,
-        statement_marker_id, supports_manual_transactions, toggle_line_comment_defaults,
-        toggle_sql_line_comments, transaction_action_loading, transaction_liveness,
-        unquote_sql_identifier, viewport_statement_scan_input, write_new_sql_file, write_sql_file,
+        statement_marker_id, suggested_save_as_file_name, supports_manual_transactions,
+        toggle_line_comment_defaults, toggle_sql_line_comments, transaction_action_loading,
+        transaction_liveness, unquote_sql_identifier, viewport_statement_scan_input,
+        write_new_sql_file, write_sql_file,
     };
     use crate::sql_editor::SqlEditor;
     use db::DbManager;
@@ -5584,7 +6214,7 @@ mod tests {
     use one_core::storage::DatabaseType;
     use ropey::Rope;
     use std::cell::Cell;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -6416,6 +7046,24 @@ mod tests {
     }
 
     #[test]
+    fn save_as_path_without_extension_gets_a_sql_suffix() {
+        let path = sql_file_path_with_extension(PathBuf::from("/tmp/quarterly report"));
+        assert_eq!(path, PathBuf::from("/tmp/quarterly report.sql"));
+
+        let kept = sql_file_path_with_extension(PathBuf::from("/tmp/quarterly.txt"));
+        assert_eq!(kept, PathBuf::from("/tmp/quarterly.txt"));
+    }
+
+    #[test]
+    fn save_as_default_name_falls_back_to_query_sql() {
+        assert_eq!(
+            suggested_save_as_file_name(Path::new("/tmp/queries/orders.sql")),
+            "orders.sql"
+        );
+        assert_eq!(suggested_save_as_file_name(Path::new("")), "query.sql");
+    }
+
+    #[test]
     fn write_sql_file_overwrites_current_named_query() {
         let directory = temp_query_dir("overwrite");
         let file_path = directory.join("report.sql");
@@ -6684,8 +7332,149 @@ mod tests {
     fn run_query_key_bindings_separate_current_and_all_modes() {
         assert!(RUN_CURRENT_QUERY_KEY_BINDINGS.contains(&"cmd-enter"));
         assert!(RUN_CURRENT_QUERY_KEY_BINDINGS.contains(&"ctrl-enter"));
+        assert!(RUN_CURRENT_QUERY_KEY_BINDINGS.contains(&"cmd-shift-r"));
+        assert!(RUN_CURRENT_QUERY_KEY_BINDINGS.contains(&"ctrl-shift-r"));
         assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"cmd-shift-enter"));
         assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"ctrl-shift-enter"));
+        assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"cmd-r"));
+        assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"ctrl-r"));
+        assert_eq!(super::RUN_CURSOR_STATEMENT_KEY_BINDINGS, ["f7"]);
+        assert_eq!(super::DELETE_LINE_KEY_BINDINGS, ["ctrl-l"]);
+        assert_eq!(super::DUPLICATE_LINE_KEY_BINDINGS, ["ctrl-d"]);
+        assert_eq!(super::SWAP_LINE_UP_KEY_BINDINGS, ["ctrl-t"]);
+        assert_eq!(super::UPPERCASE_SQL_KEY_BINDINGS, ["ctrl-u"]);
+        assert_eq!(super::LOWERCASE_SQL_KEY_BINDINGS, ["ctrl-shift-u"]);
+        assert_eq!(super::EXECUTION_HISTORY_KEY_BINDINGS, ["ctrl-h"]);
+    }
+
+    #[test]
+    fn history_statement_preview_collapses_whitespace_and_truncates() {
+        assert_eq!(
+            "select 1 from t",
+            super::history_statement_preview("select 1\n  from\tt")
+        );
+        let long = "select ".to_string() + &"a".repeat(200);
+        let preview = super::history_statement_preview(&long);
+        assert_eq!(97, preview.chars().count());
+        assert!(preview.ends_with('…'));
+    }
+
+    #[test]
+    fn delete_lines_edit_removes_the_line_under_the_cursor() {
+        let text = "select 1;\nselect 2;\nselect 3;";
+        let caret = text.find("select 2;").expect("second line");
+        let edit = super::delete_lines_edit(text, caret..caret).expect("edit");
+
+        assert_eq!("select 1;\nselect 3;", edit.apply_to(text));
+        assert_eq!(caret..caret, edit.selection);
+    }
+
+    #[test]
+    fn delete_lines_edit_drops_the_previous_newline_on_the_last_line() {
+        let text = "select 1;\nselect 2;";
+        let caret = text.find("select 2;").expect("second line");
+        let edit = super::delete_lines_edit(text, caret..caret).expect("edit");
+
+        assert_eq!("select 1;", edit.apply_to(text));
+    }
+
+    #[test]
+    fn delete_lines_edit_removes_every_line_touched_by_the_selection() {
+        let text = "a\nb\nc\nd";
+        let start = text.find('b').expect("second line");
+        let end = text.find("c\n").expect("third line") + 2;
+        let edit = super::delete_lines_edit(text, start..end).expect("edit");
+
+        assert_eq!("a\nd", edit.apply_to(text));
+    }
+
+    #[test]
+    fn duplicate_lines_edit_copies_the_current_line_below() {
+        let text = "a\nb\nc";
+        let caret = text.find('b').expect("second line");
+        let edit = super::duplicate_lines_edit(text, caret..caret).expect("edit");
+
+        assert_eq!("a\nb\nb\nc", edit.apply_to(text));
+        assert_eq!(caret..caret, edit.selection);
+    }
+
+    #[test]
+    fn duplicate_lines_edit_appends_a_newline_for_the_last_line() {
+        let text = "a\nb";
+        let caret = text.find('b').expect("second line");
+        let edit = super::duplicate_lines_edit(text, caret..caret).expect("edit");
+
+        assert_eq!("a\nb\nb", edit.apply_to(text));
+    }
+
+    #[test]
+    fn swap_line_with_previous_edit_moves_the_cursor_line_up() {
+        let text = "a\nb";
+        let caret = text.find('b').expect("second line");
+        let edit = super::swap_line_with_previous_edit(text, caret..caret).expect("edit");
+
+        assert_eq!("b\na", edit.apply_to(text));
+        assert_eq!(0..0, edit.selection);
+    }
+
+    #[test]
+    fn swap_line_with_previous_edit_is_a_no_op_on_the_first_line() {
+        assert!(super::swap_line_with_previous_edit("a\nb", 0..0).is_none());
+    }
+
+    #[test]
+    fn swap_line_with_previous_edit_preserves_crlf() {
+        let text = "a\r\nb\r\n";
+        let caret = text.find('b').expect("second line");
+        let edit = super::swap_line_with_previous_edit(text, caret..caret).expect("edit");
+
+        assert_eq!("b\r\na\r\n", edit.apply_to(text));
+    }
+
+    #[test]
+    fn uppercase_edit_uses_the_selection_when_there_is_one() {
+        let text = "select id from orders";
+        let start = text.find("id").expect("column");
+        let edit = super::change_case_edit(text, start..start + 2, true).expect("edit");
+
+        assert_eq!("select ID from orders", edit.apply_to(text));
+        assert_eq!(start..start + 2, edit.selection);
+    }
+
+    #[test]
+    fn lowercase_edit_expands_to_the_word_under_the_cursor() {
+        let text = "SELECT USER_ID FROM orders";
+        let caret = text.find("USER_ID").expect("column") + 2;
+        let edit = super::change_case_edit(text, caret..caret, false).expect("edit");
+
+        assert_eq!("SELECT user_id FROM orders", edit.apply_to(text));
+    }
+
+    #[test]
+    fn case_edit_is_a_no_op_when_the_text_is_already_in_that_case() {
+        let text = "SELECT id";
+        let keyword = text.find("SELECT").expect("keyword");
+        assert!(super::change_case_edit(text, keyword..keyword + 6, true).is_none());
+        let column = text.find("id").expect("column");
+        assert!(super::change_case_edit(text, column..column, false).is_none());
+    }
+
+    #[test]
+    fn case_edit_leaves_identifiers_outside_the_word_alone() {
+        let text = "select `a`.id";
+        let caret = text.find('a').expect("identifier");
+        let edit = super::change_case_edit(text, caret..caret, true).expect("edit");
+
+        assert_eq!("select `A`.id", edit.apply_to(text));
+    }
+
+    #[test]
+    fn line_operation_bindings_follow_navicat_defaults() {
+        assert_eq!(super::DELETE_LINE_KEY_BINDINGS, ["ctrl-l"]);
+        assert_eq!(super::DUPLICATE_LINE_KEY_BINDINGS, ["ctrl-d"]);
+        assert_eq!(super::SWAP_LINE_UP_KEY_BINDINGS, ["ctrl-t"]);
+        assert_eq!(super::UPPERCASE_SQL_KEY_BINDINGS, ["ctrl-u"]);
+        assert_eq!(super::LOWERCASE_SQL_KEY_BINDINGS, ["ctrl-shift-u"]);
     }
 
     #[gpui::test]

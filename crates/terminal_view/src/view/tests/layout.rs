@@ -788,9 +788,9 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
         .nth(1)
         .and_then(|source| source.split("fn render_quick_command_icon_button").next())
         .expect("collapsed toolbar should exist");
-    assert!(toolbar.contains("self.render_pinned_quick_chips(cx)"));
+    assert!(toolbar.contains("self.render_quick_command_chips(cx)"));
     let chips_position = toolbar
-        .find("self.render_pinned_quick_chips(cx)")
+        .find("self.render_quick_command_chips(cx)")
         .expect("pinned chips should render in the collapsed row");
     let quick_position = toolbar
         .find("self.render_quick_command_icon_button(cx)")

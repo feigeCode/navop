@@ -119,7 +119,7 @@ impl TerminalCommandBar {
             .h(px(COMMAND_BAR_COLLAPSED_HEIGHT))
             .items_center()
             .gap_1()
-            .child(self.render_pinned_quick_chips(cx))
+            .child(self.render_quick_command_chips(cx))
             .child(self.render_quick_command_icon_button(cx))
             .child(self.render_command_input_toggle_button(cx))
             .into_any_element()

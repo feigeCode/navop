@@ -33,6 +33,7 @@ use gpui_component::{
 };
 use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
+use one_core::settings::AppSettings;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
@@ -63,7 +64,8 @@ use crate::host_key_dialog::{
 use crate::otp_qr::{OtpQrError, decode_otp_secret};
 use crate::ssh_form_mfa::{
     CapturedMfaRequest, FormMfaPrompt, FormMfaRequest, JumpServerMfaResponder,
-    OtpAutoAnswerResponder, form_mfa_request_from_keyboard_interactive, is_jump_mfa_required_error,
+    OtpAutoAnswerResponder, TestPasswordResponder, form_mfa_request_from_keyboard_interactive,
+    is_jump_mfa_required_error,
 };
 use crate::x11_status::{X11ConnectionState, probe_connection_x11};
 
@@ -357,6 +359,7 @@ pub struct SshFormWindow {
     proxy_username_input: Entity<InputState>,
     proxy_password_input: Entity<InputState>,
     proxy_credential_picker: Entity<CredentialReferencePicker>,
+    proxy_command_input: Entity<InputState>,
 
     // 高级设置
     connect_timeout_input: Entity<InputState>,
@@ -1006,6 +1009,8 @@ impl SshFormWindow {
                 .placeholder(t!("SSH.proxy_password"))
                 .masked(true)
         });
+        let proxy_command_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t!("SSH.proxy_command_placeholder")));
 
         // 高级设置
         let connect_timeout_input = cx.new(|cx| {
@@ -1058,10 +1063,12 @@ impl SshFormWindow {
             .copied()
             .map(|encoding| TerminalEncodingSelectItem { encoding })
             .collect::<Vec<_>>();
+        // 新连接默认用设置里的终端编码（issue #345），编辑已有连接时下面会回填真实值。
+        let default_terminal_encoding = AppSettings::global(cx).terminal_default_encoding;
         let terminal_encoding_select = cx.new(|cx| {
             let mut state = SelectState::new(terminal_encoding_items, None, window, cx);
             state = state.searchable(true);
-            state.set_selected_value(&StoredTerminalEncoding::Utf8, window, cx);
+            state.set_selected_value(&default_terminal_encoding, window, cx);
             state
         });
         let terminal_type_items = StoredTerminalType::all()
@@ -1356,6 +1363,11 @@ impl SshFormWindow {
                         proxy_password_input.update(cx, |s, cx| s.set_value(password, window, cx));
                     }
                 }
+
+                // 加载 ProxyCommand（issue #540）
+                if let Some(ref command) = params.proxy_command {
+                    proxy_command_input.update(cx, |s, cx| s.set_value(command, window, cx));
+                }
             }
             workspace_id = conn.workspace_id;
 
@@ -1551,6 +1563,7 @@ impl SshFormWindow {
             proxy_username_input,
             proxy_password_input,
             proxy_credential_picker,
+            proxy_command_input,
             connect_timeout_input,
             keepalive_interval_input,
             keepalive_max_input,
@@ -2056,6 +2069,11 @@ impl SshFormWindow {
             jump_server,
             disabled_jump_server,
             proxy,
+            proxy_command: {
+                let command = self.proxy_command_input.read(cx).text().to_string();
+                let command = command.trim().to_string();
+                (!command.is_empty()).then_some(command)
+            },
             os_id: self.detected_os_id.clone(),
             icon: self.manual_icon.clone(),
             icon_file_path: self.custom_icon_file_path.clone(),
@@ -2094,6 +2112,7 @@ impl SshFormWindow {
             keepalive_max: params.keepalive_max,
             jump_server,
             proxy,
+            proxy_command: params.proxy_command.clone(),
             keyboard_interactive_responder: None,
             host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: params.x11_forwarding.unwrap_or(false),
@@ -2238,6 +2257,11 @@ impl SshFormWindow {
             )));
         } else if let Some(jump_fallback) = jump_fallback {
             config.keyboard_interactive_responder = Some(Arc::new(jump_fallback));
+        } else {
+            // 没有 TOTP 也没有跳板机时，仍有主机把密码放在 keyboard-interactive 里；
+            // 用当次表单里的密码应答，避免测试连接直接失败。
+            config.keyboard_interactive_responder =
+                Some(Arc::new(TestPasswordResponder::new(None, target_password)));
         }
         let window_handle = window.window_handle();
 
@@ -4005,6 +4029,17 @@ impl SshFormWindow {
                         })),
                 ),
             )
+            .child(self.render_form_row(
+                &t!("SSH.proxy_command"),
+                self.render_form_input(&self.proxy_command_input),
+            ))
+            .child(
+                div()
+                    .w_full()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("SSH.proxy_command_desc").to_string()),
+            )
             .when(enable_proxy, |this| {
                 this.child(
                     self.render_form_row(
@@ -4661,6 +4696,7 @@ mod tests {
             forward_agent: None,
             agent_forward_key: None,
             account_expect: Default::default(),
+            proxy_command: None,
         }
     }
 

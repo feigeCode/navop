@@ -84,6 +84,52 @@ impl KeyboardInteractiveResponder for JumpServerMfaResponder {
     }
 }
 
+/// 连接测试阶段的密码应答器。
+///
+/// 有些主机把密码放进 keyboard-interactive（而不是 password 认证），以前测试连接
+/// 写死 `keyboard_interactive_responder: None`，这类主机会直接测试失败。
+/// 这里只在整组提示都是密码提示时用表单里当次填写的密码应答；出现验证码或其它
+/// 提示时仍返回错误，让用户看到「需要手动输入」，而不是被静默填错。
+pub struct TestPasswordResponder {
+    jump_password: Option<String>,
+    target_password: Option<String>,
+}
+
+impl TestPasswordResponder {
+    pub fn new(jump_password: Option<String>, target_password: Option<String>) -> Self {
+        Self {
+            jump_password,
+            target_password,
+        }
+    }
+}
+
+#[async_trait]
+impl KeyboardInteractiveResponder for TestPasswordResponder {
+    async fn respond(&self, request: KeyboardInteractiveRequest) -> Result<Vec<String>> {
+        let password = match request.target {
+            KeyboardInteractiveTarget::JumpServer => self.jump_password.as_deref(),
+            KeyboardInteractiveTarget::TargetServer => self.target_password.as_deref(),
+        };
+        let only_password_prompts = !request.prompts.is_empty()
+            && request
+                .prompts
+                .iter()
+                .all(|prompt| ssh::is_password_prompt(&prompt.prompt));
+
+        match (only_password_prompts, password) {
+            (true, Some(password)) => Ok(request
+                .prompts
+                .iter()
+                .map(|_| password.to_string())
+                .collect()),
+            _ => Err(anyhow!(
+                t!("SSH.mfa_target_dynamic_not_supported").to_string()
+            )),
+        }
+    }
+}
+
 /// 连接测试阶段的一次性验证码应答器。
 ///
 /// 主机配置了 TOTP 密钥后，keyboard-interactive 里的验证码提示由本地生成应答；
@@ -312,6 +358,49 @@ mod tests {
 
         assert!(is_jump_mfa_required_error(error.as_ref()));
         assert!(captured.take().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_password_responder_answers_only_password_prompts() {
+        let responder = TestPasswordResponder::new(None, Some("secret".into()));
+        let request = KeyboardInteractiveRequest {
+            target: KeyboardInteractiveTarget::TargetServer,
+            name: "Password authentication".to_string(),
+            instructions: String::new(),
+            prompts: vec![prompt("Password:"), prompt("密码：")],
+        };
+
+        let answers = responder
+            .respond(request)
+            .await
+            .expect("纯密码提示应自动应答");
+        assert_eq!(vec!["secret".to_string(), "secret".to_string()], answers);
+    }
+
+    #[tokio::test]
+    async fn test_password_responder_leaves_otp_prompts_to_the_user() {
+        let responder = TestPasswordResponder::new(None, Some("secret".into()));
+        let request = KeyboardInteractiveRequest {
+            target: KeyboardInteractiveTarget::TargetServer,
+            name: "Password authentication".to_string(),
+            instructions: String::new(),
+            prompts: vec![prompt("Password:"), prompt("Verification code:")],
+        };
+
+        assert!(responder.respond(request).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_password_responder_requires_the_matching_password() {
+        let responder = TestPasswordResponder::new(None, None);
+        let request = KeyboardInteractiveRequest {
+            target: KeyboardInteractiveTarget::TargetServer,
+            name: "Password authentication".to_string(),
+            instructions: String::new(),
+            prompts: vec![prompt("Password:")],
+        };
+
+        assert!(responder.respond(request).await.is_err());
     }
 
     #[test]

@@ -31,6 +31,13 @@ pub mod action_id {
     pub const SQL_RUN_QUERY: &str = "sql.run_query";
     pub const SQL_RUN_ALL_QUERY: &str = "sql.run_all_query";
     pub const SQL_TOGGLE_COMMENT: &str = "sql.toggle_comment";
+    pub const SQL_RUN_CURSOR_STATEMENT: &str = "sql.run_cursor_statement";
+    pub const SQL_DELETE_LINE: &str = "sql.delete_line";
+    pub const SQL_DUPLICATE_LINE: &str = "sql.duplicate_line";
+    pub const SQL_SWAP_LINE_UP: &str = "sql.swap_line_up";
+    pub const SQL_UPPERCASE: &str = "sql.uppercase";
+    pub const SQL_LOWERCASE: &str = "sql.lowercase";
+    pub const SQL_EXECUTION_HISTORY: &str = "sql.execution_history";
     pub const TERMINAL_SEND_TAB: &str = "terminal.send_tab";
     pub const TERMINAL_SEND_SHIFT_TAB: &str = "terminal.send_shift_tab";
     pub const TERMINAL_SEND_CTRL_B: &str = "terminal.send_ctrl_b";
@@ -51,6 +58,7 @@ pub mod action_id {
     pub const TERMINAL_SCROLL_PAGE_DOWN: &str = "terminal.scroll_page_down";
     pub const REMOTE_EDITOR_SEARCH: &str = "remote_editor.search";
     pub const REMOTE_EDITOR_REPLACE: &str = "remote_editor.replace";
+    pub const REMOTE_EDITOR_FORMAT: &str = "remote_editor.format";
     pub const REDIS_CLEAR_OUTPUT: &str = "redis.clear_output";
     pub const REDIS_COPY: &str = "redis.copy";
     pub const REDIS_PASTE: &str = "redis.paste";

@@ -399,6 +399,7 @@ mod tests {
             icon: None,
             icon_file_path: None,
             account_expect: SshAccountExpect::default(),
+            proxy_command: None,
         }
     }
 

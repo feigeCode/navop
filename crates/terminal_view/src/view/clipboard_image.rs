@@ -41,6 +41,58 @@ impl TerminalView {
         );
     }
 
+    /// 本地终端没有可上传的远端，改为把剪贴板图片落到临时目录并粘贴本地路径，
+    /// 这样 `nvim`、`xdg-open` 这类本地命令能直接拿到文件（#529）。
+    pub(super) fn paste_clipboard_image_to_local_cli(
+        &mut self,
+        image: Image,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if image.bytes.is_empty() {
+            window.push_notification(
+                Notification::error(t!("TerminalView.clipboard_image_empty").to_string())
+                    .autohide(true),
+                cx,
+            );
+            return;
+        }
+
+        // macOS 剪贴板图片常是 TIFF，本地编辑器未必认识；统一转成 PNG 再落盘。
+        let image = remote_image_preview::normalize_clipboard_image(image);
+        let directory = std::env::temp_dir().join(LOCAL_PASTE_IMAGE_DIR);
+        let path = local_clipboard_image_path(&directory, image.format, current_timestamp_millis());
+        let write_result =
+            std::fs::create_dir_all(&directory).and_then(|_| std::fs::write(&path, &image.bytes));
+
+        match write_result {
+            Ok(()) => {
+                let path = path.to_string_lossy().to_string();
+                self.paste_text(&path, window, cx);
+                window.push_notification(
+                    Notification::info(
+                        t!("TerminalView.clipboard_image_saved_locally", path = path).to_string(),
+                    )
+                    .autohide(true),
+                    cx,
+                );
+            }
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(
+                        t!(
+                            "TerminalView.clipboard_image_save_local_failed",
+                            error = error.to_string()
+                        )
+                        .to_string(),
+                    )
+                    .autohide(true),
+                    cx,
+                );
+            }
+        }
+    }
+
     pub(super) fn spawn_clipboard_image_upload(
         &mut self,
         ssh_config: ssh::SshConnectConfig,

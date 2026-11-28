@@ -40,6 +40,7 @@ fn config_for(host: &str, allow_legacy_algorithms: bool) -> SshConnectConfig {
         allow_legacy_algorithms,
         forward_agent: false,
         agent_identities: Vec::new(),
+        proxy_command: None,
     }
 }
 

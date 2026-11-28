@@ -109,6 +109,40 @@ impl SftpView {
         }
     }
 
+    /// 选择本地目录并下载远端选中项（issue #608 的「下载到…」入口）。
+    pub(super) fn download_selected_to_directory(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sftp_client.is_none() {
+            return;
+        }
+        if self.remote_panel.read(cx).selected_items(cx).is_empty() {
+            return;
+        }
+
+        let view = cx.entity().clone();
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            multiple: false,
+            directories: true,
+            prompt: Some(t!("File.download_to_directory_prompt").to_string().into()),
+        });
+
+        window
+            .spawn(cx, async move |cx| {
+                if let Ok(Ok(Some(mut paths))) = future.await
+                    && let Some(directory) = paths.pop()
+                {
+                    let _ = view.update_in(cx, |this, window, cx| {
+                        this.download_selected_into(directory, window, cx);
+                    });
+                }
+            })
+            .detach();
+    }
+
     fn select_and_upload_files_to(
         &mut self,
         remote_path: String,

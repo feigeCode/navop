@@ -17,7 +17,10 @@ use x11_forwarding::{
     ForwardRequest, X11ForwardingStatus, X11Proxy, X11ProxyHandle, X11Resolution,
 };
 
-use crate::connection_error::{add_jump_channel_rejected_hint, add_private_key_load_hint};
+use crate::connection_error::{
+    add_jump_channel_rejected_hint, add_private_key_load_hint, is_ppk_key_file, looks_like_ppk_key,
+    ppk_unsupported_error,
+};
 use crate::remote_forwarding::RemoteForwardTarget;
 use crate::{
     HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyProxyType, HostKeyRoute,
@@ -141,6 +144,12 @@ pub struct SshConnectConfig {
     pub jump_server: Option<JumpServerConnectConfig>,
     /// 代理配置
     pub proxy: Option<ProxyConnectConfig>,
+    /// OpenSSH 风格的 `ProxyCommand`（如 `cloudflared access tcp -T %h`，issue #540）。
+    ///
+    /// 配置后由本机命令的 stdin/stdout 承载 SSH 传输层，`%h`/`%p` 会替换成目标
+    /// 主机与端口。与跳板机、HTTP/SOCKS 代理互斥：三者同时存在时优先使用
+    /// `ProxyCommand`，因其通常已经自行完成链路上的一切跳转。
+    pub proxy_command: Option<String>,
     /// keyboard-interactive/MFA 输入回调。用于跳板机或目标服务器按需请求二次认证。
     pub keyboard_interactive_responder: Option<Arc<dyn KeyboardInteractiveResponder>>,
     /// 服务端身份校验策略和 trust store。生产入口默认使用严格模式。
@@ -868,13 +877,11 @@ async fn add_identities_to_local_agent(identities: &[AgentIdentity]) -> Result<(
             AgentIdentity::PrivateKeyPath {
                 key_path,
                 passphrase,
-            } => load_secret_key(expand_tilde(key_path), passphrase.as_deref())
-                .map_err(|error| add_private_key_load_hint(error.into()))?,
+            } => load_private_key_file(expand_tilde(key_path), passphrase.as_deref())?,
             AgentIdentity::PrivateKeyContent {
                 private_key,
                 passphrase,
-            } => decode_secret_key(private_key, passphrase.as_deref())
-                .map_err(|error| add_private_key_load_hint(error.into()))?,
+            } => decode_private_key_content(private_key, passphrase.as_deref())?,
         };
         agent
             .add_identity(&key, &[])
@@ -1157,16 +1164,30 @@ fn private_key_for_auth(auth: &SshAuth) -> Result<PrivateKey> {
             key_path,
             passphrase,
             ..
-        } => load_secret_key(expand_tilde(key_path), passphrase.as_deref())
-            .map_err(|error| add_private_key_load_hint(error.into())),
+        } => load_private_key_file(expand_tilde(key_path), passphrase.as_deref()),
         SshAuth::PrivateKeyContent {
             private_key,
             passphrase,
             ..
-        } => decode_secret_key(private_key, passphrase.as_deref())
-            .map_err(|error| add_private_key_load_hint(error.into())),
+        } => decode_private_key_content(private_key, passphrase.as_deref()),
         _ => anyhow::bail!("authentication method does not contain a private key"),
     }
+}
+
+/// 从文件加载私钥；先识别 PuTTY `.ppk` 并给出明确的转换引导。
+fn load_private_key_file(path: PathBuf, passphrase: Option<&str>) -> Result<PrivateKey> {
+    if is_ppk_key_file(&path) {
+        return Err(ppk_unsupported_error());
+    }
+    load_secret_key(path, passphrase).map_err(|error| add_private_key_load_hint(error.into()))
+}
+
+/// 从粘贴的文本解码私钥；先识别 PuTTY `.ppk` 并给出明确的转换引导。
+fn decode_private_key_content(content: &str, passphrase: Option<&str>) -> Result<PrivateKey> {
+    if looks_like_ppk_key(content) {
+        return Err(ppk_unsupported_error());
+    }
+    decode_secret_key(content, passphrase).map_err(|error| add_private_key_load_hint(error.into()))
 }
 
 /// 密码认证，并在连接启用了 MFA 回调时优先把认证交给 keyboard-interactive。
@@ -2130,6 +2151,28 @@ mod tests {
     }
 
     #[test]
+    fn proxy_command_tokens_expand_host_port_and_escaped_percent() {
+        assert_eq!(
+            expand_proxy_command_tokens("cloudflared access tcp -T %h:%p", "db.internal", 2222),
+            "cloudflared access tcp -T db.internal:2222"
+        );
+        assert_eq!(
+            expand_proxy_command_tokens("ssh -W %h:%p jump.example.com", "10.0.0.8", 22),
+            "ssh -W 10.0.0.8:22 jump.example.com"
+        );
+        // `%%` 是字面百分号，未知占位符保持原样交给 shell。
+        assert_eq!(
+            expand_proxy_command_tokens("echo 100%% %x %h", "host", 22),
+            "echo 100% %x host"
+        );
+        assert_eq!(expand_proxy_command_tokens("", "host", 22), "");
+        assert_eq!(
+            expand_proxy_command_tokens("literal", "host", 22),
+            "literal"
+        );
+    }
+
+    #[test]
     fn expand_tilde_replaces_leading_tilde_with_home_dir() {
         let home = dirs::home_dir().expect("测试环境应有可用的 home 目录");
 
@@ -2262,6 +2305,22 @@ mod tests {
         assert!(
             !message.contains("No such file") && !message.contains("os error 2"),
             "inline private key content should not be treated as a file path: {message}"
+        );
+    }
+
+    #[test]
+    fn ppk_private_key_content_has_a_conversion_hint() {
+        let error = private_key_for_auth(&SshAuth::PrivateKeyContent {
+            private_key: "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\n".to_string(),
+            passphrase: None,
+            certificate_path: None,
+        })
+        .expect_err("PuTTY .ppk 私钥应被拒绝并给出转换提示");
+        let message = error.to_string();
+
+        assert!(
+            message.contains(".ppk") && message.contains("PuTTYgen"),
+            "错误信息应引导用 PuTTYgen 转换，实际: {message}"
         );
     }
 
@@ -2420,6 +2479,129 @@ mod tests {
 }
 
 /// 通过代理建立TCP连接
+/// 把 `ProxyCommand` 里的 `%h`/`%p`/`%%` 替换成目标主机、端口与字面 `%`。
+///
+/// 与 OpenSSH 一致，未知的 `%x` 原样保留，便于用户写 shell 自己的变量。
+fn expand_proxy_command_tokens(command: &str, host: &str, port: u16) -> String {
+    let port = port.to_string();
+    let mut expanded = String::with_capacity(command.len() + host.len());
+    let mut chars = command.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != '%' {
+            expanded.push(character);
+            continue;
+        }
+        match chars.peek().copied() {
+            Some('h') => {
+                chars.next();
+                expanded.push_str(host);
+            }
+            Some('p') => {
+                chars.next();
+                expanded.push_str(&port);
+            }
+            Some('%') => {
+                chars.next();
+                expanded.push('%');
+            }
+            _ => expanded.push('%'),
+        }
+    }
+    expanded
+}
+
+/// `ProxyCommand` 的传输层：stdin 写、stdout 读，子进程本身随流一起存活。
+struct ProxyCommandStream {
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::process::ChildStdout,
+    /// 持有子进程，配合 `kill_on_drop` 保证连接关闭时命令被回收。
+    _child: tokio::process::Child,
+}
+
+impl tokio::io::AsyncRead for ProxyCommandStream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        std::pin::Pin::new(&mut this.stdout).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for ProxyCommandStream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        std::pin::Pin::new(&mut this.stdin).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        std::pin::Pin::new(&mut this.stdin).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        std::pin::Pin::new(&mut this.stdin).poll_shutdown(cx)
+    }
+}
+
+/// 启动 `ProxyCommand` 子进程，把它的 stdin/stdout 拼成双向流交给 russh。
+fn spawn_proxy_command(command: &str, host: &str, port: u16) -> Result<ProxyCommandStream> {
+    use std::process::Stdio;
+
+    let expanded = expand_proxy_command_tokens(command, host, port);
+    let mut builder = if cfg!(windows) {
+        let mut builder = tokio::process::Command::new("cmd");
+        builder.arg("/C").arg(&expanded);
+        builder
+    } else {
+        let mut builder = tokio::process::Command::new("sh");
+        builder.arg("-c").arg(&expanded);
+        builder
+    };
+    builder
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = builder
+        .spawn()
+        .with_context(|| format!("failed to spawn ProxyCommand: {expanded}"))?;
+    let stdin = child
+        .stdin
+        .take()
+        .context("ProxyCommand stdin is unavailable")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("ProxyCommand stdout is unavailable")?;
+    if let Some(mut stderr) = child.stderr.take() {
+        tokio::spawn(async move {
+            use tokio::io::AsyncBufReadExt;
+            let mut lines = tokio::io::BufReader::new(&mut stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                tracing::debug!(target: "ssh::proxy_command", "{}", line);
+            }
+        });
+    }
+    Ok(ProxyCommandStream {
+        stdin,
+        stdout,
+        _child: child,
+    })
+}
+
 pub async fn connect_via_proxy(
     proxy: &ProxyConnectConfig,
     target_host: &str,
@@ -2766,8 +2948,55 @@ impl SshClient for RusshClient {
             .is_some_and(|jump| jump.bastion_login_username().is_some());
 
         let connect = async {
+            // ProxyCommand 优先：命令自身的 stdin/stdout 就是到目标服务器的传输层，
+            // 它通常已经自行完成跳转，因此不再叠加跳板机或代理。
+            if let Some(command) = config
+                .proxy_command
+                .as_deref()
+                .map(str::trim)
+                .filter(|command| !command.is_empty())
+            {
+                tracing::info!(
+                    "通过 ProxyCommand 连接目标服务器 {}:{}",
+                    config.host,
+                    config.port
+                );
+                let stream = spawn_proxy_command(command, &config.host, config.port)?;
+                let handler = RusshHandler::new(
+                    target_host_key_identity.clone(),
+                    host_key_verifier.clone(),
+                    x11_handle.clone(),
+                    Arc::clone(&remote_forward_target),
+                    config.forward_agent,
+                );
+                let mut session = client::connect_stream(target_russh_config, stream, handler)
+                    .await
+                    .map_err(|error| {
+                        add_legacy_algorithm_hint(error, config.allow_legacy_algorithms)
+                    })?;
+
+                authenticate_with_strategy_for_target(
+                    &mut session,
+                    &config.username,
+                    &config.auth,
+                    default_auth_failure_messages(),
+                    KeyboardInteractiveTarget::TargetServer,
+                    config.keyboard_interactive_responder.clone(),
+                )
+                .await?;
+
+                Ok(Self {
+                    session,
+                    _jump_session: None,
+                    x11_proxy: x11_proxy.clone(),
+                    x11_status,
+                    remote_forward_target: Arc::clone(&remote_forward_target),
+                    forward_agent: config.forward_agent,
+                    bastion_direct,
+                })
+            }
             // 情况1: 使用跳板机连接
-            if let Some(ref jump) = config.jump_server {
+            else if let Some(ref jump) = config.jump_server {
                 tracing::info!("通过跳板机 {}:{} 连接", jump.host, jump.port);
                 let jump_identity = jump_host_key_identity
                     .clone()
@@ -3192,6 +3421,7 @@ mod port_forward_tests {
             allow_legacy_algorithms: false,
             forward_agent: false,
             agent_identities: Vec::new(),
+            proxy_command: None,
         }
     }
 
@@ -3588,6 +3818,7 @@ mod port_forward_tests {
             allow_legacy_algorithms,
             forward_agent: false,
             agent_identities: Vec::new(),
+            proxy_command: None,
         };
 
         let result = RusshClient::connect(config).await;
@@ -3695,6 +3926,7 @@ zsXyAAAAAAE=
             allow_legacy_algorithms: false,
             forward_agent: false,
             agent_identities: Vec::new(),
+            proxy_command: None,
         }
     }
 
@@ -4300,6 +4532,7 @@ zsXyAAAAAAE=
             allow_legacy_algorithms: false,
             forward_agent: false,
             agent_identities: Vec::new(),
+            proxy_command: None,
         }
     }
 
@@ -4459,6 +4692,7 @@ mod x11_protocol_tests {
             allow_legacy_algorithms: false,
             forward_agent: false,
             agent_identities: Vec::new(),
+            proxy_command: None,
         }
     }
 

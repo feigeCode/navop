@@ -46,8 +46,9 @@ use one_core::cloud_sync::TeamOption;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    ConnectionRepository, ConnectionType, DatabaseType, DbConnectionConfig, GlobalStorageState,
-    ProxyConfig, ProxyType, StoredConnection, Workspace, get_config_dir,
+    ConnectionRepository, ConnectionType, DatabaseType, DbConnectionConfig, DbCredentialPrompt,
+    DbEnvironment, ENVIRONMENT_PARAM, GlobalStorageState, PROMPT_CREDENTIALS_PARAM, ProxyConfig,
+    ProxyType, StoredConnection, Workspace, get_config_dir,
 };
 use rust_i18n::t;
 use tool_runtime::AiAccessLevel;
@@ -253,6 +254,84 @@ impl FormField {
         self.rows = rows;
         self
     }
+}
+
+/// 给所有数据库表单追加「环境」标签页（issue #30 第 5 点）。
+///
+/// 只加一个下拉：未标记 / 开发 / 测试 / 生产。选「生产」后，SQL 编辑器工具栏会显示
+/// 常驻的红色提示，避免在正式库上误执行破坏性语句。值落在 `extra_params.environment`，
+/// 老连接没有该键时按「未标记」处理。
+fn with_environment_tab(mut config: DbFormConfig) -> DbFormConfig {
+    if config
+        .tab_groups
+        .iter()
+        .any(|group| group.name == "environment")
+    {
+        return config;
+    }
+
+    let options = [
+        DbEnvironment::Unspecified,
+        DbEnvironment::Development,
+        DbEnvironment::Staging,
+        DbEnvironment::Production,
+    ]
+    .into_iter()
+    .map(|environment| {
+        let label = match environment {
+            DbEnvironment::Unspecified => t!("ConnectionForm.environment_unset"),
+            DbEnvironment::Development => t!("ConnectionForm.environment_development"),
+            DbEnvironment::Staging => t!("ConnectionForm.environment_staging"),
+            DbEnvironment::Production => t!("ConnectionForm.environment_production"),
+        };
+        (environment.as_param().to_string(), label.to_string())
+    })
+    .collect();
+
+    let field = FormField::new(
+        ENVIRONMENT_PARAM,
+        t!("ConnectionForm.environment"),
+        FormFieldType::Select,
+    )
+    .optional()
+    .default("")
+    .options(options);
+
+    // 同一次统一加工里顺带加上「连接时凭据提示」（issue #39）：字段会跟随表单自动
+    // 落到 `extra_params`，不需要给 `DbConnectionConfig` 加新字段。
+    let credential_options = [
+        (
+            DbCredentialPrompt::Never,
+            t!("ConnectionForm.credential_prompt_never"),
+        ),
+        (
+            DbCredentialPrompt::Password,
+            t!("ConnectionForm.credential_prompt_password"),
+        ),
+        (
+            DbCredentialPrompt::UsernameAndPassword,
+            t!("ConnectionForm.credential_prompt_both"),
+        ),
+    ]
+    .into_iter()
+    .map(|(prompt, label)| (prompt.as_param().to_string(), label.to_string()))
+    .collect();
+    let credential_field = FormField::new(
+        PROMPT_CREDENTIALS_PARAM,
+        t!("ConnectionForm.credential_prompt"),
+        FormFieldType::Select,
+    )
+    .optional()
+    .default("")
+    .options(credential_options);
+
+    let mut tab_groups = std::mem::take(&mut config.tab_groups);
+    tab_groups.push(
+        TabGroup::new("environment", t!("ConnectionForm.environment"))
+            .fields(vec![field, credential_field]),
+    );
+    config.tab_groups = tab_groups;
+    config
 }
 
 /// Database connection form configuration for different database types
@@ -1395,7 +1474,7 @@ pub struct DbConnectionForm {
 
 impl DbConnectionForm {
     pub fn new(config: DbFormConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let config = connection_proxy::with_proxy_tab(config);
+        let config = with_environment_tab(connection_proxy::with_proxy_tab(config));
         let focus_handle = cx.focus_handle();
         let current_db_type = cx.new(|_| config.db_type.clone());
         let oracle_driver_mode = oracle_driver_mode_for_database_type(&config.db_type);
@@ -3370,7 +3449,8 @@ mod tests {
     fn stored_ssh_connection(id: i64, name: &str, host: &str) -> StoredConnection {
         let mut connection = StoredConnection::new_ssh(
             name.to_string(),
-            SshParams { otp: None,
+            SshParams {
+                otp: None,
                 remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
@@ -3401,6 +3481,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -3897,6 +3978,70 @@ mod tests {
                 "",
             ),
             Some("ssh_password")
+        );
+    }
+}
+
+#[cfg(test)]
+mod environment_tab_tests {
+    use super::*;
+
+    #[test]
+    fn every_database_form_gets_a_single_environment_tab() {
+        // issue #30 第 5 点：环境标记必须在所有库类型的表单里都能设置。
+        for config in [
+            DbFormConfig::mysql(),
+            DbFormConfig::postgres(),
+            DbFormConfig::sqlite(),
+        ] {
+            let config = with_environment_tab(config);
+            let environment_tabs: Vec<_> = config
+                .tab_groups
+                .iter()
+                .filter(|group| group.name == "environment")
+                .collect();
+            assert_eq!(1, environment_tabs.len());
+
+            let field = environment_tabs[0]
+                .fields
+                .iter()
+                .find(|field| field.name == ENVIRONMENT_PARAM)
+                .expect("environment field");
+            assert_eq!(FormFieldType::Select, field.field_type);
+            let values: Vec<&str> = field
+                .options
+                .iter()
+                .map(|(value, _)| value.as_str())
+                .collect();
+            assert_eq!(values, vec!["", "development", "staging", "production"]);
+
+            // issue #39：凭据提示与环境和在同一个统一标签页里。
+            let prompt_field = environment_tabs[0]
+                .fields
+                .iter()
+                .find(|field| field.name == PROMPT_CREDENTIALS_PARAM)
+                .expect("credential prompt field");
+            assert_eq!(FormFieldType::Select, prompt_field.field_type);
+            let prompt_values: Vec<&str> = prompt_field
+                .options
+                .iter()
+                .map(|(value, _)| value.as_str())
+                .collect();
+            assert_eq!(prompt_values, vec!["", "password", "both"]);
+        }
+    }
+
+    #[test]
+    fn applying_the_environment_tab_twice_does_not_duplicate_it() {
+        let config = with_environment_tab(DbFormConfig::mysql());
+        let config = with_environment_tab(config);
+        assert_eq!(
+            1,
+            config
+                .tab_groups
+                .iter()
+                .filter(|group| group.name == "environment")
+                .count()
         );
     }
 }

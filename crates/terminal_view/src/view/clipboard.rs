@@ -36,8 +36,7 @@ impl TerminalView {
             return false;
         }
         let copy_shortcuts = shortcuts_for(cx, action_id::TERMINAL_COPY, &[TERMINAL_COPY_SHORTCUT]);
-        let ctrl_c =
-            Keystroke::parse_with_os("ctrl-c", one_core::keybindings::current_os()).ok();
+        let ctrl_c = Keystroke::parse_with_os("ctrl-c", one_core::keybindings::current_os()).ok();
         ctrl_c.is_some_and(|ks| keystroke_matches_shortcuts(&ks, &copy_shortcuts))
     }
 
@@ -105,9 +104,33 @@ impl TerminalView {
                 mode,
             );
 
+            let mut clipboard_image = clipboard_image_from_item(&clipboard);
+
             if should_upload_image {
-                if let Some(image) = clipboard_image_from_item(&clipboard) {
+                if let Some(image) = clipboard_image.take() {
                     self.paste_clipboard_image_to_remote_cli(image, window, cx);
+                    return;
+                }
+            }
+            // SSH 终端关闭了图片上传：不把本地路径误发到远端 shell，
+            // 但也不能静默丢弃——明确提示用户在设置里开了口子（#529）。
+            if clipboard_image_upload_is_disabled(
+                self.paste_image_upload,
+                connection_kind,
+                clipboard_image.is_some(),
+            ) {
+                window.push_notification(
+                    Notification::info(t!("Terminal.clipboard_image_upload_disabled"))
+                        .autohide(true),
+                    cx,
+                );
+                return;
+            }
+            // 本地/串口终端没有远端可上传：把图片存到临时目录再粘贴路径，
+            // 避免像以前那样整段粘贴静默失败（#529）。
+            if connection_kind != TerminalConnectionKind::Ssh {
+                if let Some(image) = clipboard_image {
+                    self.paste_clipboard_image_to_local_cli(image, window, cx);
                     return;
                 }
             }

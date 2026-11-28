@@ -176,6 +176,33 @@ pub(super) fn clipboard_image_from_item(item: &ClipboardItem) -> Option<Image> {
     })
 }
 
+/// 本地粘贴图片时的临时目录名（相对系统临时目录）。
+pub(super) const LOCAL_PASTE_IMAGE_DIR: &str = "navop-pasted-images";
+
+/// 本地粘贴图片的落盘路径：`<temp>/navop-pasted-images/image-<timestamp>.<ext>`。
+pub(super) fn local_clipboard_image_path(
+    directory: &std::path::Path,
+    format: ImageFormat,
+    timestamp_millis: u128,
+) -> std::path::PathBuf {
+    directory.join(format!(
+        "image-{timestamp_millis}.{}",
+        image_format_extension(format)
+    ))
+}
+
+/// 剪贴板里是图片、但设置里关掉了「图片上传到远端」：SSH 终端要给出提示，
+/// 而不是像以前那样静默丢弃（#529）。
+pub(super) fn clipboard_image_upload_is_disabled(
+    paste_image_upload_enabled: bool,
+    connection_kind: TerminalConnectionKind,
+    has_clipboard_image: bool,
+) -> bool {
+    has_clipboard_image
+        && !paste_image_upload_enabled
+        && connection_kind == TerminalConnectionKind::Ssh
+}
+
 pub(super) fn should_upload_clipboard_image_to_remote_cli(
     paste_image_upload_enabled: bool,
     connection_kind: TerminalConnectionKind,

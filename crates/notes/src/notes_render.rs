@@ -39,6 +39,7 @@ enum SidebarContextTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidebarMenuAction {
     NewMarkdown,
+    NewText,
     NewFolder,
     RevealInFileManager,
     Refresh,
@@ -51,12 +52,14 @@ fn sidebar_menu_actions(target: SidebarContextTarget) -> Vec<SidebarMenuAction> 
     match target {
         SidebarContextTarget::Background => vec![
             SidebarMenuAction::NewMarkdown,
+            SidebarMenuAction::NewText,
             SidebarMenuAction::NewFolder,
             SidebarMenuAction::RevealInFileManager,
             SidebarMenuAction::Refresh,
         ],
         SidebarContextTarget::Directory => vec![
             SidebarMenuAction::NewMarkdown,
+            SidebarMenuAction::NewText,
             SidebarMenuAction::NewFolder,
             SidebarMenuAction::RevealInFileManager,
             SidebarMenuAction::Rename,
@@ -64,6 +67,7 @@ fn sidebar_menu_actions(target: SidebarContextTarget) -> Vec<SidebarMenuAction> 
         ],
         SidebarContextTarget::MarkdownDocument => vec![
             SidebarMenuAction::NewMarkdown,
+            SidebarMenuAction::NewText,
             SidebarMenuAction::NewFolder,
             SidebarMenuAction::RevealInFileManager,
             SidebarMenuAction::Export,
@@ -287,6 +291,16 @@ impl NotesView {
                     })),
             )
             .child(
+                Button::new("new_note_text")
+                    .icon(IconName::File)
+                    .ghost()
+                    .xsmall()
+                    .tooltip(t!("Notes.new_text_document").to_string())
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        view.start_create(CreateKind::Document(DocumentFormat::Text), window, cx)
+                    })),
+            )
+            .child(
                 Button::new("new_note_directory")
                     .icon(IconName::NewFolder)
                     .ghost()
@@ -321,6 +335,7 @@ impl NotesView {
             (NodeKind::Document, _, Some(DocumentFormat::Markdown)) => {
                 IconName::MarkdownColor.color()
             }
+            (NodeKind::Document, _, Some(DocumentFormat::Text)) => Icon::new(IconName::File),
             (NodeKind::Document, _, None) => Icon::new(IconName::File),
         };
         let disclosure = if kind == NodeKind::Directory {
@@ -446,6 +461,21 @@ fn build_sidebar_context_menu(
                             view.start_create_in(
                                 directory.clone(),
                                 CreateKind::Document(DocumentFormat::Markdown),
+                                window,
+                                cx,
+                            );
+                        })),
+                )
+            }
+            SidebarMenuAction::NewText => {
+                let directory = directory.clone();
+                menu.item(
+                    PopupMenuItem::new(t!("Notes.new_text_document").to_string())
+                        .icon(IconName::File)
+                        .on_click(window.listener_for(&view, move |view, _, window, cx| {
+                            view.start_create_in(
+                                directory.clone(),
+                                CreateKind::Document(DocumentFormat::Text),
                                 window,
                                 cx,
                             );
@@ -748,6 +778,7 @@ mod tests {
             sidebar_menu_actions(SidebarContextTarget::Background),
             vec![
                 SidebarMenuAction::NewMarkdown,
+                SidebarMenuAction::NewText,
                 SidebarMenuAction::NewFolder,
                 SidebarMenuAction::RevealInFileManager,
                 SidebarMenuAction::Refresh,
@@ -761,6 +792,7 @@ mod tests {
             sidebar_menu_actions(SidebarContextTarget::Directory),
             vec![
                 SidebarMenuAction::NewMarkdown,
+                SidebarMenuAction::NewText,
                 SidebarMenuAction::NewFolder,
                 SidebarMenuAction::RevealInFileManager,
                 SidebarMenuAction::Rename,
@@ -775,6 +807,7 @@ mod tests {
             sidebar_menu_actions(SidebarContextTarget::MarkdownDocument),
             vec![
                 SidebarMenuAction::NewMarkdown,
+                SidebarMenuAction::NewText,
                 SidebarMenuAction::NewFolder,
                 SidebarMenuAction::RevealInFileManager,
                 SidebarMenuAction::Export,

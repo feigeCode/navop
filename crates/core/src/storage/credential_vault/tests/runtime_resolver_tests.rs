@@ -65,6 +65,7 @@ fn insert_vault_ssh(repository: &ConnectionRepository) -> i64 {
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         },
         None,
     );

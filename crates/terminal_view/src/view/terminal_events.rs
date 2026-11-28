@@ -52,8 +52,17 @@ impl TerminalView {
             TerminalModelEvent::HostKeyVerificationRequired => {
                 self.show_host_key_verification_dialog(window, cx);
             }
+            TerminalModelEvent::ShellHistoryUnavailable => {
+                // issue #570：堡垒机等设备读不到历史时，让面板的空状态说明原因。
+                // 终端内的连接生命周期反馈必须保持内联，不能弹浮层通知。
+                self.sidebar.update(cx, |sidebar, cx| {
+                    sidebar.set_remote_history_unavailable(true, cx);
+                });
+            }
             TerminalModelEvent::CommandHistoryChanged => {
                 self.sidebar.update(cx, |sidebar, cx| {
+                    // 有历史写入就说明这次会话能拿到历史，复位空状态的原因提示。
+                    sidebar.set_remote_history_unavailable(false, cx);
                     sidebar.refresh_history_commands(cx);
                 });
                 self.refresh_history_prompt_matches(cx);

@@ -350,6 +350,7 @@ async fn resolve_ssh_target(
         allow_legacy_algorithms: false,
         forward_agent: false,
         agent_identities: Vec::new(),
+        proxy_command: None,
     };
 
     let tunnel_result = timeout(

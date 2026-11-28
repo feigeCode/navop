@@ -49,7 +49,8 @@ use crate::encoding::TerminalEncoding;
 use crate::history::{
     HistoryEntry, PERSISTED_HISTORY_LIMIT, SESSION_HISTORY_LIMIT, ShellHistoryFormat,
     collect_history_search_results, collect_history_suggestions_with_cwd, collect_recent_history,
-    normalize_recorded_command, parse_shell_history, push_rich_history_entry,
+    normalize_history_command, normalize_recorded_command, parse_shell_history,
+    push_rich_history_entry,
 };
 use crate::line_timeline::{LineTimelineSample, SharedLineTimeline};
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
@@ -138,6 +139,12 @@ pub enum TerminalModelEvent {
     ChildExit(i32),
     /// 成功命令历史已写入数据库
     CommandHistoryChanged,
+    /// 远端/本地 shell 历史文件没有读到任何命令（issue #570）
+    ///
+    /// 常见于堡垒机、网络设备：它们既不发 shell 集成（拿不到 OSC 133），
+    /// 也可能禁止 `sh -lc` 或把历史写到别处。视图层据此给出一次性提示，
+    /// 而不是让历史面板静静地空着。
+    ShellHistoryUnavailable,
     /// 终端程序请求存储到剪贴板
     ClipboardStore(String),
     /// 远程工作目录变更（OSC 7），带上报主机名
@@ -726,6 +733,7 @@ fn resolve_ssh_connection(
             .proxy
             .as_ref()
             .map(sftp_transfer::proxy_connect_config),
+        proxy_command: params.proxy_command.clone(),
         keyboard_interactive_responder: None,
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: params.x11_forwarding.unwrap_or(false),
@@ -1346,25 +1354,66 @@ fn with_local_terminal_default_env(env: Vec<(String, String)>) -> Vec<(String, S
     env
 }
 
+/// 远端历史文件之间使用的分隔标记（issue #570：堡垒机等设备的历史文件位置不统一）。
+const REMOTE_HISTORY_SPLIT_MARKER: &str = "__ONETCLI_HISTORY_SPLIT__";
+
 fn build_remote_history_load_command() -> String {
+    // 一次 exec 内依次读取常见历史文件：`$HISTFILE` 优先（ksh/自定义 HISTFILE），
+    // 之后是 bash/zsh/sh/generic 的默认历史文件。每段前面打一个标记，便于分段解析。
     [
         "sh -lc",
         "'",
-        "if [ -f \"$HOME/.bash_history\" ]; then tail -n 512 \"$HOME/.bash_history\" 2>/dev/null || true; fi;",
+        "for f in \"$HISTFILE\" \"$HOME/.bash_history\" \"$HOME/.zsh_history\" \"$HOME/.sh_history\" \"$HOME/.history\"; do",
         "printf \"\\n__ONETCLI_HISTORY_SPLIT__\\n\";",
-        "if [ -f \"$HOME/.zsh_history\" ]; then tail -n 512 \"$HOME/.zsh_history\" 2>/dev/null || true; fi",
+        "if [ -n \"$f\" ] && [ -f \"$f\" ]; then tail -n 512 \"$f\" 2>/dev/null || true; fi;",
+        "done",
         "'",
     ]
     .join(" ")
 }
 
-fn parse_remote_history_output(output: &str) -> Vec<String> {
-    let (bash_history, zsh_history) = output
-        .split_once("\n__ONETCLI_HISTORY_SPLIT__\n")
-        .unwrap_or((output, ""));
+/// 一行是否是 zsh 扩展历史格式（`: <开始时间>:<耗时>;<命令>`）。
+fn is_zsh_extended_history_line(line: &str) -> bool {
+    let Some((prefix, _)) = line.split_once(';') else {
+        return false;
+    };
+    let Some(rest) = prefix.strip_prefix(':') else {
+        return false;
+    };
+    rest.chars()
+        .all(|ch| ch.is_ascii_digit() || ch == ':' || ch == ' ')
+}
 
-    let mut commands = parse_shell_history(bash_history, ShellHistoryFormat::Bash);
-    commands.extend(parse_shell_history(zsh_history, ShellHistoryFormat::Zsh));
+/// 解析一段历史文件内容：逐行自动识别 zsh 扩展格式，其余按普通命令行处理。
+fn parse_remote_history_section(section: &str) -> Vec<String> {
+    section
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if is_zsh_extended_history_line(line) {
+                let (_, command) = line.split_once(';')?;
+                normalize_history_command(command)
+            } else {
+                normalize_history_command(line)
+            }
+        })
+        .collect()
+}
+
+fn parse_remote_history_output(output: &str) -> Vec<String> {
+    // 输出形如 `\n<marker>\n<file0>\n<marker>\n<file1>…`；第一段是命令自身的噪音，忽略。
+    let mut commands = Vec::new();
+    for section in output.split(REMOTE_HISTORY_SPLIT_MARKER).skip(1) {
+        let section = section.trim_start_matches(['\r', '\n']);
+        if section.trim().is_empty() {
+            continue;
+        }
+        commands.extend(parse_remote_history_section(section));
+    }
+    if commands.is_empty() {
+        // 兼容没有标记的旧输出（例如某些设备把命令回显混进 stdout）。
+        commands = parse_shell_history(output, ShellHistoryFormat::Bash);
+    }
     commands
 }
 
@@ -3067,10 +3116,21 @@ impl Terminal {
         let task = Tokio::spawn(cx, async move { load_ssh_history(manager).await });
 
         cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            let Ok(Ok(history)) = task.await else {
-                return;
+            let history = match task.await {
+                Ok(Ok(history)) => history,
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "failed to load ssh shell history");
+                    Vec::new()
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "ssh shell history task failed");
+                    Vec::new()
+                }
             };
             let _ = this.update(cx, |terminal, cx| {
+                if history.is_empty() {
+                    cx.emit(TerminalModelEvent::ShellHistoryUnavailable);
+                }
                 terminal.set_persisted_history(history, cx);
             });
         })
@@ -3561,7 +3621,7 @@ impl Terminal {
             backend.shutdown();
         }
         self.take_ssh_session_manager(cx);
-        self.prepare_surface_for_reconnect();
+        self.prepare_surface_for_reconnect(false);
         self.connection_state = ConnectionState::Connecting;
         self.set_connection_active(false, cx);
 
@@ -3913,6 +3973,20 @@ impl Terminal {
         if self.persisted_history != history {
             self.persisted_history = history;
             cx.emit(TerminalModelEvent::Wakeup);
+        }
+        // issue #570：把从 shell 历史文件读到的命令补进命令历史库。
+        // 否则堡垒机这类没有 shell 集成（拿不到 OSC 133）的会话，
+        // 历史面板永远是空的——即使远端 .bash_history 里明明有记录。
+        if let (Some(repo), Some(scope)) = (&self.history_repository, &self.history_scope) {
+            match repo.import_shell_history(scope, &self.persisted_history) {
+                Ok(inserted) if inserted > 0 => {
+                    cx.emit(TerminalModelEvent::CommandHistoryChanged);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "failed to import terminal shell history");
+                }
+            }
         }
     }
 
@@ -5192,7 +5266,7 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
-            self.prepare_surface_for_reconnect();
+            self.prepare_surface_for_reconnect(true);
 
             let generation = self.next_connection_generation();
             self.record_connection_generation_marker(generation);
@@ -5235,7 +5309,7 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
-            self.prepare_surface_for_reconnect();
+            self.prepare_surface_for_reconnect(false);
             let generation = self.next_connection_generation();
             self.record_connection_generation_marker(generation);
             let recording_tap = self.recording_tap();
@@ -5262,7 +5336,7 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
-            self.prepare_surface_for_reconnect();
+            self.prepare_surface_for_reconnect(false);
             let generation = self.next_connection_generation();
             self.record_connection_generation_marker(generation);
             self.telnet_credential_request = None;
@@ -5279,7 +5353,7 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
-            self.prepare_surface_for_reconnect();
+            self.prepare_surface_for_reconnect(false);
             self.connection_state = ConnectionState::Connecting;
             self.set_connection_active(false, cx);
             let generation = self.next_connection_generation();
@@ -5333,14 +5407,29 @@ impl Terminal {
         true
     }
 
-    fn prepare_surface_for_reconnect(&mut self) {
-        // Keep the primary grid and scrollback, but never carry a stale full-screen
-        // alternate-screen application (such as Vim) into the replacement backend.
+    /// 清空当前画面与回滚缓冲，用于用户手动重连时丢弃旧会话残留（#592）。
+    fn clear_terminal_screen_and_scrollback<T>(term: &mut Term<T>)
+    where
+        T: alacritty_terminal::event::EventListener,
+    {
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        processor.advance(term, b"\x1b[2J\x1b[3J\x1b[H");
+        term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+    }
+
+    fn prepare_surface_for_reconnect(&mut self, reset_screen: bool) {
+        // 默认保留主网格与回滚，只退出残留的全屏程序（如 Vim），
+        // 但绝不把上一个后端留下的全屏应用画面带进新连接。
         let mut term = self.term.lock();
         if term.mode().contains(TermMode::ALT_SCREEN) {
             let mut processor: Processor<StdSyncHandler> = Processor::new();
             processor.advance(&mut *term, b"\x1b[?1049l");
             term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+        }
+        if reset_screen {
+            // 用户手动重连时清掉旧会话画面与回滚，避免堡垒机菜单之类的残留文字
+            // 让人误以为没有重新连接（#592）。
+            Self::clear_terminal_screen_and_scrollback(&mut *term);
         }
         drop(term);
         self.child_exited = None;
@@ -5414,7 +5503,7 @@ impl Terminal {
         if let Some(backend) = self.backend.take() {
             backend.shutdown();
         }
-        self.prepare_surface_for_reconnect();
+        self.prepare_surface_for_reconnect(false);
 
         let generation = self.next_connection_generation();
         self.record_connection_generation_marker(generation);
@@ -5726,7 +5815,8 @@ mod tests {
         build_ssh_init_commands, clear_screen_shell_redraw_bytes, compose_ssh_init_commands,
         flush_pending_terminal_events, format_connection_error, host_key_verification_request,
         is_reconnect_generation, is_ssh_password_prompt, keyboard_interactive_answers_for_terminal,
-        merge_history_matches, normalize_history_matches, parse_stored_telnet_params,
+        REMOTE_HISTORY_SPLIT_MARKER, build_remote_history_load_command, merge_history_matches,
+        normalize_history_matches, parse_remote_history_output, parse_stored_telnet_params,
         receive_terminal_event_for_gpui, recent_text_from_term, remote_shell_history_allowed,
         resolve_default_windows_shell_from_env, resolve_local_working_dir,
         resolve_local_workspace_root, resolve_ssh_connection, send_coalesced_wakeup,
@@ -6887,6 +6977,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -6959,6 +7050,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -7038,6 +7130,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -7103,6 +7196,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -7406,6 +7500,45 @@ mod tests {
     /// 锐捷 S6250 这类设备会把它当成非法命令回显并断开连接，现场表现为登录后
     /// 未输入任何内容就刷 `% Unknown command` / `File failed`。
     #[test]
+    fn empty_shell_history_reports_an_unavailable_hint() {
+        // issue #570：堡垒机既没有 shell 集成，也可能读不到历史文件。
+        // 这时要发出提示事件，而不是让历史面板静默为空。
+        let source = include_str!("terminal.rs");
+        let production = source.split("mod tests").next().unwrap_or_default();
+        let loader = production
+            .split("fn spawn_ssh_history_loader")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .expect("spawn_ssh_history_loader 必须存在");
+        assert!(
+            loader.contains("ShellHistoryUnavailable"),
+            "读不到历史时要通知视图层"
+        );
+        assert!(loader.contains("is_empty"), "空历史也要提示");
+    }
+
+    #[test]
+    fn loading_shell_history_also_imports_it_into_the_command_history_store() {
+        // issue #570：历史面板读的是持久化命令库。只把 shell 历史文件塞进内存
+        // 不够——没有 shell 集成（拿不到 OSC 133）的会话，面板会一直是空的。
+        let source = include_str!("terminal.rs");
+        let production = source.split("mod tests").next().unwrap_or_default();
+        let body = production
+            .split("fn set_persisted_history")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .expect("set_persisted_history 必须存在");
+        assert!(
+            body.contains("import_shell_history"),
+            "shell 历史文件要导入命令历史库"
+        );
+        assert!(
+            body.contains("CommandHistoryChanged"),
+            "导入成功后要通知历史面板刷新"
+        );
+    }
+
+    #[test]
     fn ssh_history_loader_is_gated_by_the_shell_integration_setting() {
         let source = include_str!("terminal.rs");
         let production = source.split("mod tests").next().unwrap_or_default();
@@ -7620,6 +7753,54 @@ mod tests {
         );
         assert_eq!(normalize_history_command("   "), None);
         assert_eq!(normalize_history_command("\n\t"), None);
+    }
+
+    #[test]
+    fn remote_history_load_command_probes_common_history_files() {
+        // issue #570：明御堡垒机等设备的历史文件不是 bash/zsh 默认位置，
+        // 读取时要覆盖 $HISTFILE 与 .sh_history/.history 等常见写法。
+        let command = build_remote_history_load_command();
+        for expected in [
+            "\"$HISTFILE\"",
+            ".bash_history",
+            ".zsh_history",
+            ".sh_history",
+            ".history",
+            "tail -n 512",
+        ] {
+            assert!(
+                command.contains(expected),
+                "历史读取命令应当覆盖 {expected}：{command}"
+            );
+        }
+        assert_eq!(
+            1,
+            command.matches("sh -lc").count(),
+            "仍然只开一次 exec，避免触发 #532 的受限设备断连"
+        );
+    }
+
+    #[test]
+    fn parse_remote_history_output_reads_every_marked_section() {
+        let output = format!(
+            "\n{marker}\ngit status\ncargo test\n{marker}\n: 1710000000:0;git stash\n{marker}\n\n{marker}\nll -la\n",
+            marker = REMOTE_HISTORY_SPLIT_MARKER
+        );
+
+        let commands = parse_remote_history_output(&output);
+
+        assert_eq!(
+            commands,
+            vec!["git status", "cargo test", "git stash", "ll -la"],
+            "每段都要解析，空段跳过"
+        );
+    }
+
+    #[test]
+    fn parse_remote_history_output_falls_back_without_markers() {
+        let commands = parse_remote_history_output("ls -la\ncd /tmp\n");
+
+        assert_eq!(commands, vec!["ls -la", "cd /tmp"]);
     }
 
     #[test]
@@ -8232,6 +8413,35 @@ mod tests {
     }
 
     #[test]
+    fn manual_reconnect_preparation_clears_the_stale_screen_and_scrollback() {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (term, _event_proxy, _colors, _performance_metrics) =
+            Terminal::create_term_with_metrics(
+                80,
+                24,
+                10_000,
+                event_tx.clone(),
+                Arc::new(TerminalPerformanceMetrics::enabled()),
+            );
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        processor.advance(&mut *term.lock(), b"bastion menu: 17");
+        {
+            let term = term.lock();
+            assert_eq!(term.grid()[Line(0)][Column(0)].c, 'b');
+        }
+
+        // 手动重连前的清理要能把旧会话画面与回滚一起清掉（#592）。
+        {
+            let mut term = term.lock();
+            Terminal::clear_terminal_screen_and_scrollback(&mut term);
+        }
+        let term = term.lock();
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, ' ');
+        assert_eq!(term.grid()[Line(0)][Column(16)].c, ' ');
+        assert_eq!(term.columns(), 80);
+    }
+
+    #[test]
     fn reconnect_preparation_preserves_buffer_and_clears_stale_connection_metadata() {
         let (event_tx, _event_rx) = unbounded_channel();
         let (term, event_proxy, _colors, performance_metrics) = Terminal::create_term_with_metrics(
@@ -8321,7 +8531,7 @@ mod tests {
         assert_eq!(1, window.render_samples);
         assert_eq!(4_000_000.0, window.average_render_ns);
 
-        terminal.prepare_surface_for_reconnect();
+        terminal.prepare_surface_for_reconnect(false);
         assert!(Arc::ptr_eq(
             &shared_metrics,
             &terminal.performance_metrics()
@@ -8428,6 +8638,10 @@ mod tests {
         assert!(
             helper.contains("service.retire(identity.connection_key())"),
             "the helper must retire the registry slot"
+        );
+        assert!(
+            reconnect.contains("prepare_surface_for_reconnect(true)"),
+            "manual SSH reconnect must clear the stale screen and scrollback (#592)"
         );
     }
 

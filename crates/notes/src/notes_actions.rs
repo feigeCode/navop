@@ -262,6 +262,7 @@ fn open_name_dialog(
     let title = match kind {
         CreateKind::Directory => t!("Notes.new_directory").to_string(),
         CreateKind::Document(DocumentFormat::Markdown) => t!("Notes.new_markdown").to_string(),
+        CreateKind::Document(DocumentFormat::Text) => t!("Notes.new_text").to_string(),
     };
     let input_for_focus = input.clone();
     window.open_dialog(cx, move |dialog, _window, _cx| {

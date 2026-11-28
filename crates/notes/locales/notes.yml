@@ -21,6 +21,14 @@ Notes:
     en: Return to live preview editing
     zh-CN: 返回实时预览编辑
     zh-HK: 返回即時預覽編輯
+  markdown_follow_default:
+    en: Follow default view
+    zh-CN: 跟随默认视图
+    zh-HK: 跟隨預設檢視
+  markdown_follow_default_tooltip:
+    en: The note default view changed in Settings; this tab keeps its current view. Click to follow the new default
+    zh-CN: 设置里的笔记默认视图已更改，此页签保持原视图；点击切换为新的默认视图
+    zh-HK: 設定裡的筆記預設檢視已變更，此頁籤維持原檢視；點擊切換為新的預設檢視
   markdown_readonly_preview:
     en: Read-only preview · edit in Source
     zh-CN: 只读预览 · 请在源码模式编辑
@@ -273,6 +281,14 @@ Notes:
     en: New Markdown Document
     zh-CN: 新建 Markdown 文档
     zh-HK: 新增 Markdown 文件
+  new_text:
+    en: New Text Note
+    zh-CN: 新建文本笔记
+    zh-HK: 新增文字筆記
+  new_text_document:
+    en: New Text Document
+    zh-CN: 新建文本文档
+    zh-HK: 新增文字檔案
   new_folder:
     en: New Folder
     zh-CN: 新建文件夹

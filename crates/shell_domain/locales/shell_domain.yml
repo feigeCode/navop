@@ -472,6 +472,14 @@ Settings:
       en: Between 0.1 and 1.0.
       zh-CN: 取值 0.1–1.0。
       zh-HK: 取值 0.1–1.0。
+    default_encoding:
+      en: Default Terminal Encoding
+      zh-CN: 默认终端编码
+      zh-HK: 預設終端編碼
+    default_encoding_description:
+      en: Used by new SSH connections and quick connect (ssh user@host). Existing connections keep their own encoding.
+      zh-CN: 新建 SSH 连接与快速连接（ssh user@host）默认使用；已有连接在连接表单里单独设置。
+      zh-HK: 新建 SSH 連線與快速連線（ssh user@host）預設使用；已有連線在連線表單裡單獨設定。
     safety_group:
       en: Confirmation
       zh-CN: 危险操作确认

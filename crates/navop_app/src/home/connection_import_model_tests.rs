@@ -369,6 +369,95 @@ fn next_save_candidate_after_skips_current_saved_and_unselected_rows() {
     );
 }
 
+#[test]
+fn select_all_candidates_ignores_rows_that_cannot_be_saved() {
+    let mut state = ImportCenterState::empty_for_tests();
+    state.apply_preview_records(vec![
+        database_record("a"),
+        database_record("b"),
+        database_record("c"),
+    ]);
+    state.mark_saved("a", Some(1));
+
+    state.set_all_candidates_selected(false);
+
+    assert_eq!(2, state.candidate_row_count());
+    assert!(!state.all_candidates_selected());
+    assert_eq!(0, state.selected_candidate_row_count());
+    // 已保存的行不是可保存行，既不参与计数也不被「全选/取消」改动。
+    assert!(state.row("a").unwrap().selected);
+
+    state.set_all_candidates_selected(true);
+
+    assert!(state.all_candidates_selected());
+    assert_eq!(2, state.selected_candidate_row_count());
+    assert!(state.row("b").unwrap().selected);
+    assert!(state.row("c").unwrap().selected);
+}
+
+#[test]
+fn shift_click_selects_the_range_between_anchor_and_target() {
+    let mut state = ImportCenterState::empty_for_tests();
+    state.apply_preview_records(vec![
+        database_record("a"),
+        database_record("b"),
+        database_record("c"),
+        database_record("d"),
+    ]);
+    state.set_all_candidates_selected(false);
+    state.toggle_row("b");
+    state.toggle_row_with_shift("d", true);
+
+    let selected: Vec<bool> = state.rows().iter().map(|row| row.selected).collect();
+    assert_eq!(vec![false, true, true, true], selected);
+}
+
+#[test]
+fn shift_click_can_clear_a_range_and_skips_saved_rows() {
+    let mut state = ImportCenterState::empty_for_tests();
+    state.apply_preview_records(vec![
+        database_record("a"),
+        database_record("b"),
+        database_record("c"),
+        database_record("d"),
+    ]);
+    state.mark_saved("c", Some(3));
+    state.toggle_row("b");
+    state.toggle_row_with_shift("a", true);
+
+    let selected: Vec<bool> = state.rows().iter().map(|row| row.selected).collect();
+    // b 被单点取消、a 被区间取消；c 已保存，落在区间里也不动。
+    assert_eq!(vec![false, false, true, true], selected);
+}
+
+#[test]
+fn shift_click_without_anchor_falls_back_to_a_single_toggle() {
+    let mut state = ImportCenterState::empty_for_tests();
+    state.apply_preview_records(vec![database_record("a"), database_record("b")]);
+    state.set_all_candidates_selected(false);
+
+    state.toggle_row_with_shift("b", true);
+
+    assert!(!state.row("a").unwrap().selected);
+    assert!(state.row("b").unwrap().selected);
+}
+
+#[test]
+fn rescanning_resets_the_selection_anchor() {
+    let mut state = ImportCenterState::empty_for_tests();
+    state.apply_preview_records(vec![database_record("a"), database_record("b")]);
+    state.toggle_row("a");
+    // 重新扫描后行 id 全部更换，旧锚点不应把新行整段勾上。
+    state.apply_preview_records(vec![database_record("x"), database_record("y")]);
+    state.set_all_candidates_selected(false);
+
+    state.toggle_row_with_shift("y", true);
+
+    // 锚点在上一次点击时才建立，这里 Shift 点击 y 应该只勾 y 而不是把 x/y 都勾上。
+    assert!(!state.row("x").unwrap().selected);
+    assert!(state.row("y").unwrap().selected);
+}
+
 fn descriptor(id: &str, platforms: Vec<Platform>) -> ImporterDescriptor {
     ImporterDescriptor {
         id: id.to_string(),

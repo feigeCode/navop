@@ -3413,15 +3413,15 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
-        keys_macos: &["cmd-enter", "ctrl-enter"],
-        keys_other: &["cmd-enter", "ctrl-enter"],
+        keys_macos: &["cmd-enter", "ctrl-enter", "cmd-shift-r", "ctrl-shift-r"],
+        keys_other: &["cmd-enter", "ctrl-enter", "cmd-shift-r", "ctrl-shift-r"],
         label_key: "Settings.Shortcuts.sql_run_query",
         action_id: Some(action_id::SQL_RUN_QUERY),
         system_hotkey: false,
     },
     ShortcutEntry {
-        keys_macos: &["cmd-shift-enter", "ctrl-shift-enter"],
-        keys_other: &["cmd-shift-enter", "ctrl-shift-enter"],
+        keys_macos: &["cmd-shift-enter", "ctrl-shift-enter", "cmd-r", "ctrl-r"],
+        keys_other: &["cmd-shift-enter", "ctrl-shift-enter", "cmd-r", "ctrl-r"],
         label_key: "Settings.Shortcuts.sql_run_all_query",
         action_id: Some(action_id::SQL_RUN_ALL_QUERY),
         system_hotkey: false,
@@ -3431,6 +3431,55 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         keys_other: &["ctrl-/"],
         label_key: "Settings.Shortcuts.sql_toggle_comment",
         action_id: Some(action_id::SQL_TOGGLE_COMMENT),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["f7"],
+        keys_other: &["f7"],
+        label_key: "Settings.Shortcuts.sql_run_cursor_statement",
+        action_id: Some(action_id::SQL_RUN_CURSOR_STATEMENT),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["ctrl-l"],
+        keys_other: &["ctrl-l"],
+        label_key: "Settings.Shortcuts.sql_delete_line",
+        action_id: Some(action_id::SQL_DELETE_LINE),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["ctrl-d"],
+        keys_other: &["ctrl-d"],
+        label_key: "Settings.Shortcuts.sql_duplicate_line",
+        action_id: Some(action_id::SQL_DUPLICATE_LINE),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["ctrl-t"],
+        keys_other: &["ctrl-t"],
+        label_key: "Settings.Shortcuts.sql_swap_line_up",
+        action_id: Some(action_id::SQL_SWAP_LINE_UP),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["ctrl-u"],
+        keys_other: &["ctrl-u"],
+        label_key: "Settings.Shortcuts.sql_uppercase",
+        action_id: Some(action_id::SQL_UPPERCASE),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["ctrl-shift-u"],
+        keys_other: &["ctrl-shift-u"],
+        label_key: "Settings.Shortcuts.sql_lowercase",
+        action_id: Some(action_id::SQL_LOWERCASE),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["ctrl-h"],
+        keys_other: &["ctrl-h"],
+        label_key: "Settings.Shortcuts.sql_execution_history",
+        action_id: Some(action_id::SQL_EXECUTION_HISTORY),
         system_hotkey: false,
     },
 ];
@@ -3528,6 +3577,13 @@ const REMOTE_EDITOR_SHORTCUTS: &[ShortcutEntry] = &[
         keys_other: &["ctrl-r"],
         label_key: "Settings.Shortcuts.remote_editor_replace",
         action_id: Some(action_id::REMOTE_EDITOR_REPLACE),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-shift-f"],
+        keys_other: &["ctrl-shift-f"],
+        label_key: "Settings.Shortcuts.remote_editor_format",
+        action_id: Some(action_id::REMOTE_EDITOR_FORMAT),
         system_hotkey: false,
     },
 ];
@@ -4240,6 +4296,71 @@ mod tests {
             .expect("close active tab shortcut");
 
         assert_eq!(&["ctrl-f4", "alt-shift-w"], shortcut.keys_other);
+    }
+
+    #[test]
+    fn sql_run_shortcuts_include_navicat_combinations() {
+        // #594：从 Navicat 迁过来的用户习惯 `ctrl-r` 运行全部、`ctrl-shift-r` 运行选中。
+        let run_current = DATABASE_SHORTCUTS
+            .iter()
+            .find(|entry| entry.action_id == Some(one_core::keybindings::action_id::SQL_RUN_QUERY))
+            .expect("run current query shortcut");
+        assert_eq!(
+            run_current.keys_other,
+            &["cmd-enter", "ctrl-enter", "cmd-shift-r", "ctrl-shift-r"]
+        );
+
+        let run_all = DATABASE_SHORTCUTS
+            .iter()
+            .find(|entry| {
+                entry.action_id == Some(one_core::keybindings::action_id::SQL_RUN_ALL_QUERY)
+            })
+            .expect("run all query shortcut");
+        assert_eq!(
+            run_all.keys_other,
+            &["cmd-shift-enter", "ctrl-shift-enter", "cmd-r", "ctrl-r"]
+        );
+
+        let run_cursor_statement = DATABASE_SHORTCUTS
+            .iter()
+            .find(|entry| {
+                entry.action_id == Some(one_core::keybindings::action_id::SQL_RUN_CURSOR_STATEMENT)
+            })
+            .expect("run statement at cursor shortcut");
+        assert_eq!(run_cursor_statement.keys_macos, &["f7"]);
+        assert_eq!(run_cursor_statement.keys_other, &["f7"]);
+
+        for (action, keys) in [
+            (one_core::keybindings::action_id::SQL_DELETE_LINE, "ctrl-l"),
+            (one_core::keybindings::action_id::SQL_DUPLICATE_LINE, "ctrl-d"),
+            (one_core::keybindings::action_id::SQL_SWAP_LINE_UP, "ctrl-t"),
+        ] {
+            let entry = DATABASE_SHORTCUTS
+                .iter()
+                .find(|entry| entry.action_id == Some(action))
+                .expect("line operation shortcut");
+            assert_eq!(entry.keys_macos, &[keys]);
+            assert_eq!(entry.keys_other, &[keys]);
+        }
+
+        for (action, keys) in [
+            (one_core::keybindings::action_id::SQL_UPPERCASE, "ctrl-u"),
+            (
+                one_core::keybindings::action_id::SQL_LOWERCASE,
+                "ctrl-shift-u",
+            ),
+            (
+                one_core::keybindings::action_id::SQL_EXECUTION_HISTORY,
+                "ctrl-h",
+            ),
+        ] {
+            let entry = DATABASE_SHORTCUTS
+                .iter()
+                .find(|entry| entry.action_id == Some(action))
+                .expect("case conversion shortcut");
+            assert_eq!(entry.keys_macos, &[keys]);
+            assert_eq!(entry.keys_other, &[keys]);
+        }
     }
 
     #[test]

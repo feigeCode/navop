@@ -31,6 +31,8 @@ pub struct HistoryCommandPanel {
     scroll_handle: UniformListScrollHandle,
     focus_handle: FocusHandle,
     colors: crate::theme::TerminalColors,
+    /// 本会话没有读到 shell 历史（堡垒机/网络设备常见），空状态要说明原因。
+    remote_history_unavailable: bool,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
@@ -67,6 +69,7 @@ impl HistoryCommandPanel {
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             colors,
+            remote_history_unavailable: false,
             _subscriptions: vec![subscription],
         };
         panel.load_commands(cx);
@@ -80,6 +83,13 @@ impl HistoryCommandPanel {
 
     pub fn refresh_commands(&mut self, cx: &mut Context<Self>) {
         self.load_commands(cx);
+    }
+
+    pub fn set_remote_history_unavailable(&mut self, unavailable: bool, cx: &mut Context<Self>) {
+        if self.remote_history_unavailable != unavailable {
+            self.remote_history_unavailable = unavailable;
+            cx.notify();
+        }
     }
 
     fn repository(&self, cx: &App) -> Option<std::sync::Arc<TerminalCommandHistoryRepository>> {
@@ -212,5 +222,14 @@ mod tests {
             created_at: Some(1),
             updated_at: Some(1),
         }
+    }
+
+    #[test]
+    fn empty_state_explains_when_the_session_has_no_shell_history() {
+        // issue #570：堡垒机读不到历史时，面板不能只显示「还没有命令」，
+        // 还要告诉用户原因（内联文案，不弹浮层）。
+        let render = include_str!("history_command_panel/render.rs");
+        assert!(render.contains("remote_history_unavailable"));
+        assert!(render.contains("HistoryCommand.remote_history_unavailable"));
     }
 }

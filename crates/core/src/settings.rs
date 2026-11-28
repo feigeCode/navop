@@ -1,6 +1,6 @@
 use crate::cloud_sync::{GlobalCloudUser, UserInfo};
 use crate::sidebar_contribution::SidebarPlacement;
-use crate::storage::get_config_dir;
+use crate::storage::{StoredTerminalEncoding, get_config_dir};
 use crate::utils::auto_save_config::AutoSaveConfig;
 use agent_runtime::{
     DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_MAX_ITERATIONS, MIN_AGENT_MAX_ITERATIONS,
@@ -1604,6 +1604,9 @@ pub struct AppSettings {
     pub terminal_theme: String,
     #[serde(default)]
     pub terminal_cursor_blink: bool,
+    /// 新建 SSH 连接与快速连接（`ssh user@host`）默认使用的终端编码（issue #345）
+    #[serde(default)]
+    pub terminal_default_encoding: StoredTerminalEncoding,
     #[serde(default = "default_true")]
     pub terminal_confirm_multiline_paste: bool,
     #[serde(default = "default_true")]
@@ -1645,6 +1648,9 @@ pub struct AppSettings {
     pub local_terminal_profile: LocalTerminalProfileSettings,
     #[serde(default)]
     pub log_file_path: String,
+    /// SQL 查询目录的根（issue #112 第 3 点）；留空使用配置目录下的 `queries`。
+    #[serde(default)]
+    pub sql_queries_dir: String,
     /// 日志级别（见 [`LogLevel`]）；空值/旧配置一律按 `info`。
     #[serde(default)]
     pub log_level: LogLevel,
@@ -2173,6 +2179,7 @@ impl Default for AppSettings {
             terminal_sync_path_with_terminal: true,
             terminal_theme: default_terminal_theme(),
             terminal_cursor_blink: false,
+            terminal_default_encoding: StoredTerminalEncoding::Utf8,
             terminal_confirm_multiline_paste: default_true(),
             terminal_confirm_high_risk_command: default_true(),
             terminal_auto_session_logging: default_true(),
@@ -2187,6 +2194,7 @@ impl Default for AppSettings {
             terminal_tmux_socket: String::new(),
             local_terminal_profile: LocalTerminalProfileSettings::default(),
             log_file_path: String::new(),
+            sql_queries_dir: String::new(),
             log_level: LogLevel::default(),
             auto_update: true,
             skipped_update_version: None,
@@ -2552,6 +2560,34 @@ impl AppSettings {
         Self::peek_log_file_path_from(&path)
     }
 
+    /// 只把 settings.json 里的 `sql_queries_dir` 取出来。
+    ///
+    /// 查询目录由 `get_queries_dir()` 在没有 `App` 上下文的地方解析（保存 SQL、
+    /// 列目录），所以这里走磁盘直读，与 [`Self::peek_log_file_path`] 同一思路。
+    pub fn peek_sql_queries_dir() -> String {
+        let Some(path) = Self::config_path() else {
+            return String::new();
+        };
+
+        Self::peek_sql_queries_dir_from(&path)
+    }
+
+    fn peek_sql_queries_dir_from(path: &Path) -> String {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return String::new();
+        };
+
+        serde_json::from_str::<serde_json::Value>(&content)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("sql_queries_dir")
+                    .and_then(|dir| dir.as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default()
+    }
+
     /// 启动阶段只读一句配置：日志级别要在 `load()` 之前装好过滤器。
     pub fn peek_log_level() -> LogLevel {
         let Some(path) = Self::config_path() else {
@@ -2887,6 +2923,7 @@ fn quarantine_corrupt_settings(path: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use crate::storage::StoredTerminalEncoding;
     use gpui::px;
     use gpui_component::{Theme, ThemeMode};
     use std::path::PathBuf;
@@ -2909,6 +2946,30 @@ mod tests {
         migrate_layout_settings, monospace_font_options,
         resolve_installed_grid_monospace_font_family, write_settings_atomically,
     };
+
+    #[test]
+    fn terminal_default_encoding_defaults_to_utf8() {
+        assert_eq!(
+            AppSettings::default().terminal_default_encoding,
+            StoredTerminalEncoding::Utf8
+        );
+    }
+
+    #[test]
+    fn terminal_default_encoding_deserializes_from_settings_json() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"terminal_default_encoding":"gbk"}"#).expect("settings json");
+        assert_eq!(
+            settings.terminal_default_encoding,
+            StoredTerminalEncoding::Gbk
+        );
+
+        let legacy: AppSettings = serde_json::from_str("{}").expect("legacy settings json");
+        assert_eq!(
+            legacy.terminal_default_encoding,
+            StoredTerminalEncoding::Utf8
+        );
+    }
 
     #[test]
     fn app_settings_disables_sync_by_default() {
@@ -3064,6 +3125,31 @@ mod tests {
             serde_json::json!(21.0),
             "备份应保留覆盖前的上一份内容"
         );
+    }
+
+    #[test]
+    fn peek_sql_queries_dir_reads_the_configured_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"sql_queries_dir":"/tmp/navop-queries","font_size":"坏值"}"#,
+        )
+        .expect("write settings");
+
+        assert_eq!(
+            AppSettings::peek_sql_queries_dir_from(&path),
+            "/tmp/navop-queries"
+        );
+    }
+
+    #[test]
+    fn peek_sql_queries_dir_is_empty_when_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"log_file_path":"/tmp/navop.log"}"#).expect("write settings");
+
+        assert_eq!(AppSettings::peek_sql_queries_dir_from(&path), "");
     }
 
     #[test]

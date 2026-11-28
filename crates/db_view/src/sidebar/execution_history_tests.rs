@@ -141,3 +141,54 @@ fn aggregated_results_preserve_all_errors_and_totals() {
         record.details
     );
 }
+
+fn record_with_sql(sql: &str) -> ExecutionRecord {
+    ExecutionRecord {
+        context: context(),
+        status: ExecutionStatus::Success,
+        sql: sql.to_string(),
+        summary: String::new(),
+        details: Vec::new(),
+        affected_rows: 0,
+        returned_rows: None,
+        elapsed_ms: 0,
+        executed_at: 0,
+    }
+}
+
+#[test]
+fn recent_sql_statements_returns_newest_first_and_skips_blank_entries() {
+    let records = vec![
+        record_with_sql("select 1"),
+        record_with_sql("   "),
+        record_with_sql("select 2"),
+    ];
+
+    assert_eq!(
+        vec!["select 2".to_string(), "select 1".to_string()],
+        recent_sql_statements(&records, 10)
+    );
+}
+
+#[test]
+fn recent_sql_statements_collapses_consecutive_duplicates_and_honors_the_limit() {
+    let records = vec![
+        record_with_sql("select 1"),
+        record_with_sql("select 2"),
+        record_with_sql("select 2"),
+        record_with_sql("select 3"),
+    ];
+
+    assert_eq!(
+        vec![
+            "select 3".to_string(),
+            "select 2".to_string(),
+            "select 1".to_string()
+        ],
+        recent_sql_statements(&records, 10)
+    );
+    assert_eq!(
+        vec!["select 3".to_string(), "select 2".to_string()],
+        recent_sql_statements(&records, 2)
+    );
+}

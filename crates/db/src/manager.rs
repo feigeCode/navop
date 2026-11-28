@@ -29,7 +29,10 @@ use one_core::connection_notifier::{
     ConnectionDataEvent, ConnectionDataNotifier, GlobalConnectionNotifier,
 };
 use one_core::gpui_tokio::Tokio;
-use one_core::storage::{ConnectionRepository, DatabaseType, DbConnectionConfig};
+use one_core::storage::{
+    ConnectionRepository, DatabaseType, DbConnectionConfig, DbCredentialPrompt,
+    DbSessionCredentials,
+};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -171,6 +174,13 @@ const TDENGINE_IPC_DRIVER_ID: &str = "tdengine";
 const CLICKHOUSE_IPC_DRIVER_ID: &str = "clickhouse";
 
 /// Database manager - creates database plugins
+/// 例程列表要取哪一类对象；用于把函数/过程两条路径收敛到同一段会话管理代码。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoutineListKind {
+    Function,
+    Procedure,
+}
+
 pub struct DbManager {
     mysql: Arc<dyn DatabasePlugin>,
     postgresql: Arc<dyn DatabasePlugin>,
@@ -1226,6 +1236,11 @@ pub struct GlobalDbState {
     pub connection_manager: ConnectionManager,
     /// connection_id -> config mapping
     connections: Arc<DashMap<String, DbConnectionConfig>>,
+    /// connection_id -> 本次会话临时输入的凭据（issue #39）。
+    ///
+    /// 只存在内存里：用于支撑「连接时询问用户名/密码」这类延迟录入，
+    /// 关闭连接或重启应用后需要重新输入。
+    session_credentials: Arc<DashMap<String, DbSessionCredentials>>,
 }
 
 struct StreamingExecutionRequest {
@@ -1730,6 +1745,7 @@ impl GlobalDbState {
             db_manager: db_manager.clone(),
             connection_manager: manager,
             connections: Arc::new(DashMap::new()),
+            session_credentials: Arc::new(DashMap::new()),
         }
     }
 
@@ -1750,11 +1766,52 @@ impl GlobalDbState {
 
     /// Internal method for get_config
     pub fn get_config(&self, connection_id: &str) -> Option<DbConnectionConfig> {
-        let config_ref = self.connections.get(connection_id);
-        if let Some(config) = config_ref {
-            return Some(config.value().clone());
+        let config = self.connections.get(connection_id)?;
+        let config = config.value().clone();
+        // 开启「连接时询问凭据」的连接，把本次会话输入的值合并进来（issue #39）。
+        match self.session_credentials.get(connection_id) {
+            Some(credentials) => Some(config.with_session_credentials(credentials.value())),
+            None => Some(config),
         }
-        None
+    }
+
+    /// 记录本次会话临时输入的用户名/密码（issue #39）。
+    pub fn set_session_credentials(&self, connection_id: &str, credentials: DbSessionCredentials) {
+        self.session_credentials
+            .insert(connection_id.to_string(), credentials);
+    }
+
+    /// 读取本次会话临时输入的用户名/密码。
+    pub fn session_credentials(&self, connection_id: &str) -> Option<DbSessionCredentials> {
+        self.session_credentials
+            .get(connection_id)
+            .map(|credentials| credentials.value().clone())
+    }
+
+    /// 清掉某条连接的临时凭据（修改连接配置或用户主动忘记时调用）。
+    pub fn clear_session_credentials(&self, connection_id: &str) {
+        self.session_credentials.remove(connection_id);
+    }
+
+    /// 该连接在建立会话前是否还需要用户补录凭据（issue #39）。
+    pub fn pending_credential_prompt(&self, connection_id: &str) -> Option<DbCredentialPrompt> {
+        let config = self.connections.get(connection_id)?.value().clone();
+        let prompt = config.credential_prompt();
+        if !prompt.prompts() {
+            return None;
+        }
+        let credentials = self.session_credentials(connection_id);
+        let has_username = credentials
+            .as_ref()
+            .and_then(|value| value.username.as_deref())
+            .is_some_and(|value| !value.trim().is_empty());
+        let has_password = credentials
+            .as_ref()
+            .and_then(|value| value.password.as_deref())
+            .is_some_and(|value| !value.is_empty());
+        let satisfied = (!prompt.prompts_for_username() || has_username)
+            && (!prompt.prompts_for_password() || has_password);
+        (!satisfied).then_some(prompt)
     }
 
     pub fn list_connection_summaries(&self) -> Vec<DbConnectionSummary> {
@@ -4254,38 +4311,34 @@ impl GlobalDbState {
         database: &str,
         schema: Option<String>,
     ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
-        require_tokio_runtime("database metadata query")?;
-        let config = self
-            .get_config(connection_id)
-            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
-        let mut config = config.clone();
-        if config.database_type != DatabaseType::Oracle {
-            config.database = Some(database.to_string());
-        }
+        self.list_routines_in_schema_direct(
+            connection_id,
+            database,
+            schema,
+            RoutineListKind::Function,
+            false,
+        )
+        .await
+    }
 
-        let plugin = self.get_plugin(&config.database_type)?;
-        let session_id = self
-            .connection_manager
-            .create_session(config, &self.db_manager)
-            .await?;
-
-        let result = async {
-            let mut guard = self
-                .connection_manager
-                .get_session_connection(&session_id)
-                .await?;
-            let conn = guard
-                .connection()
-                .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
-            plugin
-                .list_functions_in_schema(conn, database, schema)
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e))
-        }
-        .await;
-
-        self.finish_direct_metadata_session(&session_id, result)
-            .await
+    /// 架构比较用：函数列表带上完整定义。
+    ///
+    /// PostgreSQL 的常规列表不再取 `pg_get_functiondef`（大 schema 上会拖慢加载，
+    /// 见 issue #33），比较需要定义时走这个方法。
+    pub async fn list_functions_in_schema_for_compare_direct(
+        &self,
+        connection_id: &str,
+        database: &str,
+        schema: Option<String>,
+    ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
+        self.list_routines_in_schema_direct(
+            connection_id,
+            database,
+            schema,
+            RoutineListKind::Function,
+            true,
+        )
+        .await
     }
 
     /// Pure async version of `list_procedures_in_schema` — skips all metadata
@@ -4295,6 +4348,42 @@ impl GlobalDbState {
         connection_id: &str,
         database: &str,
         schema: Option<String>,
+    ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
+        self.list_routines_in_schema_direct(
+            connection_id,
+            database,
+            schema,
+            RoutineListKind::Procedure,
+            false,
+        )
+        .await
+    }
+
+    /// 架构比较用：存储过程列表带上完整定义，语义同
+    /// [`Self::list_functions_in_schema_for_compare_direct`]。
+    pub async fn list_procedures_in_schema_for_compare_direct(
+        &self,
+        connection_id: &str,
+        database: &str,
+        schema: Option<String>,
+    ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
+        self.list_routines_in_schema_direct(
+            connection_id,
+            database,
+            schema,
+            RoutineListKind::Procedure,
+            true,
+        )
+        .await
+    }
+
+    async fn list_routines_in_schema_direct(
+        &self,
+        connection_id: &str,
+        database: &str,
+        schema: Option<String>,
+        kind: RoutineListKind,
+        include_definitions: bool,
     ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
         require_tokio_runtime("database metadata query")?;
         let config = self
@@ -4319,10 +4408,24 @@ impl GlobalDbState {
             let conn = guard
                 .connection()
                 .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
-            plugin
-                .list_procedures_in_schema(conn, database, schema)
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e))
+            match (kind, include_definitions) {
+                (RoutineListKind::Function, false) => plugin
+                    .list_functions_in_schema(conn, database, schema)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}", e)),
+                (RoutineListKind::Function, true) => plugin
+                    .list_functions_for_compare(conn, database, schema)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}", e)),
+                (RoutineListKind::Procedure, false) => plugin
+                    .list_procedures_in_schema(conn, database, schema)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}", e)),
+                (RoutineListKind::Procedure, true) => plugin
+                    .list_procedures_for_compare(conn, database, schema)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}", e)),
+            }
         }
         .await;
 
@@ -4452,6 +4555,94 @@ impl Default for GlobalDbState {
 impl Global for GlobalDbState {}
 
 #[cfg(test)]
+#[cfg(test)]
+mod credential_prompt_tests {
+    use super::*;
+    use one_core::storage::{
+        DatabaseType, DbCredentialPrompt, DbSessionCredentials, PROMPT_CREDENTIALS_PARAM,
+    };
+    use std::collections::HashMap;
+
+    fn config() -> DbConnectionConfig {
+        let mut extra_params = HashMap::new();
+        extra_params.insert(
+            PROMPT_CREDENTIALS_PARAM.to_string(),
+            DbCredentialPrompt::Password.as_param().to_string(),
+        );
+        DbConnectionConfig {
+            id: "1".to_string(),
+            database_type: DatabaseType::MySQL,
+            name: "local".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 3306,
+            username: "saved-user".to_string(),
+            password: String::new(),
+            credential_reference: None,
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            proxy: None,
+            extra_params,
+        }
+    }
+
+    #[test]
+    fn prompting_connection_waits_for_credentials_and_merges_them() {
+        let mut state = GlobalDbState::new();
+        state.register_connection(config());
+
+        // 需要提示，且还没有输入过。
+        assert_eq!(
+            Some(DbCredentialPrompt::Password),
+            state.pending_credential_prompt("1")
+        );
+        // 未输入时 get_config 保持连接里保存的（空）密码。
+        assert_eq!("", state.get_config("1").expect("config").password);
+
+        state.set_session_credentials(
+            "1",
+            DbSessionCredentials {
+                username: Some("ignored-user".to_string()),
+                password: Some("typed-password".to_string()),
+            },
+        );
+
+        assert_eq!(None, state.pending_credential_prompt("1"));
+        let merged = state.get_config("1").expect("config");
+        assert_eq!("typed-password", merged.password);
+        // 只提示密码时，用户名仍用保存值。
+        assert_eq!("saved-user", merged.username);
+
+        state.clear_session_credentials("1");
+        assert_eq!(
+            Some(DbCredentialPrompt::Password),
+            state.pending_credential_prompt("1")
+        );
+        assert_eq!("", state.get_config("1").expect("config").password);
+    }
+
+    #[test]
+    fn connections_without_prompt_never_need_credentials() {
+        let mut state = GlobalDbState::new();
+        let mut plain = config();
+        plain.extra_params.clear();
+        state.register_connection(plain);
+
+        assert_eq!(None, state.pending_credential_prompt("1"));
+        state.set_session_credentials(
+            "1",
+            DbSessionCredentials {
+                username: Some("ignored".to_string()),
+                password: Some("ignored".to_string()),
+            },
+        );
+        let config = state.get_config("1").expect("config");
+        assert_eq!("saved-user", config.username);
+        assert_eq!("", config.password);
+    }
+}
+
 mod tests {
     use super::*;
     use crate::connection::DbConnection;

@@ -12,6 +12,18 @@ pub(crate) fn default_markdown_view_mode(mode: MarkdownDefaultViewMode) -> Markd
     }
 }
 
+/// 设置里的默认视图与当前页签不一致时，返回点击提示后应切换到的模式（#132）。
+///
+/// 已经打开的笔记页签不会跟随设置变化，因此在页签上给出「跟随默认视图」的提示，
+/// 由用户决定是否切换；一致时返回 `None`，不打扰用户。
+pub(crate) fn markdown_default_mode_target(
+    current: MarkdownViewMode,
+    default: MarkdownDefaultViewMode,
+) -> Option<MarkdownViewMode> {
+    let target = default_markdown_view_mode(default);
+    (target != current).then_some(target)
+}
+
 pub(crate) fn editor_view_mode(mode: MarkdownViewMode) -> ViewMode {
     match mode {
         MarkdownViewMode::Wysiwyg => ViewMode::Rendered,
@@ -65,6 +77,24 @@ mod tests {
         assert_eq!(
             default_markdown_view_mode(MarkdownDefaultViewMode::Source),
             MarkdownViewMode::Source
+        );
+    }
+
+    #[test]
+    fn default_mode_target_only_reports_a_difference() {
+        assert_eq!(
+            markdown_default_mode_target(
+                MarkdownViewMode::Wysiwyg,
+                MarkdownDefaultViewMode::Source
+            ),
+            Some(MarkdownViewMode::Source)
+        );
+        assert_eq!(
+            markdown_default_mode_target(
+                MarkdownViewMode::Wysiwyg,
+                MarkdownDefaultViewMode::Wysiwyg
+            ),
+            None
         );
     }
 }

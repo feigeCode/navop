@@ -18,7 +18,7 @@ use gpui_component::{
     dialog::{DialogButtonProps, DialogFooter},
     form::{field, h_form},
     h_flex,
-    input::{Editor, EditorState, Input, InputEvent, InputState},
+    input::{Editor, EditorState, Input, InputEvent, InputState, Textarea, TextareaState},
     scroll::Scrollbar,
     select::{Select, SelectEvent, SelectItem, SelectState},
     spinner::Spinner,
@@ -2125,6 +2125,94 @@ impl TabContent for TableDesigner {
     }
 }
 
+/// 批量新增列的一条定义：`name` 必填，类型与长度可选。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BatchColumnSpec {
+    name: String,
+    /// 用户输入的原始类型文本（可能带长度，如 `VARCHAR(64)`）。
+    type_text: Option<String>,
+    /// 类型基础名，如 `VARCHAR`。
+    data_type: Option<String>,
+    /// 括号里的长度/精度文本，如 `64` 或 `10,2`。
+    type_args: Option<String>,
+}
+
+impl BatchColumnSpec {
+    fn new(name: &str, type_text: Option<&str>) -> Self {
+        let type_text = type_text.map(str::trim).filter(|text| !text.is_empty());
+        let (data_type, type_args) = match type_text {
+            Some(text) => match (text.find('('), text.rfind(')')) {
+                (Some(start), Some(end)) if end > start => (
+                    Some(text[..start].trim().to_string()),
+                    Some(text[start + 1..end].trim().to_string()),
+                ),
+                _ => (Some(text.to_string()), None),
+            },
+            None => (None, None),
+        };
+        Self {
+            name: name.to_string(),
+            type_text: type_text.map(str::to_string),
+            data_type,
+            type_args,
+        }
+    }
+}
+
+/// 按换行或逗号切分批量列定义，但括号里的逗号（如 `DECIMAL(10,2)`）不切。
+fn split_batch_column_lines(input: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    for (index, ch) in input.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            '\n' | ',' | '，' if depth == 0 => {
+                lines.push(&input[start..index]);
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    lines.push(&input[start..]);
+    lines
+}
+
+/// 解析「批量新增列」的输入：一行一条（也接受逗号分隔），
+/// 每条形如 `name` 或 `name TYPE(len)`，忽略空行，按列名大小写不敏感去重。
+fn parse_batch_column_specs(input: &str) -> Vec<BatchColumnSpec> {
+    let mut specs: Vec<BatchColumnSpec> = Vec::new();
+    for line in split_batch_column_lines(input) {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (name, type_text) = match line.split_once(char::is_whitespace) {
+            Some((name, rest)) => (name.trim(), Some(rest.trim())),
+            None => (line, None),
+        };
+        if name.is_empty()
+            || specs
+                .iter()
+                .any(|existing| existing.name.eq_ignore_ascii_case(name))
+        {
+            continue;
+        }
+        specs.push(BatchColumnSpec::new(name, type_text));
+    }
+    specs
+}
+
+/// 只取列名的便捷包装（目前仅测试使用）。
+#[cfg(test)]
+fn parse_batch_column_names(input: &str) -> Vec<String> {
+    parse_batch_column_specs(input)
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect()
+}
+
 // === Columns Editor ===
 
 pub enum ColumnsEditorEvent {
@@ -2463,6 +2551,114 @@ impl ColumnsEditor {
 
         data_types.push(base_type.to_string());
         data_types.len() - 1
+    }
+
+    /// 批量新增列：逐行填列名，类型先在行内用默认值，后续再按需调整（issue #30 #7）。
+    fn open_batch_add_columns_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let names_input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder(t!("Table.batch_add_columns_placeholder").to_string())
+                .auto_grow(3, 10)
+        });
+        let designer = cx.entity();
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let names_input = names_input.clone();
+            let designer_ok = designer.clone();
+            dialog
+                .title(t!("Table.batch_add_columns").to_string())
+                .overlay_closable(false)
+                .child(
+                    v_flex().gap_2().child(Textarea::new(&names_input)).child(
+                        div()
+                            .text_xs()
+                            .child(t!("Table.batch_add_columns_hint").to_string()),
+                    ),
+                )
+                .on_ok(move |_, window, cx| {
+                    let specs = parse_batch_column_specs(&names_input.read(cx).text().to_string());
+                    if specs.is_empty() {
+                        window
+                            .push_notification(t!("Table.batch_add_columns_empty").to_string(), cx);
+                        return false;
+                    }
+                    let ignored = designer_ok.update(cx, |designer, cx| {
+                        designer.add_columns_from_specs(&specs, window, cx)
+                    });
+                    if !ignored.is_empty() {
+                        window.push_notification(
+                            t!(
+                                "Table.batch_add_columns_unknown_type",
+                                types = ignored.join(", ")
+                            )
+                            .to_string(),
+                            cx,
+                        );
+                    }
+                    true
+                })
+        });
+    }
+
+    /// 按批量定义新增列，返回无法识别的类型文本（用于提示用户手动调整）。
+    fn add_columns_from_specs(
+        &mut self,
+        specs: &[BatchColumnSpec],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<String> {
+        let existing: Vec<String> = self
+            .columns
+            .iter()
+            .map(|column| column.name_input.read(cx).value().to_string())
+            .collect();
+        let mut ignored: Vec<String> = Vec::new();
+        for spec in specs {
+            if existing
+                .iter()
+                .any(|current| current.eq_ignore_ascii_case(&spec.name))
+            {
+                continue;
+            }
+            let index = self.columns.len();
+            self.add_column(window, cx);
+            let Some(row) = self.columns.get(index) else {
+                continue;
+            };
+            row.name_input.update(cx, |state, cx| {
+                state.set_value(spec.name.as_str(), window, cx)
+            });
+            let Some(type_text) = spec.type_text.clone() else {
+                continue;
+            };
+            let matched = spec.data_type.as_deref().and_then(|name| {
+                self.data_types
+                    .iter()
+                    .find(|candidate| candidate.eq_ignore_ascii_case(name))
+                    .cloned()
+            });
+            match matched {
+                Some(data_type) => {
+                    row.type_select.update(cx, |state, cx| {
+                        state.set_selected_value(&data_type, window, cx)
+                    });
+                    if let Some(args) = spec.type_args.as_deref() {
+                        let (length, scale) = match args.split_once(',') {
+                            Some((length, scale)) => (length.trim(), Some(scale.trim())),
+                            None => (args, None),
+                        };
+                        row.length_input
+                            .update(cx, |state, cx| state.set_value(length, window, cx));
+                        if let Some(scale) = scale {
+                            row.scale_input
+                                .update(cx, |state, cx| state.set_value(scale, window, cx));
+                        }
+                    }
+                }
+                None => ignored.push(type_text),
+            }
+        }
+        ignored
     }
 
     fn add_column(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3150,6 +3346,15 @@ impl ColumnsEditor {
                     .glyph_size(OneIconSize::Default)
                     .tooltip(t!("Table.add_column").to_string())
                     .on_click(cx.listener(|this, _, window, cx| this.add_column(window, cx))),
+            )
+            .child(
+                IconButton::new("add-cols-batch", IconName::ListChecks)
+                    .hit_size(Size::Small)
+                    .glyph_size(OneIconSize::Default)
+                    .tooltip(t!("Table.batch_add_columns").to_string())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_batch_add_columns_dialog(window, cx)
+                    })),
             )
             .child(
                 IconButton::new("remove-col", IconName::Minus)
@@ -4682,6 +4887,36 @@ mod tests {
 
     /// issue #586：新增列带上表字符集/排序规则时，ADD COLUMN 要显式写出
     /// CHARACTER SET/COLLATE；表选项本身没变，ALTER 不应附带表级设置。
+    #[test]
+    fn batch_column_specs_parse_type_and_length() {
+        // issue #30 #7：批量加列时可以直接写「列名 类型(长度)」，逗号分隔也接受。
+        let specs = parse_batch_column_specs(
+            "email varchar(255), nick char(10)\ncreated_at DATETIME(6,2)\n  \nEMAIL text",
+        );
+        assert_eq!(3, specs.len());
+        assert_eq!("email", specs[0].name);
+        assert_eq!(Some("varchar"), specs[0].data_type.as_deref());
+        assert_eq!(Some("255"), specs[0].type_args.as_deref());
+        assert_eq!("nick", specs[1].name);
+        assert_eq!(Some("char"), specs[1].data_type.as_deref());
+        assert_eq!(Some("10"), specs[1].type_args.as_deref());
+        assert_eq!("created_at", specs[2].name);
+        assert_eq!(Some("6,2"), specs[2].type_args.as_deref());
+
+        // 没有类型的条目只带列名。
+        let specs = parse_batch_column_specs("plain_name");
+        assert_eq!(None, specs[0].data_type);
+        assert_eq!(None, specs[0].type_args);
+    }
+
+    #[test]
+    fn batch_column_names_ignore_blank_lines_and_duplicate_case_insensitively() {
+        // issue #30 #7：批量加列时一行一个列名，空白行与重复列名要跳过，
+        // 否则会一次性加出重复列，提交到数据库时才报错。
+        let names = parse_batch_column_names("  name \n\nemail\nName\n  \ncreated_at\n");
+        assert_eq!(vec!["name", "email", "created_at"], names);
+    }
+
     #[test]
     fn test_mysql_add_column_inherits_table_charset() {
         let plugin = build_plugin(&DatabaseType::MySQL);

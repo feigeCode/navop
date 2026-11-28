@@ -77,6 +77,23 @@ impl ConnectionImportWindowModel {
         self.state.toggle_row(record_id);
     }
 
+    /// Shift 点击时按区间勾选；`extend` 为 false 等价于 `toggle_row`。
+    pub(crate) fn toggle_row_with_shift(&mut self, record_id: &str, extend: bool) {
+        self.state.toggle_row_with_shift(record_id, extend);
+    }
+
+    pub(crate) fn candidate_row_count(&self) -> usize {
+        self.state.candidate_row_count()
+    }
+
+    pub(crate) fn all_candidates_selected(&self) -> bool {
+        self.state.all_candidates_selected()
+    }
+
+    pub(crate) fn set_all_candidates_selected(&mut self, selected: bool) {
+        self.state.set_all_candidates_selected(selected);
+    }
+
     pub(crate) fn apply_scan_reports(&mut self, reports: Vec<ImportScanReport>) {
         self.state.apply_scan_reports(reports);
     }

@@ -60,6 +60,7 @@ fn client_config(host: String, port: u16, allow_legacy_algorithms: bool) -> SshC
         allow_legacy_algorithms,
         forward_agent: false,
         agent_identities: Vec::new(),
+        proxy_command: None,
     }
 }
 

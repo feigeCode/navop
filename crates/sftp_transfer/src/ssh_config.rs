@@ -67,6 +67,7 @@ pub fn resolve_ssh_target(connection: &StoredConnection) -> Result<ResolvedSshTa
         keepalive_max: params.keepalive_max,
         jump_server: params.jump_server.as_ref().map(jump_connect_config),
         proxy: params.proxy.as_ref().map(proxy_connect_config),
+        proxy_command: params.proxy_command.clone(),
         keyboard_interactive_responder: None,
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,

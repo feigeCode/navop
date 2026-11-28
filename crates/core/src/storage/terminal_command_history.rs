@@ -147,6 +147,45 @@ impl TerminalCommandHistoryRepository {
         })
     }
 
+    /// 从 shell 历史文件（如 `~/.bash_history`）导入命令（issue #570）。
+    ///
+    /// 只补库里还没有的命令：已存在的条目完全不动，避免每次连接都把
+    /// `use_count` 和 `last_used_at` 刷一遍，污染 frecency 排序。
+    /// 返回真正插入的条数。
+    pub fn import_shell_history(
+        &self,
+        scope: &TerminalHistoryScope,
+        commands: &[String],
+    ) -> Result<usize> {
+        let ts = now();
+        self.conn.with_connection(|conn| {
+            let transaction = conn.unchecked_transaction()?;
+            let mut inserted = 0usize;
+            for command in commands {
+                let Some(command) = normalize_command(command) else {
+                    continue;
+                };
+                let affected = transaction.execute(
+                    "INSERT INTO terminal_command_history
+                     (scope_key, scope_kind, connection_id, command, use_count, favorite,
+                      first_used_at, last_used_at, last_exit_code, cwd, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, 1, 0, ?5, ?5, 0, NULL, ?5, ?5)
+                     ON CONFLICT(scope_key, command) DO NOTHING",
+                    params![
+                        scope.scope_key,
+                        scope.scope_kind,
+                        scope.connection_id,
+                        command,
+                        ts
+                    ],
+                )?;
+                inserted += affected;
+            }
+            transaction.commit()?;
+            Ok(inserted)
+        })
+    }
+
     pub fn list(
         &self,
         scope: &TerminalHistoryScope,

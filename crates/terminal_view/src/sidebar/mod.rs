@@ -157,7 +157,7 @@ fn terminal_ai_system_instruction(connection_kind: TerminalConnectionKind) -> St
 7. 如果用户明确要求其他平台、非命令答案或更详细的解释，再按用户要求调整。
 8. 资源作用域里的 cwd / screen / selection 是这台终端此刻的现场：涉及路径或「当前目录」时直接使用，不要猜测，也不要默认 $HOME 或 /root。
 9. 需要继承当前目录、已激活虚拟环境、alias/函数或临时环境变量时，用 terminal_exec（即 terminal.exec）；省略 target 时会落到当前终端，正在前台输入时可能返回 Busy，此时不要改用 ssh_exec 去猜目录。若进入 sudo -i / su 等嵌套 shell 后 terminal_exec 一直 Busy，而提示符空闲，可用 terminal_write_command（即 terminal.write_command）直接写入一条命令，再用 terminal_read 读取可见结果。
-10. 用 ssh_exec（即 ssh.exec）做后台远程执行时，省略 cwd 会继承目标终端的当前目录；若作用域里的 cwd 与目标机器不一致（例如终端里又 ssh 到了另一台机器），必须显式传 cwd；需要干净目录时显式传 cwd（绝对路径或 $HOME）。
+10. ssh_exec（即 ssh.exec）永远运行在目标终端所连接的那台 SSH 主机上：省略 cwd 会继承目标终端的当前目录。若用户在可见终端里又 ssh 登录了另一台机器（跳板机场景），ssh.exec 到不了那台机器，必须改用 terminal_exec 或 terminal_write_command + terminal_read 在当前可见终端里执行；ssh.exec 只在需要干净后台执行、且目标就是该终端所连主机时使用。
 11. 作用域里没有 cwd 时不要假设任何目录：先用 terminal_read 确认现场，或直接询问用户。
 12. 作用域里出现 tmux 时，cwd 属于 active pane；用 terminal_tmux_list_panes 查看 pane，用 terminal_tmux_send_keys 向指定 pane 写入。tmux 内 terminal_exec 可能 Busy，这是预期行为；copy-mode 下按键会被 tmux 消费。"#
     )
@@ -848,10 +848,7 @@ pub enum TerminalSidebarEvent {
     /// 选择 tmux window
     TmuxSelectWindow(String),
     /// 选择 tmux window 下的 pane
-    TmuxSelectPane {
-        window_id: String,
-        pane_id: String,
-    },
+    TmuxSelectPane { window_id: String, pane_id: String },
 }
 
 /// 需要等凭据就绪才能补建的 SSH 工具面板所需的构造输入。
@@ -1473,10 +1470,7 @@ impl TerminalSidebar {
                 TmuxPanesPanelEvent::SelectWindow { window_id } => {
                     cx.emit(TerminalSidebarEvent::TmuxSelectWindow(window_id.clone()));
                 }
-                TmuxPanesPanelEvent::SelectPane {
-                    window_id,
-                    pane_id,
-                } => {
+                TmuxPanesPanelEvent::SelectPane { window_id, pane_id } => {
                     cx.emit(TerminalSidebarEvent::TmuxSelectPane {
                         window_id: window_id.clone(),
                         pane_id: pane_id.clone(),
@@ -2112,6 +2106,15 @@ impl TerminalSidebar {
         cx.notify();
     }
 
+    /// 标记「本会话读不到 shell 历史」，让历史面板空状态给出原因（issue #570）。
+    pub fn set_remote_history_unavailable(&mut self, unavailable: bool, cx: &mut Context<Self>) {
+        if let Some(ref history_panel) = self.history_command_panel {
+            history_panel.update(cx, |panel, cx| {
+                panel.set_remote_history_unavailable(unavailable, cx);
+            });
+        }
+    }
+
     pub fn refresh_history_commands(&mut self, cx: &mut Context<Self>) {
         if let Some(ref history_panel) = self.history_command_panel {
             history_panel.update(cx, |panel, cx| {
@@ -2232,12 +2235,7 @@ impl TerminalSidebar {
         });
     }
 
-    pub fn set_tmux_socket(
-        &mut self,
-        socket: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn set_tmux_socket(&mut self, socket: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_tmux_socket(socket, window, cx);
         });

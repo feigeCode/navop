@@ -878,6 +878,14 @@ Home:
       en: "%{savable} / %{total} can be saved"
       zh-CN: "可保存 %{savable} / %{total} 条"
       zh-HK: "可儲存 %{savable} / %{total} 筆"
+    select_all_rows:
+      en: Select all
+      zh-CN: 全选
+      zh-HK: 全選
+    rows_selection_hint:
+      en: Shift-click selects a range; Cmd/Ctrl-click toggles one row.
+      zh-CN: Shift 点击选择区间，Cmd/Ctrl 点击切换单条。
+      zh-HK: Shift 點擊選擇區間，Cmd/Ctrl 點擊切換單筆。
     workspace_group_count:
       en: "Found %{groups} SSH connection groups; they will be imported as Navop groups"
       zh-CN: "发现 %{groups} 个 SSH 连接分组，保存后将转换为 Navop 分组"
@@ -2606,6 +2614,62 @@ Connection:
     en: Exit Batch Operations
     zh-CN: 退出批量操作
     zh-HK: 退出批量操作
+  batch_edit_ssh_username:
+    en: Edit SSH Username
+    zh-CN: 批量修改 SSH 用户名
+    zh-HK: 批量修改 SSH 使用者名稱
+  batch_edit_username_hint:
+    en: "Set the same username for the %{count} selected SSH connections."
+    zh-CN: "将为选中的 %{count} 个 SSH 连接设置同一个用户名。"
+    zh-HK: "將為選中的 %{count} 個 SSH 連線設定同一個使用者名稱。"
+  batch_edit_username_placeholder:
+    en: New username
+    zh-CN: 新用户名
+    zh-HK: 新使用者名稱
+  batch_edit_username_empty:
+    en: Username cannot be empty.
+    zh-CN: 用户名不能为空。
+    zh-HK: 使用者名稱不能為空。
+  batch_edit_no_ssh:
+    en: None of the selected connections is an SSH connection.
+    zh-CN: 选中的连接里没有 SSH 连接。
+    zh-HK: 選中的連線裡沒有 SSH 連線。
+  batch_edit_ssh_password:
+    en: Edit SSH Password
+    zh-CN: 批量修改 SSH 密码
+    zh-HK: 批量修改 SSH 密碼
+  batch_edit_password_hint:
+    en: "Set the same password for the %{count} selected SSH connections that use password authentication."
+    zh-CN: "将为选中的 %{count} 个使用密码认证的 SSH 连接设置同一个密码。"
+    zh-HK: "將為選中的 %{count} 個使用密碼認證的 SSH 連線設定同一個密碼。"
+  batch_edit_password_placeholder:
+    en: New password
+    zh-CN: 新密码
+    zh-HK: 新密碼
+  batch_edit_password_empty:
+    en: Password cannot be empty.
+    zh-CN: 密码不能为空。
+    zh-HK: 密碼不能為空。
+  batch_edit_no_password_auth:
+    en: None of the selected connections uses password authentication.
+    zh-CN: 选中的连接里没有使用密码认证的 SSH 连接。
+    zh-HK: "選中的連線裡沒有使用密碼認證的 SSH 連線。"
+  batch_edit_ssh_icon:
+    en: Edit SSH Icon
+    zh-CN: 批量修改 SSH 图标
+    zh-HK: 批量修改 SSH 圖示
+  batch_edit_icon_hint:
+    en: "Set the same icon for the %{count} selected SSH connections."
+    zh-CN: "将为选中的 %{count} 个 SSH 连接设置同一个图标。"
+    zh-HK: "將為選中的 %{count} 個 SSH 連線設定同一個圖示。"
+  batch_edit_icon_select:
+    en: Connection icon
+    zh-CN: 连接图标
+    zh-HK: 連線圖示
+  batch_edit_icon_auto:
+    en: Auto (detect from system)
+    zh-CN: 自动（按系统探测）
+    zh-HK: 自動（按系統探測）
   batch_delete_confirm:
     en: "Are you sure you want to delete the %{count} selected connections?"
     zh-CN: "确定要删除选中的 %{count} 个连接吗？"
@@ -3462,9 +3526,9 @@ Settings:
         zh-CN: 笔记默认视图
         zh-HK: 筆記預設檢視
       default_view_mode_desc:
-        en: View used when a Markdown note is opened for the first time. Switch any note between WYSIWYG and source with the toolbar button.
-        zh-CN: 首次打开 Markdown 笔记时使用的视图。单个笔记随时可用工具栏按钮在「所见即所得」与「源码」之间切换。
-        zh-HK: 首次開啟 Markdown 筆記時使用的檢視。單篇筆記可隨時用工具列按鈕在「所見即所得」與「原始碼」之間切換。
+        en: View used when a Markdown note is opened for the first time. Already open note tabs keep their current view and show a "Follow default view" hint in the toolbar.
+        zh-CN: 首次打开 Markdown 笔记时使用的视图。已打开的笔记页签保持当前视图，并在工具栏显示「跟随默认视图」提示。
+        zh-HK: 首次開啟 Markdown 筆記時使用的檢視。已開啟的筆記頁籤維持目前檢視，並在工具列顯示「跟隨預設檢視」提示。
       default_view_mode_wysiwyg:
         en: WYSIWYG
         zh-CN: 所见即所得
@@ -5553,6 +5617,34 @@ Settings:
       en: Toggle Line Comment
       zh-CN: 注释/取消注释
       zh-HK: 註解/取消註解
+    sql_run_cursor_statement:
+      en: Run Statement at Cursor
+      zh-CN: 运行光标处语句
+      zh-HK: 執行游標處語句
+    sql_delete_line:
+      en: Delete Line
+      zh-CN: 删除当前行
+      zh-HK: 刪除目前行
+    sql_duplicate_line:
+      en: Duplicate Line
+      zh-CN: 复制当前行
+      zh-HK: 複製目前行
+    sql_swap_line_up:
+      en: Swap Line Up
+      zh-CN: 与上一行交换
+      zh-HK: 與上一行交換
+    sql_uppercase:
+      en: Convert to Uppercase
+      zh-CN: 转换为大写
+      zh-HK: 轉換為大寫
+    sql_lowercase:
+      en: Convert to Lowercase
+      zh-CN: 转换为小写
+      zh-HK: 轉換為小寫
+    sql_execution_history:
+      en: Recently Executed SQL
+      zh-CN: 最近执行的 SQL
+      zh-HK: 最近執行的 SQL
     table_move_selection:
       en: Move Selection
       zh-CN: 移动选区
@@ -5605,6 +5697,10 @@ Settings:
       en: Replace
       zh-CN: 替换
       zh-HK: 取代
+    remote_editor_format:
+      en: Format Document
+      zh-CN: 格式化文档
+      zh-HK: 格式化文件
     redis_clear_output:
       en: Clear Output
       zh-CN: 清空输出

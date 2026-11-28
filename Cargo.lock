@@ -5162,6 +5162,7 @@ dependencies = [
  "tree-sitter-json",
  "tree-sitter-md",
  "tree-sitter-sequel",
+ "tree-sitter-yaml",
  "unicode-segmentation",
  "unicode-width",
  "uuid",
@@ -11876,6 +11877,8 @@ dependencies = [
  "process-util",
  "raw-window-handle",
  "rust-i18n",
+ "serde_json",
+ "serde_yaml",
  "sftp",
  "smol",
  "tokio",
@@ -14982,6 +14985,16 @@ name = "tree-sitter-sequel"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d198ad3c319c02e43c21efa1ec796b837afcb96ffaef1a40c1978fbdcec7d17"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-yaml"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53c223db85f05e34794f065454843b0668ebc15d240ada63e2b5939f43ce7c97"
 dependencies = [
  "cc",
  "tree-sitter-language",

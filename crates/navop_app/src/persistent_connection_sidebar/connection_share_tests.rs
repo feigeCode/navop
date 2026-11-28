@@ -42,6 +42,7 @@ fn ssh_connection() -> StoredConnection {
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         },
         None,
     )
@@ -151,6 +152,7 @@ fn basic_info_omits_nested_credentials_and_embedded_private_keys() {
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         },
         None,
     );
@@ -222,6 +224,7 @@ fn full_info_keeps_credentials_but_always_redacts_embedded_private_key_contents(
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         },
         Some(17),
     );

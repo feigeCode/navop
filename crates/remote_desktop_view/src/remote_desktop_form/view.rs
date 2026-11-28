@@ -23,7 +23,9 @@ use one_assets::IconName;
 use rust_i18n::t;
 
 use super::RemoteDesktopFormWindow;
-use one_core::storage::{RdpAudioMode, RdpEgfxMode, RdpSettings, RemoteDesktopProtocol};
+use one_core::storage::{
+    RdpAudioMode, RdpEgfxMode, RdpKeyboardHookMode, RdpSettings, RemoteDesktopProtocol,
+};
 
 impl RemoteDesktopFormWindow {
     fn render_form_row(&self, label: String, child: impl IntoElement) -> impl IntoElement {
@@ -100,6 +102,8 @@ impl RemoteDesktopFormWindow {
             .child(self.render_read_only_row(cx))
             .when(self.protocol == RemoteDesktopProtocol::Rdp, |form| {
                 let form = form.child(self.render_audio_playback_row(cx));
+                let form = form.child(self.render_keyboard_hook_row(cx));
+                let form = form.child(self.render_legacy_security_row(cx));
                 let form = form.when(self.egfx_controls_visible(), |form| {
                     form.child(self.render_egfx_row(cx))
                 });
@@ -217,6 +221,99 @@ impl RemoteDesktopFormWindow {
                     cx.notify();
                 })),
         )
+    }
+
+    /// 老式 RDP 服务端（如未装 NLA 的 xrdp / 旧版 Windows Server）常常拒绝
+    /// CredSSP 认证；勾选后用「兼容」安全策略再试一次，避免连接在协商阶段就被拒。
+    fn legacy_security_compatible(&self) -> bool {
+        legacy_security_compatible_for(self.rdp_settings.as_ref())
+    }
+
+    fn set_legacy_security_compatible(&mut self, enabled: bool) {
+        apply_legacy_security_compatible(&mut self.rdp_settings, self.audio_playback, enabled);
+    }
+
+    fn render_legacy_security_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .gap_1()
+            .child(
+                self.render_form_row(
+                    t!("RemoteDesktopForm.label_legacy_security").to_string(),
+                    Checkbox::new("remote-desktop-legacy-security")
+                        .checked(self.legacy_security_compatible())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let enabled = !this.legacy_security_compatible();
+                            this.set_legacy_security_compatible(enabled);
+                            cx.notify();
+                        })),
+                ),
+            )
+            .child(
+                div()
+                    .pl(px(112.0))
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("RemoteDesktopForm.legacy_security_hint").to_string()),
+            )
+    }
+
+    /// 键盘接管策略：Alt+Tab / Win 这类系统组合键是否发给远端。
+    ///
+    /// 默认 `Focused`，即在远端窗口获得焦点时接管；用户想用 Alt+Tab 切回本机时可以选
+    /// 「仅本地」。该设置目前只由 Windows 原生 RDP 后端（`windows_rdp_host`）消费。
+    fn keyboard_hook_mode(&self) -> RdpKeyboardHookMode {
+        keyboard_hook_mode_for(self.rdp_settings.as_ref())
+    }
+
+    fn set_keyboard_hook_mode(&mut self, mode: RdpKeyboardHookMode) {
+        apply_keyboard_hook_mode(&mut self.rdp_settings, self.audio_playback, mode);
+    }
+
+    fn render_keyboard_hook_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = self.keyboard_hook_mode();
+        let options = [
+            (
+                "remote-desktop-keyboard-hook-local",
+                RdpKeyboardHookMode::Local,
+                t!("RemoteDesktopForm.keyboard_hook_local").to_string(),
+            ),
+            (
+                "remote-desktop-keyboard-hook-focused",
+                RdpKeyboardHookMode::Focused,
+                t!("RemoteDesktopForm.keyboard_hook_focused").to_string(),
+            ),
+            (
+                "remote-desktop-keyboard-hook-fullscreen",
+                RdpKeyboardHookMode::Fullscreen,
+                t!("RemoteDesktopForm.keyboard_hook_fullscreen").to_string(),
+            ),
+        ];
+
+        let mut row = h_flex().gap_4();
+        for (id, mode, label) in options {
+            row = row.child(
+                Radio::new(id)
+                    .label(label)
+                    .checked(selected == mode)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_keyboard_hook_mode(mode);
+                        cx.notify();
+                    })),
+            );
+        }
+
+        v_flex()
+            .gap_1()
+            .child(
+                self.render_form_row(t!("RemoteDesktopForm.label_keyboard_hook").to_string(), row),
+            )
+            .child(
+                div()
+                    .pl(px(112.0))
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("RemoteDesktopForm.keyboard_hook_hint").to_string()),
+            )
     }
 
     /// The graphics pipeline policy only applies to the IronRDP backend: the Windows native
@@ -355,6 +452,49 @@ impl RemoteDesktopFormWindow {
                 ),
             )
     }
+}
+
+/// 键盘接管策略的读取逻辑独立出来，方便单测覆盖「未设置时取默认值」。
+pub(super) fn keyboard_hook_mode_for(settings: Option<&RdpSettings>) -> RdpKeyboardHookMode {
+    settings
+        .map(|settings| settings.input.keyboard_hook)
+        .unwrap_or_default()
+}
+
+/// 写入键盘接管策略；旧连接还没有 `RdpSettings` 时按当前音频开关补一份默认设置，
+/// 避免为了改一个枚举就把整份 RDP 设置丢掉。
+pub(super) fn apply_keyboard_hook_mode(
+    settings: &mut Option<RdpSettings>,
+    audio_playback: bool,
+    mode: RdpKeyboardHookMode,
+) {
+    settings
+        .get_or_insert_with(|| RdpSettings::from_legacy_audio_playback(audio_playback))
+        .input
+        .keyboard_hook = mode;
+}
+
+/// 是否已经切到「兼容旧服务端」的安全策略：关闭 CredSSP 并把认证级别放宽到 2。
+pub(super) fn legacy_security_compatible_for(settings: Option<&RdpSettings>) -> bool {
+    settings
+        .map(|settings| {
+            !settings.security.enable_credssp && settings.security.authentication_level >= 2
+        })
+        .unwrap_or(false)
+}
+
+/// 写入兼容安全策略；关闭时恢复默认的 CredSSP + 强制认证。
+pub(super) fn apply_legacy_security_compatible(
+    settings: &mut Option<RdpSettings>,
+    audio_playback: bool,
+    enabled: bool,
+) {
+    let security = &mut settings
+        .get_or_insert_with(|| RdpSettings::from_legacy_audio_playback(audio_playback))
+        .security;
+    security.enable_credssp = !enabled;
+    security.authentication_level = if enabled { 2 } else { 0 };
+    security.public_mode = enabled;
 }
 
 impl Focusable for RemoteDesktopFormWindow {

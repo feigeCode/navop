@@ -88,6 +88,7 @@ fn tab_duplicate_requires_a_live_local_ssh_or_serial_terminal() {
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         },
         None,
     );
@@ -263,6 +264,7 @@ fn duplicate_source_for_ssh_terminal_prefers_current_working_dir() {
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         },
         None,
     );
@@ -326,6 +328,7 @@ fn ssh_reconnect_resolves_latest_saved_connection_by_id() {
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         },
         None,
     );
@@ -365,6 +368,7 @@ fn ssh_reconnect_resolves_latest_saved_connection_by_id() {
         icon: None,
         icon_file_path: None,
         account_expect: Default::default(),
+        proxy_command: None,
     })
     .expect("SSH params should serialize");
     let source = TerminalDuplicateSource::Ssh {
@@ -566,6 +570,32 @@ fn clipboard_image_upload_is_only_for_ssh_shell_paste() {
 }
 
 #[test]
+fn disabled_ssh_image_upload_reports_instead_of_dropping_the_image() {
+    // #529：SSH 终端关掉「图片上传到远端」时，以前会把图片静默丢掉。
+    assert!(clipboard_image_upload_is_disabled(
+        false,
+        TerminalConnectionKind::Ssh,
+        true
+    ));
+    // 没图、或不是 SSH、或上传本来就是开着的，都不该提示。
+    assert!(!clipboard_image_upload_is_disabled(
+        false,
+        TerminalConnectionKind::Ssh,
+        false
+    ));
+    assert!(!clipboard_image_upload_is_disabled(
+        false,
+        TerminalConnectionKind::Local,
+        true
+    ));
+    assert!(!clipboard_image_upload_is_disabled(
+        true,
+        TerminalConnectionKind::Ssh,
+        true
+    ));
+}
+
+#[test]
 fn clipboard_image_upload_intercepts_ssh_tui_modes() {
     for mode in [
         TermMode::ALT_SCREEN,
@@ -585,6 +615,22 @@ fn clipboard_image_upload_intercepts_ssh_tui_modes() {
             mode
         ));
     }
+}
+
+#[test]
+fn local_clipboard_image_path_uses_extension_of_the_format() {
+    use crate::view::helpers::local_clipboard_image_path;
+    use gpui::ImageFormat;
+
+    let directory = std::path::Path::new("/tmp/navop-pasted-images");
+    assert_eq!(
+        local_clipboard_image_path(directory, ImageFormat::Png, 42),
+        std::path::PathBuf::from("/tmp/navop-pasted-images/image-42.png")
+    );
+    assert_eq!(
+        local_clipboard_image_path(directory, ImageFormat::Jpeg, 7),
+        std::path::PathBuf::from("/tmp/navop-pasted-images/image-7.jpg")
+    );
 }
 
 #[test]

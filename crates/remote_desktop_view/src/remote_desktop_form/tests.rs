@@ -1,5 +1,9 @@
-use one_core::storage::{RdpSettings, RemoteDesktopProtocol};
+use one_core::storage::{RdpAudioMode, RdpKeyboardHookMode, RdpSettings, RemoteDesktopProtocol};
 
+use super::view::{
+    apply_keyboard_hook_mode, apply_legacy_security_compatible, keyboard_hook_mode_for,
+    legacy_security_compatible_for,
+};
 use super::{audio_playback_for_protocol, rdp_settings_for_protocol};
 
 #[test]
@@ -142,4 +146,70 @@ fn form_offers_the_graphics_pipeline_policy_per_connection() {
     // RDP connections render it, and only when the helper is the backend that runs.
     assert!(view.contains("self.egfx_controls_visible()"));
     assert!(view.contains("form.child(self.render_egfx_row(cx))"));
+}
+
+#[test]
+fn keyboard_hook_defaults_to_focused_when_settings_are_missing() {
+    assert_eq!(RdpKeyboardHookMode::Focused, keyboard_hook_mode_for(None));
+    assert_eq!(
+        RdpKeyboardHookMode::Focused,
+        keyboard_hook_mode_for(Some(&RdpSettings::default()))
+    );
+}
+
+#[test]
+fn keyboard_hook_choice_creates_settings_and_keeps_other_fields() {
+    let mut settings = None;
+    apply_keyboard_hook_mode(&mut settings, true, RdpKeyboardHookMode::Local);
+
+    let mut settings = settings.expect("应补出一份设置");
+    assert_eq!(RdpKeyboardHookMode::Local, settings.input.keyboard_hook);
+    // 旧连接没有设置时按当前音频开关补默认值，音频不能被这次写入改掉。
+    assert_eq!(RdpAudioMode::Local, settings.audio.mode);
+
+    let mut settings = Some(settings);
+    apply_keyboard_hook_mode(&mut settings, false, RdpKeyboardHookMode::Fullscreen);
+    let settings = settings.expect("设置仍在");
+    assert_eq!(
+        RdpKeyboardHookMode::Fullscreen,
+        settings.input.keyboard_hook
+    );
+}
+
+#[test]
+fn legacy_security_is_off_by_default() {
+    // 默认策略必须仍然要求 CredSSP，兼容模式只能由用户显式打开。
+    assert!(!legacy_security_compatible_for(None));
+    assert!(!legacy_security_compatible_for(Some(
+        &RdpSettings::default()
+    )));
+}
+
+#[test]
+fn enabling_legacy_security_relaxes_credssp_and_authentication() {
+    let mut settings: Option<RdpSettings> = None;
+
+    apply_legacy_security_compatible(&mut settings, true, true);
+
+    let settings = settings.expect("settings created");
+    assert!(!settings.security.enable_credssp);
+    assert_eq!(2, settings.security.authentication_level);
+    assert!(settings.security.public_mode);
+    // 其它字段沿用默认值，不能因为改一个开关就丢掉音频等设置。
+    assert_eq!(RdpAudioMode::Local, settings.audio.mode);
+    assert!(legacy_security_compatible_for(Some(&settings)));
+}
+
+#[test]
+fn disabling_legacy_security_restores_the_default_policy() {
+    let mut settings: Option<RdpSettings> = None;
+    apply_legacy_security_compatible(&mut settings, false, true);
+
+    apply_legacy_security_compatible(&mut settings, false, false);
+
+    let settings = settings.expect("settings kept");
+    assert!(settings.security.enable_credssp);
+    assert_eq!(0, settings.security.authentication_level);
+    assert!(!settings.security.public_mode);
+    assert!(!legacy_security_compatible_for(Some(&settings)));
 }

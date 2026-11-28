@@ -94,6 +94,7 @@ fn build_ssh(input: &Value) -> Result<StoredConnection, ToolError> {
         icon: None,
         icon_file_path: None,
         account_expect: Default::default(),
+        proxy_command: None,
     };
     Ok(with_common_fields(
         StoredConnection::new_ssh(

@@ -272,10 +272,14 @@ async fn load_schema_routines(
     let query_schema = fallback_schema.clone();
     let (functions, procedures) = Tokio::spawn_result(cx, async move {
         let functions = db_state
-            .list_functions_in_schema_direct(&connection_id, &database, query_schema.clone())
+            .list_functions_in_schema_for_compare_direct(
+                &connection_id,
+                &database,
+                query_schema.clone(),
+            )
             .await?;
         let procedures = db_state
-            .list_procedures_in_schema_direct(&connection_id, &database, query_schema)
+            .list_procedures_in_schema_for_compare_direct(&connection_id, &database, query_schema)
             .await?;
         Ok((functions, procedures))
     })

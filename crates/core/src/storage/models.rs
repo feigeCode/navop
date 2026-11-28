@@ -589,6 +589,12 @@ pub struct SshParams {
     /// 代理配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
+    /// OpenSSH 风格的 ProxyCommand（issue #540）。
+    ///
+    /// `%h`/`%p` 会替换成目标主机与端口；命令的 stdin/stdout 作为 SSH 传输层。
+    /// 与跳板机、代理互斥，同时存在时优先使用本字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_command: Option<String>,
     /// 远端操作系统 ID（测试连接时从 /etc/os-release 探测，用于连接图标展示）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os_id: Option<String>,
@@ -1962,6 +1968,104 @@ fn default_forward_bind_host() -> String {
     "127.0.0.1".to_string()
 }
 
+/// 连接所处的环境标记（issue #30 第 5 点）。
+///
+/// 目前只用于在界面上给出「生产环境」提示，避免在正式库上误执行破坏性 SQL；
+/// 值存放在 `DbConnectionConfig::extra_params` 的 `environment` 键里。
+pub const ENVIRONMENT_PARAM: &str = "environment";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DbEnvironment {
+    /// 未标记：不做任何提示，行为与旧版本一致。
+    #[default]
+    Unspecified,
+    Development,
+    Staging,
+    Production,
+}
+
+impl DbEnvironment {
+    pub fn from_param(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "development" | "dev" => Self::Development,
+            "staging" | "test" | "testing" => Self::Staging,
+            "production" | "prod" => Self::Production,
+            _ => Self::Unspecified,
+        }
+    }
+
+    pub fn from_params(extra_params: &std::collections::HashMap<String, String>) -> Self {
+        extra_params
+            .get(ENVIRONMENT_PARAM)
+            .map(|value| Self::from_param(value))
+            .unwrap_or_default()
+    }
+
+    pub fn as_param(self) -> &'static str {
+        match self {
+            Self::Unspecified => "",
+            Self::Development => "development",
+            Self::Staging => "staging",
+            Self::Production => "production",
+        }
+    }
+
+    pub fn is_production(self) -> bool {
+        matches!(self, Self::Production)
+    }
+}
+
+/// 连接时是否向用户询问凭据（issue #39 的延迟录入）。
+pub const PROMPT_CREDENTIALS_PARAM: &str = "prompt_credentials";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DbCredentialPrompt {
+    /// 直接使用已保存的凭据（旧行为）。
+    #[default]
+    Never,
+    /// 每次连接都询问密码，用户名用连接里保存的。
+    Password,
+    /// 每次连接都询问用户名与密码。
+    UsernameAndPassword,
+}
+
+impl DbCredentialPrompt {
+    pub fn from_param(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "password" => Self::Password,
+            "both" | "username_and_password" => Self::UsernameAndPassword,
+            _ => Self::Never,
+        }
+    }
+
+    pub fn from_params(extra_params: &std::collections::HashMap<String, String>) -> Self {
+        extra_params
+            .get(PROMPT_CREDENTIALS_PARAM)
+            .map(|value| Self::from_param(value))
+            .unwrap_or_default()
+    }
+
+    pub fn as_param(self) -> &'static str {
+        match self {
+            Self::Never => "",
+            Self::Password => "password",
+            Self::UsernameAndPassword => "both",
+        }
+    }
+
+    pub fn prompts(self) -> bool {
+        !matches!(self, Self::Never)
+    }
+
+    pub fn prompts_for_username(self) -> bool {
+        matches!(self, Self::UsernameAndPassword)
+    }
+
+    pub fn prompts_for_password(self) -> bool {
+        matches!(self, Self::Password | Self::UsernameAndPassword)
+    }
+}
+
 /// Connection configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbConnectionConfig {
@@ -1985,6 +2089,40 @@ pub struct DbConnectionConfig {
     pub proxy: Option<ProxyConfig>,
     #[serde(default)]
     pub extra_params: std::collections::HashMap<String, String>,
+}
+
+/// 本次会话中由用户临时输入的凭据（issue #39）。
+///
+/// 只存在内存里，不写回连接配置；连接一旦关闭或应用退出即丢弃。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DbSessionCredentials {
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+impl DbConnectionConfig {
+    /// 该连接是否要求连接时询问凭据。
+    pub fn credential_prompt(&self) -> DbCredentialPrompt {
+        DbCredentialPrompt::from_params(&self.extra_params)
+    }
+
+    /// 把本次会话输入的凭据合并进配置：只有开启了对应提示的字段才会被覆盖，
+    /// 未开启时仍以连接里保存的值为准（issue #39）。
+    pub fn with_session_credentials(mut self, credentials: &DbSessionCredentials) -> Self {
+        let prompt = self.credential_prompt();
+        if prompt.prompts_for_username()
+            && let Some(username) = credentials.username.as_deref()
+            && !username.trim().is_empty()
+        {
+            self.username = username.to_string();
+        }
+        if prompt.prompts_for_password()
+            && let Some(password) = credentials.password.as_deref()
+        {
+            self.password = password.to_string();
+        }
+        self
+    }
 }
 
 impl DbConnectionConfig {
@@ -3135,6 +3273,7 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             Some(7),
         );
@@ -3369,6 +3508,7 @@ mod tests {
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         };
         assert_eq!(
             "root@localhost:22",
@@ -4562,6 +4702,7 @@ mod serial_tests {
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            proxy_command: None,
         };
         let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
         assert!(json.contains("\"os_id\":\"ubuntu\""));
@@ -4608,6 +4749,28 @@ mod serial_tests {
 
         let parsed: SshParams = serde_json::from_str(&json).expect("SshParams 应可反序列化");
         assert_eq!(parsed.allow_legacy_algorithms, Some(true));
+    }
+
+    #[test]
+    fn ssh_params_proxy_command_round_trips_and_legacy_json_defaults_none() {
+        let legacy: SshParams = serde_json::from_str(
+            r#"{"host":"example.com","port":22,"username":"root","auth_method":"Agent"}"#,
+        )
+        .expect("旧连接缺少 ProxyCommand 字段时应可反序列化");
+        assert!(legacy.proxy_command.is_none());
+        let legacy_json = serde_json::to_string(&legacy).expect("SshParams 应可序列化");
+        assert!(!legacy_json.contains("proxy_command"));
+
+        let mut params = legacy;
+        params.proxy_command = Some("cloudflared access tcp -T %h:%p".to_string());
+        let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
+        assert!(json.contains("proxy_command"));
+
+        let parsed: SshParams = serde_json::from_str(&json).expect("SshParams 应可反序列化");
+        assert_eq!(
+            parsed.proxy_command.as_deref(),
+            Some("cloudflared access tcp -T %h:%p")
+        );
     }
 
     #[test]
@@ -4846,6 +5009,7 @@ mod serial_tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -5188,6 +5352,7 @@ mod serial_tests {
             os_id: None,
             icon: None,
             icon_file_path: None,
+            proxy_command: None,
         }
     }
 
@@ -5427,6 +5592,7 @@ mod serial_tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                proxy_command: None,
             },
             None,
         );
@@ -5620,5 +5786,114 @@ mod serial_tests {
             params
         );
         assert!(decrypt_sensitive_params_with_key("{not json", "unused").is_err());
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+
+    #[test]
+    fn environment_parses_known_aliases_and_defaults_to_unspecified() {
+        assert_eq!(
+            DbEnvironment::Production,
+            DbEnvironment::from_param("production")
+        );
+        assert_eq!(DbEnvironment::Production, DbEnvironment::from_param(" PROD "));
+        assert_eq!(DbEnvironment::Staging, DbEnvironment::from_param("test"));
+        assert_eq!(DbEnvironment::Development, DbEnvironment::from_param("dev"));
+        assert_eq!(DbEnvironment::Unspecified, DbEnvironment::from_param(""));
+        assert_eq!(
+            DbEnvironment::Unspecified,
+            DbEnvironment::from_param("eu-west-1")
+        );
+    }
+
+    #[test]
+    fn environment_reads_the_extra_params_key_and_round_trips() {
+        let mut params = std::collections::HashMap::new();
+        params.insert(ENVIRONMENT_PARAM.to_string(), "production".to_string());
+
+        let environment = DbEnvironment::from_params(&params);
+        assert!(environment.is_production());
+        assert_eq!("production", environment.as_param());
+        assert_eq!("", DbEnvironment::Unspecified.as_param());
+    }
+
+    fn config_with_prompt(prompt: DbCredentialPrompt) -> DbConnectionConfig {
+        let mut params = std::collections::HashMap::new();
+        if !prompt.as_param().is_empty() {
+            params.insert(
+                PROMPT_CREDENTIALS_PARAM.to_string(),
+                prompt.as_param().to_string(),
+            );
+        }
+        DbConnectionConfig {
+            id: "1".to_string(),
+            database_type: DatabaseType::MySQL,
+            name: "local".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 3306,
+            username: "saved-user".to_string(),
+            password: "saved-password".to_string(),
+            credential_reference: None,
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            proxy: None,
+            extra_params: params,
+        }
+    }
+
+    #[test]
+    fn credential_prompt_parses_known_values() {
+        assert_eq!(
+            DbCredentialPrompt::Password,
+            DbCredentialPrompt::from_param("password")
+        );
+        assert_eq!(
+            DbCredentialPrompt::UsernameAndPassword,
+            DbCredentialPrompt::from_param(" BOTH ")
+        );
+        assert_eq!(
+            DbCredentialPrompt::Never,
+            DbCredentialPrompt::from_param("something-else")
+        );
+        assert!(!DbCredentialPrompt::Never.prompts());
+        assert!(DbCredentialPrompt::Password.prompts_for_password());
+        assert!(!DbCredentialPrompt::Password.prompts_for_username());
+        assert!(DbCredentialPrompt::UsernameAndPassword.prompts_for_username());
+    }
+
+    #[test]
+    fn session_credentials_only_override_the_fields_being_prompted() {
+        // 只提示密码：用户名仍用连接里保存的。
+        let password_only = config_with_prompt(DbCredentialPrompt::Password)
+            .with_session_credentials(&DbSessionCredentials {
+                username: Some("typed-user".to_string()),
+                password: Some("typed-password".to_string()),
+            });
+        assert_eq!("saved-user", password_only.username);
+        assert_eq!("typed-password", password_only.password);
+
+        // 用户名 + 密码都提示：两个字段都用本次输入。
+        let both = config_with_prompt(DbCredentialPrompt::UsernameAndPassword)
+            .with_session_credentials(&DbSessionCredentials {
+                username: Some("typed-user".to_string()),
+                password: Some("typed-password".to_string()),
+            });
+        assert_eq!("typed-user", both.username);
+        assert_eq!("typed-password", both.password);
+
+        // 没开提示：本次输入一律忽略。
+        let never = config_with_prompt(DbCredentialPrompt::Never).with_session_credentials(
+            &DbSessionCredentials {
+                username: Some("typed-user".to_string()),
+                password: Some("typed-password".to_string()),
+            },
+        );
+        assert_eq!("saved-user", never.username);
+        assert_eq!("saved-password", never.password);
     }
 }
