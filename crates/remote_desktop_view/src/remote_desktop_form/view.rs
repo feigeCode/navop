@@ -23,7 +23,9 @@ use one_assets::IconName;
 use rust_i18n::t;
 
 use super::RemoteDesktopFormWindow;
-use one_core::storage::{RdpAudioMode, RdpEgfxMode, RdpSettings, RemoteDesktopProtocol};
+use one_core::storage::{
+    RdpAudioMode, RdpEgfxMode, RdpKeyboardHookMode, RdpSettings, RemoteDesktopProtocol,
+};
 
 impl RemoteDesktopFormWindow {
     fn render_form_row(&self, label: String, child: impl IntoElement) -> impl IntoElement {
@@ -100,6 +102,7 @@ impl RemoteDesktopFormWindow {
             .child(self.render_read_only_row(cx))
             .when(self.protocol == RemoteDesktopProtocol::Rdp, |form| {
                 let form = form.child(self.render_audio_playback_row(cx));
+                let form = form.child(self.render_keyboard_hook_row(cx));
                 let form = form.when(self.egfx_controls_visible(), |form| {
                     form.child(self.render_egfx_row(cx))
                 });
@@ -217,6 +220,65 @@ impl RemoteDesktopFormWindow {
                     cx.notify();
                 })),
         )
+    }
+
+    /// 键盘接管策略：Alt+Tab / Win 这类系统组合键是否发给远端。
+    ///
+    /// 默认 `Focused`，即在远端窗口获得焦点时接管；用户想用 Alt+Tab 切回本机时可以选
+    /// 「仅本地」。该设置目前只由 Windows 原生 RDP 后端（`windows_rdp_host`）消费。
+    fn keyboard_hook_mode(&self) -> RdpKeyboardHookMode {
+        keyboard_hook_mode_for(self.rdp_settings.as_ref())
+    }
+
+    fn set_keyboard_hook_mode(&mut self, mode: RdpKeyboardHookMode) {
+        apply_keyboard_hook_mode(&mut self.rdp_settings, self.audio_playback, mode);
+    }
+
+    fn render_keyboard_hook_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = self.keyboard_hook_mode();
+        let options = [
+            (
+                "remote-desktop-keyboard-hook-local",
+                RdpKeyboardHookMode::Local,
+                t!("RemoteDesktopForm.keyboard_hook_local").to_string(),
+            ),
+            (
+                "remote-desktop-keyboard-hook-focused",
+                RdpKeyboardHookMode::Focused,
+                t!("RemoteDesktopForm.keyboard_hook_focused").to_string(),
+            ),
+            (
+                "remote-desktop-keyboard-hook-fullscreen",
+                RdpKeyboardHookMode::Fullscreen,
+                t!("RemoteDesktopForm.keyboard_hook_fullscreen").to_string(),
+            ),
+        ];
+
+        let mut row = h_flex().gap_4();
+        for (id, mode, label) in options {
+            row = row.child(
+                Radio::new(id)
+                    .label(label)
+                    .checked(selected == mode)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_keyboard_hook_mode(mode);
+                        cx.notify();
+                    })),
+            );
+        }
+
+        v_flex()
+            .gap_1()
+            .child(
+                self.render_form_row(t!("RemoteDesktopForm.label_keyboard_hook").to_string(), row),
+            )
+            .child(
+                div()
+                    .pl(px(112.0))
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("RemoteDesktopForm.keyboard_hook_hint").to_string()),
+            )
     }
 
     /// The graphics pipeline policy only applies to the IronRDP backend: the Windows native
@@ -355,6 +417,26 @@ impl RemoteDesktopFormWindow {
                 ),
             )
     }
+}
+
+/// 键盘接管策略的读取逻辑独立出来，方便单测覆盖「未设置时取默认值」。
+pub(super) fn keyboard_hook_mode_for(settings: Option<&RdpSettings>) -> RdpKeyboardHookMode {
+    settings
+        .map(|settings| settings.input.keyboard_hook)
+        .unwrap_or_default()
+}
+
+/// 写入键盘接管策略；旧连接还没有 `RdpSettings` 时按当前音频开关补一份默认设置，
+/// 避免为了改一个枚举就把整份 RDP 设置丢掉。
+pub(super) fn apply_keyboard_hook_mode(
+    settings: &mut Option<RdpSettings>,
+    audio_playback: bool,
+    mode: RdpKeyboardHookMode,
+) {
+    settings
+        .get_or_insert_with(|| RdpSettings::from_legacy_audio_playback(audio_playback))
+        .input
+        .keyboard_hook = mode;
 }
 
 impl Focusable for RemoteDesktopFormWindow {

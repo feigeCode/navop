@@ -1,5 +1,6 @@
-use one_core::storage::{RdpSettings, RemoteDesktopProtocol};
+use one_core::storage::{RdpAudioMode, RdpKeyboardHookMode, RdpSettings, RemoteDesktopProtocol};
 
+use super::view::{apply_keyboard_hook_mode, keyboard_hook_mode_for};
 use super::{audio_playback_for_protocol, rdp_settings_for_protocol};
 
 #[test]
@@ -142,4 +143,32 @@ fn form_offers_the_graphics_pipeline_policy_per_connection() {
     // RDP connections render it, and only when the helper is the backend that runs.
     assert!(view.contains("self.egfx_controls_visible()"));
     assert!(view.contains("form.child(self.render_egfx_row(cx))"));
+}
+
+#[test]
+fn keyboard_hook_defaults_to_focused_when_settings_are_missing() {
+    assert_eq!(RdpKeyboardHookMode::Focused, keyboard_hook_mode_for(None));
+    assert_eq!(
+        RdpKeyboardHookMode::Focused,
+        keyboard_hook_mode_for(Some(&RdpSettings::default()))
+    );
+}
+
+#[test]
+fn keyboard_hook_choice_creates_settings_and_keeps_other_fields() {
+    let mut settings = None;
+    apply_keyboard_hook_mode(&mut settings, true, RdpKeyboardHookMode::Local);
+
+    let mut settings = settings.expect("应补出一份设置");
+    assert_eq!(RdpKeyboardHookMode::Local, settings.input.keyboard_hook);
+    // 旧连接没有设置时按当前音频开关补默认值，音频不能被这次写入改掉。
+    assert_eq!(RdpAudioMode::Local, settings.audio.mode);
+
+    let mut settings = Some(settings);
+    apply_keyboard_hook_mode(&mut settings, false, RdpKeyboardHookMode::Fullscreen);
+    let settings = settings.expect("设置仍在");
+    assert_eq!(
+        RdpKeyboardHookMode::Fullscreen,
+        settings.input.keyboard_hook
+    );
 }
