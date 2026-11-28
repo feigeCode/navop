@@ -646,12 +646,7 @@ impl SettingsPanel {
         cx.notify();
     }
 
-    pub fn set_tmux_socket(
-        &mut self,
-        socket: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn set_tmux_socket(&mut self, socket: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.tmux_socket = socket.to_string();
         self.suppress_tmux_socket_change = true;
         self.tmux_socket_input_state.update(cx, |state, cx| {
@@ -1166,11 +1161,7 @@ impl SettingsPanel {
                                     .text_color(muted_fg)
                                     .child(t!("Settings.tmux_socket")),
                             )
-                            .child(
-                                Input::new(&self.tmux_socket_input_state)
-                                    .small()
-                                    .w_full(),
-                            )
+                            .child(Input::new(&self.tmux_socket_input_state).small().w_full())
                             .child(
                                 div()
                                     .text_xs()
