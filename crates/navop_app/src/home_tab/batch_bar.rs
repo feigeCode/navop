@@ -4,7 +4,7 @@ use super::*;
 use gpui_component::Disableable as _;
 
 impl HomePage {
-    /// 批量模式下的操作条：已选计数、全选可见、移动到分组、批量改 SSH 用户名/密码、删除、退出批量模式。
+    /// 批量模式下的操作条：已选计数、全选可见、移动到分组、批量改 SSH 用户名/密码/图标、删除、退出批量模式。
     pub(super) fn render_batch_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let selected_ids = self.connection_selection.ids();
         let query = self.search_query.read(cx).to_lowercase();
@@ -37,6 +37,7 @@ impl HomePage {
             ))
             .child(edit_ssh_username_button(view.clone(), selected_ids.clone()))
             .child(edit_ssh_password_button(view.clone(), selected_ids.clone()))
+            .child(edit_ssh_icon_button(view.clone(), selected_ids.clone()))
             .child(delete_connections_button(view.clone(), selected_ids))
             .child(exit_batch_mode_button(view))
             .into_any_element()
@@ -112,6 +113,19 @@ fn edit_ssh_password_button(view: Entity<HomePage>, selected_ids: Vec<i64>) -> I
         })
 }
 
+fn edit_ssh_icon_button(view: Entity<HomePage>, selected_ids: Vec<i64>) -> IconButton {
+    let disabled = selected_ids.is_empty();
+    IconButton::new("home-edit-selected-ssh-icons", IconName::Palette)
+        .role(IconButtonRole::Compact)
+        .tooltip(t!("Connection.batch_edit_ssh_icon"))
+        .disabled(disabled)
+        .on_click(move |_, window, cx| {
+            view.update(cx, |home, cx| {
+                home.edit_selected_ssh_icons(selected_ids.clone(), window, cx);
+            });
+        })
+}
+
 fn edit_ssh_username_button(view: Entity<HomePage>, selected_ids: Vec<i64>) -> IconButton {
     let disabled = selected_ids.is_empty();
     IconButton::new("home-edit-selected-ssh-usernames", IconName::Edit)
@@ -156,6 +170,7 @@ mod tests {
         assert!(source.contains("home-move-selected-connections"));
         assert!(source.contains("home-edit-selected-ssh-usernames"));
         assert!(source.contains("home-edit-selected-ssh-passwords"));
+        assert!(source.contains("home-edit-selected-ssh-icons"));
         assert!(source.contains("home-delete-selected-connections"));
         assert!(source.contains("home-exit-batch-connections"));
     }

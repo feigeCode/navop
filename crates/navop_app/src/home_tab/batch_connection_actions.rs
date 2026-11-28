@@ -1,5 +1,9 @@
 use super::*;
-use one_core::storage::{SshAuthMethod, StoredConnection};
+use gpui_component::{
+    IndexPath,
+    select::{Select, SelectItem, SelectState},
+};
+use one_core::storage::{SSH_ICON_IDS, SshAuthMethod, StoredConnection};
 
 fn unique_manageable_connection_ids(
     connection_ids: Vec<i64>,
@@ -128,6 +132,69 @@ impl HomePage {
         );
     }
 
+    /// 批量把选中 SSH 连接的图标改成同一个（#62「批量修改图标」）。
+    ///
+    /// 「自动」= 清掉手动指定，仍按探测到的系统图标显示。
+    pub(crate) fn edit_selected_ssh_icons(
+        &mut self,
+        connection_ids: Vec<i64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let connection_ids =
+            unique_manageable_connection_ids(connection_ids, |id| self.can_move_connection(id));
+        let connection_ids = select_editable_ssh_connections(
+            self.connections.iter(),
+            connection_ids,
+            SshCredentialField::Username,
+        );
+        if connection_ids.is_empty() {
+            window.open_dialog(cx, move |dialog, _window, _cx| {
+                dialog
+                    .title(t!("Connection.batch_edit_ssh_icon").to_string())
+                    .child(t!("Connection.batch_edit_no_ssh").to_string())
+                    .alert()
+            });
+            return;
+        }
+
+        let count = connection_ids.len();
+        let icon_select = cx
+            .new(|cx| SelectState::new(batch_icon_choices(), Some(IndexPath::new(0)), window, cx));
+        let view = cx.entity();
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let icon_select = icon_select.clone();
+            let view = view.clone();
+            let connection_ids = connection_ids.clone();
+
+            dialog
+                .title(t!("Connection.batch_edit_ssh_icon").to_string())
+                .width(px(460.))
+                .confirm()
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(t!("Connection.batch_edit_icon_hint", count = count).to_string())
+                        .child(t!("Connection.batch_edit_icon_select").to_string())
+                        .child(Select::new(&icon_select)),
+                )
+                .on_ok(move |_, _window, cx: &mut App| {
+                    let icon = icon_select.read(cx).selected_value().cloned().flatten();
+                    persist_ssh_params_edits(
+                        view.clone(),
+                        connection_ids.clone(),
+                        cx,
+                        move |params| {
+                            apply_batch_ssh_icon(params, icon.as_deref());
+                            true
+                        },
+                    );
+                    true
+                })
+        });
+    }
+
     /// 凭据批量编辑的公共实现：弹窗输入一次，写到所有命中的 SSH 连接上。
     fn edit_selected_ssh_credentials(
         &mut self,
@@ -197,70 +264,121 @@ impl HomePage {
                         return false;
                     }
 
-                    let storage = cx.global::<GlobalStorageState>().storage.clone();
-                    let connection_ids = connection_ids.clone();
-                    let save_task =
-                        cx.background_spawn(async move {
-                            let repo = storage
-                                .get::<ConnectionRepository>()
-                                .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
-                            let mut updated_connections = Vec::new();
-                            let mut skipped = 0usize;
-                            for connection_id in connection_ids {
-                                let Some(connection) = repo.get(connection_id)? else {
-                                    skipped += 1;
-                                    continue;
-                                };
-                                let decrypted = connection.with_decrypted_params();
-                                let Ok(mut params) =
-                                    serde_json::from_str::<one_core::storage::SshParams>(
-                                        &decrypted.params,
-                                    )
-                                else {
-                                    skipped += 1;
-                                    continue;
-                                };
-                                if !field.apply(&mut params, &value) {
-                                    skipped += 1;
-                                    continue;
-                                }
-                                let mut updated = decrypted;
-                                updated.params = serde_json::to_string(&params)?;
-                                repo.update(&updated)?;
-                                updated_connections.push(updated);
-                            }
-                            Ok::<_, anyhow::Error>((updated_connections, skipped))
-                        });
-
-                    cx.spawn(async move |cx| match save_task.await {
-                        Ok((updated_connections, skipped)) => {
-                            _ = view.update(cx, |home, cx| {
-                                for connection in updated_connections {
-                                    if let Some(item) = home
-                                        .connections
-                                        .iter_mut()
-                                        .find(|item| item.id == connection.id)
-                                    {
-                                        *item = connection.clone();
-                                    }
-                                    emit_connection_event(
-                                        ConnectionDataEvent::ConnectionUpdated { connection },
-                                        cx,
-                                    );
-                                }
-                                cx.notify();
-                            });
-                            if skipped > 0 {
-                                tracing::warn!(skipped, "批量修改 SSH 凭据时跳过了无法处理的连接");
-                            }
-                        }
-                        Err(error) => tracing::error!("批量修改 SSH 凭据失败: {error}"),
-                    })
-                    .detach();
+                    persist_ssh_params_edits(
+                        view.clone(),
+                        connection_ids.clone(),
+                        cx,
+                        move |params| field.apply(params, &value),
+                    );
                     true
                 })
         });
     }
+}
+
+/// 把一批 SSH 连接的参数改动写回存储并同步主页列表（#62 批量编辑的公共实现）。
+fn persist_ssh_params_edits<F>(
+    view: Entity<HomePage>,
+    connection_ids: Vec<i64>,
+    cx: &mut App,
+    mutate: F,
+) where
+    F: Fn(&mut one_core::storage::SshParams) -> bool + Send + 'static,
+{
+    let storage = cx.global::<GlobalStorageState>().storage.clone();
+    let save_task = cx.background_spawn(async move {
+        let repo = storage
+            .get::<ConnectionRepository>()
+            .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
+        let mut updated_connections = Vec::new();
+        let mut skipped = 0usize;
+        for connection_id in connection_ids {
+            let Some(connection) = repo.get(connection_id)? else {
+                skipped += 1;
+                continue;
+            };
+            let decrypted = connection.with_decrypted_params();
+            let Ok(mut params) =
+                serde_json::from_str::<one_core::storage::SshParams>(&decrypted.params)
+            else {
+                skipped += 1;
+                continue;
+            };
+            if !mutate(&mut params) {
+                skipped += 1;
+                continue;
+            }
+            let mut updated = decrypted;
+            updated.params = serde_json::to_string(&params)?;
+            repo.update(&updated)?;
+            updated_connections.push(updated);
+        }
+        Ok::<_, anyhow::Error>((updated_connections, skipped))
+    });
+
+    cx.spawn(async move |cx| match save_task.await {
+        Ok((updated_connections, skipped)) => {
+            _ = view.update(cx, |home, cx| {
+                for connection in updated_connections {
+                    if let Some(item) = home
+                        .connections
+                        .iter_mut()
+                        .find(|item| item.id == connection.id)
+                    {
+                        *item = connection.clone();
+                    }
+                    emit_connection_event(
+                        ConnectionDataEvent::ConnectionUpdated { connection },
+                        cx,
+                    );
+                }
+                cx.notify();
+            });
+            if skipped > 0 {
+                tracing::warn!(skipped, "批量修改 SSH 连接时跳过了无法处理的连接");
+            }
+        }
+        Err(error) => tracing::error!("批量修改 SSH 连接失败: {error}"),
+    })
+    .detach();
+}
+
+/// 批量改图标下拉里的一项；`id` 为空表示「自动」（按探测到的系统选择）。
+#[derive(Clone)]
+struct BatchIconChoice {
+    id: Option<String>,
+    label: String,
+}
+
+impl SelectItem for BatchIconChoice {
+    type Value = Option<String>;
+
+    fn title(&self) -> SharedString {
+        self.label.clone().into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+}
+
+/// 「自动」+ 全部内置 SSH 图标，顺序与单项编辑里的一致。
+fn batch_icon_choices() -> Vec<BatchIconChoice> {
+    std::iter::once(BatchIconChoice {
+        id: None,
+        label: t!("Connection.batch_edit_icon_auto").to_string(),
+    })
+    .chain(SSH_ICON_IDS.iter().map(|id| BatchIconChoice {
+        id: Some((*id).to_string()),
+        label: (*id).to_string(),
+    }))
+    .collect()
+}
+
+/// 写入批量选择的图标；手选内置图标时清掉本地图片，避免图片继续优先显示。
+fn apply_batch_ssh_icon(params: &mut one_core::storage::SshParams, icon: Option<&str>) {
+    params.icon = icon.map(str::to_string);
+    params.icon_file_path = None;
 }
 
 /// 批量编辑的 SSH 凭据字段（#62）。
@@ -380,9 +498,10 @@ fn select_editable_ssh_connections<'a>(
 #[cfg(test)]
 mod tests {
     use super::{
-        SshCredentialField, select_editable_ssh_connections, set_ssh_password,
-        unique_manageable_connection_ids,
+        SshCredentialField, apply_batch_ssh_icon, batch_icon_choices,
+        select_editable_ssh_connections, set_ssh_password, unique_manageable_connection_ids,
     };
+    use one_core::storage::SSH_ICON_IDS;
     use one_core::storage::{ConnectionType, SshAuthMethod, StoredConnection};
 
     #[test]
@@ -467,6 +586,41 @@ mod tests {
     }
 
     #[test]
+    fn batch_icon_choices_cover_auto_and_every_built_in_icon() {
+        let choices = batch_icon_choices();
+
+        assert_eq!(choices.len(), SSH_ICON_IDS.len() + 1);
+        assert_eq!(choices[0].id, None);
+        assert_eq!(choices[1].id.as_deref(), Some("linux"));
+        assert!(
+            choices
+                .iter()
+                .any(|choice| choice.id.as_deref() == Some("docker"))
+        );
+    }
+
+    #[test]
+    fn batch_icon_edit_clears_the_custom_icon_file_and_auto_resets() {
+        let mut params: one_core::storage::SshParams = serde_json::from_value(serde_json::json!({
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "auth_method": SshAuthMethod::Agent,
+            "icon": "debian",
+            "icon_file_path": "/tmp/icon.png",
+        }))
+        .expect("SshParams 反序列化不应失败");
+
+        apply_batch_ssh_icon(&mut params, Some("ubuntu"));
+        assert_eq!(params.icon.as_deref(), Some("ubuntu"));
+        assert_eq!(params.icon_file_path, None);
+
+        apply_batch_ssh_icon(&mut params, None);
+        assert_eq!(params.icon, None);
+        assert_eq!(params.icon_file_path, None);
+    }
+
+    #[test]
     fn batch_actions_have_one_confirmation_and_reuse_single_connection_operations() {
         let source = include_str!("batch_connection_actions.rs");
         assert!(source.contains("show_batch_delete_confirmation"));
@@ -474,5 +628,7 @@ mod tests {
         assert!(source.contains("self.move_connection_to_workspace"));
         assert!(source.contains("edit_selected_ssh_usernames"));
         assert!(source.contains("with_decrypted_params"));
+        assert!(source.contains("edit_selected_ssh_icons"));
+        assert!(source.contains("persist_ssh_params_edits"));
     }
 }

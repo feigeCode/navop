@@ -2654,6 +2654,22 @@ Connection:
     en: None of the selected connections uses password authentication.
     zh-CN: 选中的连接里没有使用密码认证的 SSH 连接。
     zh-HK: "選中的連線裡沒有使用密碼認證的 SSH 連線。"
+  batch_edit_ssh_icon:
+    en: Edit SSH Icon
+    zh-CN: 批量修改 SSH 图标
+    zh-HK: 批量修改 SSH 圖示
+  batch_edit_icon_hint:
+    en: "Set the same icon for the %{count} selected SSH connections."
+    zh-CN: "将为选中的 %{count} 个 SSH 连接设置同一个图标。"
+    zh-HK: "將為選中的 %{count} 個 SSH 連線設定同一個圖示。"
+  batch_edit_icon_select:
+    en: Connection icon
+    zh-CN: 连接图标
+    zh-HK: 連線圖示
+  batch_edit_icon_auto:
+    en: Auto (detect from system)
+    zh-CN: 自动（按系统探测）
+    zh-HK: 自動（按系統探測）
   batch_delete_confirm:
     en: "Are you sure you want to delete the %{count} selected connections?"
     zh-CN: "确定要删除选中的 %{count} 个连接吗？"
