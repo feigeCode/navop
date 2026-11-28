@@ -2634,6 +2634,26 @@ Connection:
     en: None of the selected connections is an SSH connection.
     zh-CN: 选中的连接里没有 SSH 连接。
     zh-HK: 選中的連線裡沒有 SSH 連線。
+  batch_edit_ssh_password:
+    en: Edit SSH Password
+    zh-CN: 批量修改 SSH 密码
+    zh-HK: 批量修改 SSH 密碼
+  batch_edit_password_hint:
+    en: "Set the same password for the %{count} selected SSH connections that use password authentication."
+    zh-CN: "将为选中的 %{count} 个使用密码认证的 SSH 连接设置同一个密码。"
+    zh-HK: "將為選中的 %{count} 個使用密碼認證的 SSH 連線設定同一個密碼。"
+  batch_edit_password_placeholder:
+    en: New password
+    zh-CN: 新密码
+    zh-HK: 新密碼
+  batch_edit_password_empty:
+    en: Password cannot be empty.
+    zh-CN: 密码不能为空。
+    zh-HK: 密碼不能為空。
+  batch_edit_no_password_auth:
+    en: None of the selected connections uses password authentication.
+    zh-CN: 选中的连接里没有使用密码认证的 SSH 连接。
+    zh-HK: "選中的連線裡沒有使用密碼認證的 SSH 連線。"
   batch_delete_confirm:
     en: "Are you sure you want to delete the %{count} selected connections?"
     zh-CN: "确定要删除选中的 %{count} 个连接吗？"

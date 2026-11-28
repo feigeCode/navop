@@ -1,4 +1,5 @@
 use super::*;
+use one_core::storage::{SshAuthMethod, StoredConnection};
 
 fn unique_manageable_connection_ids(
     connection_ids: Vec<i64>,
@@ -96,23 +97,6 @@ fn show_batch_delete_confirmation(
             })
     });
 }
-
-/// 只保留确实是 SSH 的连接，供批量修改用户名使用（#62）。
-fn editable_ssh_connection_ids(
-    connections: impl IntoIterator<Item = (Option<i64>, ConnectionType)>,
-    connection_ids: Vec<i64>,
-) -> Vec<i64> {
-    let connections = connections.into_iter().collect::<Vec<_>>();
-    connection_ids
-        .into_iter()
-        .filter(|id| {
-            connections.iter().any(|(connection_id, kind)| {
-                connection_id == &Some(*id) && *kind == ConnectionType::SshSftp
-            })
-        })
-        .collect()
-}
-
 impl HomePage {
     /// 批量把选中 SSH 连接的用户名改成同一个值（#62「批量修改用户名」）。
     pub(crate) fn edit_selected_ssh_usernames(
@@ -121,69 +105,93 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.edit_selected_ssh_credentials(
+            SshCredentialField::Username,
+            connection_ids,
+            window,
+            cx,
+        );
+    }
+
+    /// 批量把选中 SSH 连接的密码改成同一个值（#62「批量修改密码」）。
+    pub(crate) fn edit_selected_ssh_passwords(
+        &mut self,
+        connection_ids: Vec<i64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_selected_ssh_credentials(
+            SshCredentialField::Password,
+            connection_ids,
+            window,
+            cx,
+        );
+    }
+
+    /// 凭据批量编辑的公共实现：弹窗输入一次，写到所有命中的 SSH 连接上。
+    fn edit_selected_ssh_credentials(
+        &mut self,
+        field: SshCredentialField,
+        connection_ids: Vec<i64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let connection_ids =
             unique_manageable_connection_ids(connection_ids, |id| self.can_move_connection(id));
-        let connection_ids = editable_ssh_connection_ids(
-            self.connections
-                .iter()
-                .map(|connection| (connection.id, connection.connection_type)),
-            connection_ids,
-        );
+        let connection_ids =
+            select_editable_ssh_connections(self.connections.iter(), connection_ids, field);
         if connection_ids.is_empty() {
-            window.open_dialog(cx, |dialog, _window, _cx| {
+            window.open_dialog(cx, move |dialog, _window, _cx| {
                 dialog
-                    .title(t!("Connection.batch_edit_ssh_username").to_string())
-                    .child(
-                        t!("Connection.batch_edit_no_ssh")
-                            .to_string()
-                            .into_any_element(),
-                    )
+                    .title(field.title())
+                    .child(field.missing_error().into_any_element())
                     .alert()
             });
             return;
         }
 
         let count = connection_ids.len();
-        let username_input = cx.new(|cx| {
+        let value_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(t!("Connection.batch_edit_username_placeholder"))
+                .placeholder(field.placeholder())
+                .masked(field.is_password())
         });
         let error_message = cx.new(|_| Option::<String>::None);
         let view = cx.entity();
 
-        let username_for_ok = username_input.clone();
+        let input_for_ok = value_input.clone();
         let error_for_ok = error_message.clone();
-        let username_for_render = username_input.clone();
+        let input_for_render = value_input.clone();
         let error_for_render = error_message.clone();
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
-            let username_for_ok = username_for_ok.clone();
+            let input_for_ok = input_for_ok.clone();
             let error_for_ok = error_for_ok.clone();
-            let username_for_render = username_for_render.clone();
+            let input_for_render = input_for_render.clone();
             let error_for_render = error_for_render.clone();
             let view = view.clone();
             let connection_ids = connection_ids.clone();
 
             dialog
-                .title(t!("Connection.batch_edit_ssh_username").to_string())
+                .title(field.title())
                 .width(px(460.))
                 .confirm()
                 .child(
                     v_flex()
                         .gap_2()
-                        .child(t!("Connection.batch_edit_username_hint", count = count).to_string())
-                        .child(Input::new(&username_for_render))
+                        .child(field.hint(count))
+                        .child(Input::new(&input_for_render))
                         .when_some(error_for_render.read(_cx).clone(), |this, error| {
                             this.child(div().text_xs().text_color(_cx.theme().danger).child(error))
                         }),
                 )
                 .on_ok(move |_, _window, cx: &mut App| {
                     let view = view.clone();
-                    let username = username_for_ok.read(cx).text().to_string();
-                    let username = username.trim().to_string();
-                    if username.is_empty() {
+                    let value = input_for_ok.read(cx).text().to_string();
+                    let value = value.trim().to_string();
+                    if value.is_empty() {
                         error_for_ok.update(cx, |error, cx| {
-                            *error = Some(t!("Connection.batch_edit_username_empty").to_string());
+                            *error = Some(field.empty_error());
                             cx.notify();
                         });
                         return false;
@@ -212,7 +220,10 @@ impl HomePage {
                                     skipped += 1;
                                     continue;
                                 };
-                                params.username = username.clone();
+                                if !field.apply(&mut params, &value) {
+                                    skipped += 1;
+                                    continue;
+                                }
                                 let mut updated = decrypted;
                                 updated.params = serde_json::to_string(&params)?;
                                 repo.update(&updated)?;
@@ -240,13 +251,10 @@ impl HomePage {
                                 cx.notify();
                             });
                             if skipped > 0 {
-                                tracing::warn!(
-                                    skipped,
-                                    "批量修改 SSH 用户名时跳过了无法解析的连接"
-                                );
+                                tracing::warn!(skipped, "批量修改 SSH 凭据时跳过了无法处理的连接");
                             }
                         }
-                        Err(error) => tracing::error!("批量修改 SSH 用户名失败: {error}"),
+                        Err(error) => tracing::error!("批量修改 SSH 凭据失败: {error}"),
                     })
                     .detach();
                     true
@@ -255,10 +263,127 @@ impl HomePage {
     }
 }
 
+/// 批量编辑的 SSH 凭据字段（#62）。
+#[derive(Clone, Copy)]
+enum SshCredentialField {
+    Username,
+    Password,
+}
+
+impl SshCredentialField {
+    fn is_password(self) -> bool {
+        matches!(self, Self::Password)
+    }
+
+    fn title(self) -> String {
+        match self {
+            Self::Username => t!("Connection.batch_edit_ssh_username"),
+            Self::Password => t!("Connection.batch_edit_ssh_password"),
+        }
+        .to_string()
+    }
+
+    fn hint(self, count: usize) -> String {
+        match self {
+            Self::Username => t!("Connection.batch_edit_username_hint", count = count),
+            Self::Password => t!("Connection.batch_edit_password_hint", count = count),
+        }
+        .to_string()
+    }
+
+    fn placeholder(self) -> String {
+        match self {
+            Self::Username => t!("Connection.batch_edit_username_placeholder"),
+            Self::Password => t!("Connection.batch_edit_password_placeholder"),
+        }
+        .to_string()
+    }
+
+    fn empty_error(self) -> String {
+        match self {
+            Self::Username => t!("Connection.batch_edit_username_empty"),
+            Self::Password => t!("Connection.batch_edit_password_empty"),
+        }
+        .to_string()
+    }
+
+    fn missing_error(self) -> String {
+        match self {
+            Self::Username => t!("Connection.batch_edit_no_ssh"),
+            Self::Password => t!("Connection.batch_edit_no_password_auth"),
+        }
+        .to_string()
+    }
+
+    /// 该连接是否能被本字段批量修改。
+    fn matches(self, connection: &StoredConnection) -> bool {
+        if connection.connection_type != ConnectionType::SshSftp {
+            return false;
+        }
+        match self {
+            Self::Username => true,
+            Self::Password => {
+                serde_json::from_str::<one_core::storage::SshParams>(&connection.params)
+                    .map(|params| params.auth_method.contains_password())
+                    .unwrap_or(false)
+            }
+        }
+    }
+
+    /// 把新值写进参数；返回是否真的改动了（密码认证以外的连接会被跳过）。
+    fn apply(self, params: &mut one_core::storage::SshParams, value: &str) -> bool {
+        match self {
+            Self::Username => {
+                params.username = value.to_string();
+                true
+            }
+            Self::Password => set_ssh_password(&mut params.auth_method, value),
+        }
+    }
+}
+
+/// 递归把密码写入密码认证（含组合认证里的密码步骤）；没有密码因素时返回 false。
+fn set_ssh_password(auth: &mut SshAuthMethod, password: &str) -> bool {
+    match auth {
+        SshAuthMethod::Password { password: current } => {
+            *current = password.to_string();
+            true
+        }
+        SshAuthMethod::Chain(steps) => {
+            let mut changed = false;
+            for step in steps {
+                changed |= set_ssh_password(step, password);
+            }
+            changed
+        }
+        _ => false,
+    }
+}
+
+/// 只保留能被该字段批量修改的 SSH 连接，供批量凭据编辑使用（#62）。
+fn select_editable_ssh_connections<'a>(
+    connections: impl IntoIterator<Item = &'a StoredConnection>,
+    connection_ids: Vec<i64>,
+    field: SshCredentialField,
+) -> Vec<i64> {
+    let candidates = connections
+        .into_iter()
+        .filter(|connection| field.matches(connection))
+        .filter_map(|connection| connection.id)
+        .collect::<HashSet<_>>();
+    connection_ids
+        .into_iter()
+        .filter(|id| candidates.contains(id))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{editable_ssh_connection_ids, unique_manageable_connection_ids};
-    use one_core::storage::ConnectionType;
+    use super::{
+        SshCredentialField, select_editable_ssh_connections, set_ssh_password,
+        unique_manageable_connection_ids,
+    };
+    use one_core::storage::{ConnectionType, SshAuthMethod, StoredConnection};
 
     #[test]
     fn manageable_connection_ids_are_filtered_deduplicated_and_sorted() {
@@ -268,20 +393,77 @@ mod tests {
         assert_eq!(ids, vec![3, 5, 8]);
     }
 
+    fn ssh_connection(id: i64, auth_method: SshAuthMethod) -> StoredConnection {
+        let params: one_core::storage::SshParams = serde_json::from_value(serde_json::json!({
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "auth_method": auth_method,
+        }))
+        .expect("SshParams 反序列化不应失败");
+        let mut connection = StoredConnection::new_ssh("ssh".to_string(), params, None);
+        connection.id = Some(id);
+        connection
+    }
+
     #[test]
     fn batch_username_edit_only_keeps_ssh_connections() {
+        let password_auth = || SshAuthMethod::Password {
+            password: "secret".to_string(),
+        };
         let connections = vec![
-            (Some(1), ConnectionType::SshSftp),
-            (Some(2), ConnectionType::Database),
-            (Some(3), ConnectionType::SshSftp),
-            (Some(4), ConnectionType::Rdp),
-            (None, ConnectionType::SshSftp),
+            ssh_connection(1, password_auth()),
+            ssh_connection(2, SshAuthMethod::Agent),
+            ssh_connection(3, password_auth()),
         ];
 
         assert_eq!(
-            editable_ssh_connection_ids(connections, vec![1, 2, 3, 4]),
+            select_editable_ssh_connections(
+                &connections,
+                vec![1, 2, 3],
+                SshCredentialField::Username
+            ),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            select_editable_ssh_connections(
+                &connections,
+                vec![1, 2, 3],
+                SshCredentialField::Password
+            ),
             vec![1, 3]
         );
+    }
+
+    #[test]
+    fn setting_a_password_skips_connections_without_a_password_factor() {
+        let mut password_auth = SshAuthMethod::Password {
+            password: "old".to_string(),
+        };
+        assert!(set_ssh_password(&mut password_auth, "new"));
+        assert!(matches!(
+            password_auth,
+            SshAuthMethod::Password { ref password } if password == "new"
+        ));
+
+        let mut chained = SshAuthMethod::Chain(vec![
+            SshAuthMethod::PrivateKey {
+                key_path: "/tmp/id".to_string(),
+                passphrase: None,
+            },
+            SshAuthMethod::Password {
+                password: "old".to_string(),
+            },
+        ]);
+        assert!(set_ssh_password(&mut chained, "new"));
+        assert!(matches!(
+            chained,
+            SshAuthMethod::Chain(ref steps)
+                if steps.iter().any(|step| matches!(step, SshAuthMethod::Password { password } if password == "new"))
+        ));
+
+        let mut agent = SshAuthMethod::Agent;
+        assert!(!set_ssh_password(&mut agent, "new"));
     }
 
     #[test]
