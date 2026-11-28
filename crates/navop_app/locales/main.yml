@@ -878,6 +878,14 @@ Home:
       en: "%{savable} / %{total} can be saved"
       zh-CN: "可保存 %{savable} / %{total} 条"
       zh-HK: "可儲存 %{savable} / %{total} 筆"
+    select_all_rows:
+      en: Select all
+      zh-CN: 全选
+      zh-HK: 全選
+    rows_selection_hint:
+      en: Shift-click selects a range; Cmd/Ctrl-click toggles one row.
+      zh-CN: Shift 点击选择区间，Cmd/Ctrl 点击切换单条。
+      zh-HK: Shift 點擊選擇區間，Cmd/Ctrl 點擊切換單筆。
     workspace_group_count:
       en: "Found %{groups} SSH connection groups; they will be imported as Navop groups"
       zh-CN: "发现 %{groups} 个 SSH 连接分组，保存后将转换为 Navop 分组"

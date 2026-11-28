@@ -15,6 +15,11 @@ pub(crate) struct ImportCenterState {
     sources: Vec<ImportSourceState>,
     rows: Vec<ImportPreviewRow>,
     defaults: ImportConnectionDefaults,
+    /// 最近一次单点勾选的预览行。
+    ///
+    /// Shift 区间选择需要一个锚点；没有锚点（或锚点已被重新扫描冲掉）时
+    /// 退化成普通单点取反，不会把整段行误勾上。
+    selection_anchor: Option<String>,
 }
 
 pub(crate) struct ImportSourceState {
@@ -57,6 +62,7 @@ impl ImportCenterState {
             sources,
             rows: Vec::new(),
             defaults: ImportConnectionDefaults::default(),
+            selection_anchor: None,
         }
     }
 
@@ -66,6 +72,7 @@ impl ImportCenterState {
             sources: Vec::new(),
             rows: Vec::new(),
             defaults: ImportConnectionDefaults::default(),
+            selection_anchor: None,
         }
     }
 
@@ -234,6 +241,8 @@ impl ImportCenterState {
                 save_status: ImportRowSaveStatus::Pending,
             })
             .collect();
+        // 重新扫描后旧的行已经不存在，锚点必须失效。
+        self.selection_anchor = None;
     }
 
     pub(crate) fn toggle_source(&mut self, importer_id: &str) {
@@ -247,13 +256,83 @@ impl ImportCenterState {
     }
 
     pub(crate) fn toggle_row(&mut self, record_id: &str) {
-        if let Some(row) = self
+        self.toggle_row_with_shift(record_id, false);
+    }
+
+    /// 勾选/取消单条预览行；`extend` 为 true 时（Shift 点击）从锚点到当前行做区间选择。
+    pub(crate) fn toggle_row_with_shift(&mut self, record_id: &str, extend: bool) {
+        let Some(index) = self
             .rows
-            .iter_mut()
-            .find(|row| row.record_id() == record_id)
-        {
-            row.selected = !row.selected;
+            .iter()
+            .position(|row| row.record_id() == record_id)
+        else {
+            return;
+        };
+        if !is_save_candidate(&self.rows[index].save_status) {
+            return;
         }
+
+        if !extend {
+            self.rows[index].selected = !self.rows[index].selected;
+            self.selection_anchor = Some(record_id.to_string());
+            return;
+        }
+
+        // 锚点缺失或行已变化时退化成单点取反，避免区间落空。
+        let anchor_index = self
+            .selection_anchor
+            .as_deref()
+            .and_then(|anchor| self.rows.iter().position(|row| row.record_id() == anchor));
+        let Some(anchor_index) = anchor_index else {
+            self.rows[index].selected = !self.rows[index].selected;
+            self.selection_anchor = Some(record_id.to_string());
+            return;
+        };
+
+        // 以目标行当前状态的反面作为整段的目标状态：勾选区间、或取消区间。
+        let target = !self.rows[index].selected;
+        let (start, end) = if anchor_index <= index {
+            (anchor_index, index)
+        } else {
+            (index, anchor_index)
+        };
+        for row in &mut self.rows[start..=end] {
+            // 已保存/正在保存的行即使落在区间里也保持原样，避免出现能再次保存的假象。
+            if is_save_candidate(&row.save_status) {
+                row.selected = target;
+            }
+        }
+    }
+
+    /// 当前可保存的预览行数量（已保存、正在保存、重复跳过的不算）。
+    pub(crate) fn candidate_row_count(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| is_save_candidate(&row.save_status))
+            .count()
+    }
+
+    pub(crate) fn selected_candidate_row_count(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| is_save_candidate(&row.save_status) && row.selected)
+            .count()
+    }
+
+    /// 可保存的行是否已经全部勾选，供「全选」复选框显示三态。
+    pub(crate) fn all_candidates_selected(&self) -> bool {
+        let total = self.candidate_row_count();
+        total > 0 && self.selected_candidate_row_count() == total
+    }
+
+    /// 全选 / 一键取消：全部可保存行统一设为 `selected`。
+    pub(crate) fn set_all_candidates_selected(&mut self, selected: bool) {
+        for row in &mut self.rows {
+            if is_save_candidate(&row.save_status) {
+                row.selected = selected;
+            }
+        }
+        self.selection_anchor = None;
     }
 
     pub(crate) fn mark_saving(&mut self, record_id: &str) {

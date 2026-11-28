@@ -33,8 +33,15 @@ pub(super) fn render_preview_row(
                 .disabled(!is_save_candidate(&row.save_status))
                 .on_click(cx.listener({
                     let record_id = record_id.clone();
-                    move |this, _, _, cx| {
-                        this.model.toggle_row(&record_id);
+                    // Checkbox 的 on_click 只给出新的勾选值，修饰键要从 window 上现取。
+                    move |this, checked: &bool, window, cx| {
+                        let extend = window.modifiers().shift;
+                        if extend {
+                            this.model.toggle_row_with_shift(&record_id, true);
+                        } else {
+                            this.model.toggle_row(&record_id);
+                        }
+                        let _ = checked;
                         cx.notify();
                     }
                 })),

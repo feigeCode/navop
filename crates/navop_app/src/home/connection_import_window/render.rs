@@ -102,6 +102,37 @@ impl ConnectionImportWindow {
                                     .to_string(),
                                 ),
                         )
+                        .when(!self.model.rows().is_empty(), |this| {
+                            this.child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        Checkbox::new("import-select-all-rows")
+                                            .checked(self.model.all_candidates_selected())
+                                            .disabled(self.model.candidate_row_count() == 0)
+                                            .label(
+                                                t!("Home.ConnectionImport.select_all_rows")
+                                                    .to_string(),
+                                            )
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                let select_all =
+                                                    !this.model.all_candidates_selected();
+                                                this.model.set_all_candidates_selected(select_all);
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(
+                                                t!("Home.ConnectionImport.rows_selection_hint")
+                                                    .to_string(),
+                                            ),
+                                    ),
+                            )
+                        })
                         .when(workspace_group_count > 0, |this| {
                             this.child(
                                 div()
